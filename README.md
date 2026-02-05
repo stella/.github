@@ -1,0 +1,123 @@
+# stella/.github
+
+Organization-wide GitHub configurations, reusable workflows, and templates.
+
+## Contents
+
+### Reusable Workflows
+
+| Workflow | Description |
+|----------|-------------|
+| `pr-lint.yml` | PR linting: conventional commits, labels, auto-assign |
+| `base-checks.yml` | Composite workflow calling pr-lint |
+
+### Composite Actions
+
+| Action | Description |
+|--------|-------------|
+| `typescript-checks` | Setup pnpm, install deps, run lint + format + typecheck |
+| `notify-failure` | Send failure notification to Google Chat webhook |
+
+### Templates
+
+- **PULL_REQUEST_TEMPLATE.md** - Standard PR template
+- **ISSUE_TEMPLATE/** - Bug report, epic, feature request, other
+
+### Label Definitions
+
+- **labels.yml** - Standardized labels (reference for manual setup)
+
+---
+
+## Usage
+
+### Base Checks (Recommended)
+
+Use this composite workflow to run all standard checks:
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions: write-all
+
+jobs:
+  checks:
+    uses: stella/.github/.github/workflows/base-checks.yml@main
+    secrets: inherit
+```
+
+### PR Lint
+
+```yaml
+# .github/workflows/pr-lint.yml
+name: PR Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches-ignore:
+      - "dependabot/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: write-all
+
+jobs:
+  pr-lint:
+    uses: stella/.github/.github/workflows/pr-lint.yml@main
+    secrets: inherit
+```
+
+---
+
+## Composite Actions
+
+### typescript-checks
+
+Setup pnpm, install dependencies with caching, and run lint + format + typecheck.
+
+```yaml
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: TypeScript Checks
+        uses: stella/.github/actions/typescript-checks@main
+```
+
+**Inputs:**
+- `run-lint` - Run `pnpm lint` (default: true)
+- `run-format` - Run `pnpm format` (default: true)
+- `run-typecheck` - Run `pnpm typecheck` (default: true)
+- `run-codespell` - Run codespell spell checker (default: true)
+- `working-directory` - Working directory (default: `.`)
+- `node-version-file` - Node version file (default: `.nvmrc`)
+
+### notify-failure
+
+Send failure notification to Google Chat webhook.
+
+```yaml
+steps:
+  - name: Build
+    run: ./build.sh
+
+  - name: Notify on failure
+    if: failure()
+    uses: stella/.github/actions/notify-failure@main
+    with:
+      webhook-url: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+      message: 'Failed to build service-name in production.'
+```
+

@@ -1,0 +1,9 @@
+# Configuration for actionlint
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+# Ignore style-only shellcheck warnings
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      # SC2129: "Consider using { cmd1; cmd2; } >> file" - purely stylistic
+      - 'shellcheck reported issue in this script: SC2129:.+'

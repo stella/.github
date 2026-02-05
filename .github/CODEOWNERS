@@ -1,0 +1,18 @@
+# CODEOWNERS - Require admin approval for sensitive files
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Protect everything in .github
+/.github/**            @jan-kubica @nnad3N
+
+# All action changes require admin approval
+/actions/**            @jan-kubica @nnad3N
+
+# Templates
+/ISSUE_TEMPLATE/**     @jan-kubica @nnad3N
+/PULL_REQUEST_TEMPLATE.md @jan-kubica @nnad3N
+
+# Labels configuration
+/labels.yml            @jan-kubica @nnad3N
+
+# README
+/README.md             @jan-kubica @nnad3N

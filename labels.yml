@@ -1,0 +1,118 @@
+# Org-wide standardized labels
+# Sync to repos using: gh workflow run label-sync.yml
+
+# Priority
+- name: "🔥 high_priority"
+  color: "F59FC9"
+  description: "Issues with high priority"
+
+- name: "❗ normal_priority"
+  color: "FFBABA"
+  description: "Issues with normal priority"
+
+- name: "❕low_priority"
+  color: "C5DEF5"
+  description: "Issues with low priority"
+
+# Type
+- name: "⚡ epic"
+  color: "6B26A1"
+  description: "epic, with subtasks"
+
+- name: "documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "🧹 refactor"
+  color: "C0A97D"
+  description: ""
+
+- name: "🛠️  dev"
+  color: "FBCA04"
+  description: ""
+
+- name: "🤖 AI"
+  color: "5319E7"
+  description: "All related work to AI usage"
+
+- name: "🎨 ux"
+  color: "dced23"
+  description: "Change in graphics"
+
+- name: "💭 triage"
+  color: "EF4B67"
+  description: "needs further confirmation if we want to implement"
+
+- name: "🚧 blocked"
+  color: "7C4504"
+  description: "Waiting for another PR / BE / design"
+
+- name: "📦 dependencies"
+  color: "54c778"
+  description: ""
+
+- name: "🔌 external data"
+  color: "19fd88"
+  description: ""
+
+- name: "💬 chat"
+  color: "95d503"
+  description: ""
+
+- name: "📝 word plugin"
+  color: "85fdf5"
+  description: ""
+
+- name: "📬 outlook plugin"
+  color: "e87534"
+  description: ""
+
+- name: "🧮 table"
+  color: "ca50b9"
+  description: "Table view feature"
+
+# Size (auto-applied by pr-lint)
+- name: "size/XS"
+  color: "009900"
+  description: "Denotes a PR that changes 0-9 lines, ignoring generated files."
+
+- name: "size/S"
+  color: "77bb00"
+  description: "Denotes a PR that changes 10-29 lines, ignoring generated files."
+
+- name: "size/M"
+  color: "eebb00"
+  description: "Denotes a PR that changes 30-99 lines, ignoring generated files."
+
+- name: "size/L"
+  color: "ee9900"
+  description: "Denotes a PR that changes 100-499 lines, ignoring generated files."
+
+- name: "size/XL"
+  color: "ee5500"
+  description: "Denotes a PR that changes 500-999 lines, ignoring generated files."
+
+- name: "size/XXL"
+  color: "ee0000"
+  description: "Denotes a PR that changes 1000+ lines, ignoring generated files."
+
+# Standard GitHub labels
+- name: "duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention is needed"
+
+- name: "question"
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: "wontfix"
+  color: "ffffff"
+  description: "This will not be worked on"

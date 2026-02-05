@@ -1,0 +1,23 @@
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "09:00"
+      timezone: "Europe/Prague"
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
+    labels:
+      - "📦 dependencies"
+    commit-message:
+      prefix: "chore"
+    reviewers:
+      - "jan-kubica"
+      - "nnad3N"

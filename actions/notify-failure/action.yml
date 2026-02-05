@@ -1,0 +1,37 @@
+name: 'Notify Failure'
+description: 'Send failure notification to Google Chat webhook'
+
+inputs:
+  webhook-url:
+    description: 'Google Chat webhook URL'
+    required: true
+  message:
+    description: 'Custom failure message (will be prepended to run URL)'
+    required: true
+  include-run-url:
+    description: 'Whether to include the GitHub Actions run URL in the message'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send failure notification
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        MESSAGE: ${{ inputs.message }}
+        INCLUDE_RUN_URL: ${{ inputs.include-run-url }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        if [ "$INCLUDE_RUN_URL" = "true" ]; then
+          FULL_MESSAGE="$MESSAGE $RUN_URL"
+        else
+          FULL_MESSAGE="$MESSAGE"
+        fi
+
+        PAYLOAD=$(jq -n --arg text "$FULL_MESSAGE" '{text: $text}')
+        curl -sS --fail-with-body -X POST \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD" \
+          "$WEBHOOK_URL"

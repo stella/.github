@@ -1,0 +1,90 @@
+name: 'TypeScript Quality Checks'
+description: 'Setup pnpm, install dependencies with caching, and run lint + format + typecheck'
+
+inputs:
+  working-directory:
+    description: 'Working directory for operations'
+    required: false
+    default: '.'
+  node-version-file:
+    description: 'File containing Node.js version (e.g. .nvmrc)'
+    required: false
+    default: '.nvmrc'
+  run-lint:
+    description: 'Run pnpm lint'
+    required: false
+    default: 'true'
+  run-format:
+    description: 'Run pnpm format'
+    required: false
+    default: 'true'
+  run-typecheck:
+    description: 'Run pnpm typecheck'
+    required: false
+    default: 'true'
+  run-codespell:
+    description: 'Run codespell spell checker'
+    required: false
+    default: 'true'
+  codespell-skip:
+    description: 'Files/patterns to skip in codespell'
+    required: false
+    default: 'package.json,pnpm-lock.yaml,README.md,*.snap,*.gen.ts,*.code-workspace'
+  codespell-ignore-words-file:
+    description: 'File containing words to ignore in codespell'
+    required: false
+    default: '.codespell-ignore-words.txt'
+  cache-enabled:
+    description: 'Enable dependency caching'
+    required: false
+    default: 'true'
+
+outputs:
+  cache-hit:
+    description: 'Whether the cache was hit'
+    value: ${{ steps.setup-node.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda  # v4
+
+    - name: Setup Node.js
+      id: setup-node
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+      with:
+        node-version-file: ${{ inputs.working-directory }}/${{ inputs.node-version-file }}
+        cache: ${{ inputs.cache-enabled == 'true' && 'pnpm' || '' }}
+        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+    - name: Run Codespell
+      if: inputs.run-codespell == 'true'
+      uses: codespell-project/actions-codespell@406322ec52dd7b488e48c1c4b82e2a8b3a1bf630  # v2
+      with:
+        skip: ${{ inputs.codespell-skip }}
+        ignore_words_file: ${{ inputs.codespell-ignore-words-file }}
+        check_filenames: true
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm install
+
+    - name: Lint
+      if: inputs.run-lint == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm lint
+
+    - name: Format
+      if: inputs.run-format == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm format
+
+    - name: Typecheck
+      if: inputs.run-typecheck == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm typecheck
