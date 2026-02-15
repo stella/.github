@@ -71,6 +71,15 @@
   color: "ca50b9"
   description: "Table view feature"
 
+# CI and governance
+- name: "run-ci"
+  color: "0E8A16"
+  description: "Allow CI to run on an external contributor's PR"
+
+- name: "needs approval"
+  color: "FBCA04"
+  description: "Feature request awaiting maintainer approval before work begins"
+
 # Size (auto-applied by pr-lint)
 - name: "size/XS"
   color: "009900"
