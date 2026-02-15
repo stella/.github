@@ -1,0 +1,149 @@
+# Reusable workflow: audit branch protection rulesets.
+#
+# Compares live GitHub rulesets against a checked-in expected
+# config and uploads the result as compliance evidence.
+#
+# Called by individual repos via a thin caller workflow.
+
+name: Audit Branch Protection
+
+on:
+  workflow_call:
+    inputs:
+      expected-config-path:
+        description: >
+          Path to the expected ruleset JSON in the calling repo.
+        type: string
+        default: .github/branch-protection/ruleset-main.json
+    secrets:
+      BRANCH_PROTECTION_APP_ID:
+        description: GitHub App ID for branch protection
+        required: true
+      BRANCH_PROTECTION_APP_KEY:
+        description: GitHub App private key (PEM)
+        required: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ secrets.BRANCH_PROTECTION_APP_ID }}
+          private-key: ${{ secrets.BRANCH_PROTECTION_APP_KEY }}
+
+      - name: Fetch live rulesets
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/${REPO}/rulesets" \
+            --paginate \
+            --jq '.' > live-rulesets.json
+
+          echo "::group::Live rulesets"
+          cat live-rulesets.json | jq .
+          echo "::endgroup::"
+
+      - name: Drift detection
+        env:
+          EXPECTED_PATH: ${{ inputs.expected-config-path }}
+        run: |
+          if [ ! -f "${EXPECTED_PATH}" ]; then
+            echo "::error::Expected config not found: ${EXPECTED_PATH}"
+            exit 1
+          fi
+
+          EXPECTED_NAME=$(jq -r '.name' "${EXPECTED_PATH}")
+          echo "Looking for ruleset: ${EXPECTED_NAME}"
+
+          # Extract the matching ruleset from the live config.
+          # The live API returns an array; find by name.
+          jq --arg name "${EXPECTED_NAME}" \
+            '.[] | select(.name == $name)' \
+            live-rulesets.json > live-matched.json
+
+          if [ ! -s live-matched.json ]; then
+            echo "::error::Ruleset '${EXPECTED_NAME}' not found on GitHub."
+            echo "DRIFT_DETECTED=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Normalize both configs for comparison.
+          # Strip server-managed fields from the live config so we
+          # compare only the fields we control.
+          LIVE_FIELDS=(
+            name target enforcement conditions
+            bypass_actors rules
+          )
+
+          LIVE_JQ_FILTER=$(printf ', %s' "${LIVE_FIELDS[@]}")
+          LIVE_JQ_FILTER="{ ${LIVE_JQ_FILTER:2} }"
+
+          jq "${LIVE_JQ_FILTER}" live-matched.json \
+            > live-normalized.json
+          jq -S '.' "${EXPECTED_PATH}" > expected-sorted.json
+          jq -S '.' live-normalized.json > live-sorted.json
+
+          if diff expected-sorted.json live-sorted.json > drift.diff; then
+            echo "No drift detected."
+            echo "DRIFT_DETECTED=false" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Drift detected in ruleset '${EXPECTED_NAME}'."
+            echo "::group::Diff (expected vs live)"
+            cat drift.diff
+            echo "::endgroup::"
+            echo "DRIFT_DETECTED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare evidence
+        run: |
+          mkdir -p evidence
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          REPO="${{ github.repository }}"
+
+          jq -n \
+            --arg repo "${REPO}" \
+            --arg ts "${TIMESTAMP}" \
+            --arg sha "${{ github.sha }}" \
+            --arg run "${{ github.run_id }}" \
+            --arg drift "${DRIFT_DETECTED}" \
+            --slurpfile live live-rulesets.json \
+            '{
+              repository: $repo,
+              timestamp: $ts,
+              commit_sha: $sha,
+              workflow_run_id: $run,
+              drift_detected: ($drift == "true"),
+              live_rulesets: $live[0]
+            }' > evidence/branch-protection-audit.json
+
+          if [ -f drift.diff ]; then
+            cp drift.diff evidence/
+          fi
+
+          echo "::group::Evidence"
+          cat evidence/branch-protection-audit.json | jq .
+          echo "::endgroup::"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: branch-protection-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 365
+
+      - name: Fail on drift
+        if: env.DRIFT_DETECTED == 'true'
+        run: |
+          echo "::error::Branch protection drift detected. Review the evidence artifact."
+          exit 1
