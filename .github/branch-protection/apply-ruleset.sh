@@ -106,8 +106,8 @@ fi
 echo "Checking for existing ruleset..."
 EXISTING=$(
   gh api "repos/${REPO}/rulesets" \
-    --paginate \
-    --jq --arg name "${RULESET_NAME}" \
+    --paginate |
+  jq -r --arg name "${RULESET_NAME}" \
     '.[] | select(.name == $name) | .id'
 )
 
