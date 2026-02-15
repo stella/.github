@@ -10,6 +10,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 |----------|-------------|
 | `pr-lint.yml` | PR linting: conventional commits, labels, auto-assign |
 | `base-checks.yml` | Composite workflow calling pr-lint |
+| `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
 
 ### Composite Actions
 
@@ -73,6 +74,62 @@ jobs:
   pr-lint:
     uses: stella/.github/.github/workflows/pr-lint.yml@main
     secrets: inherit
+```
+
+### Branch Protection Scripts
+
+| Script | Description |
+|--------|-------------|
+| `apply-ruleset.sh` | Idempotent create/update of a GitHub ruleset from JSON |
+
+---
+
+### Audit Branch Protection
+
+Compares live GitHub rulesets against a checked-in expected config
+and uploads the result as a compliance artifact (365-day retention).
+Detects drift and fails if the live config diverges from the
+expected state.
+
+```yaml
+# .github/workflows/audit-branch-protection.yml
+name: Audit Branch Protection
+
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Monday 08:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    uses: stella/.github/.github/workflows/audit-branch-protection.yml@main
+    with:
+      expected-config-path: .github/branch-protection/ruleset-main.json
+    secrets:
+      BRANCH_PROTECTION_APP_ID: ${{ secrets.BRANCH_PROTECTION_APP_ID }}
+      BRANCH_PROTECTION_APP_KEY: ${{ secrets.BRANCH_PROTECTION_APP_KEY }}
+```
+
+**Secrets required:**
+- `BRANCH_PROTECTION_APP_ID` — GitHub App ID with Administration: Read and write
+- `BRANCH_PROTECTION_APP_KEY` — GitHub App private key (PEM)
+
+**Inputs:**
+- `expected-config-path` — path to the expected ruleset JSON (default: `.github/branch-protection/ruleset-main.json`)
+
+### Apply Ruleset
+
+Create or update a GitHub ruleset from a JSON file. Idempotent:
+looks up by name, creates if missing, updates if found.
+
+```bash
+# Basic usage (from repository root)
+.github/branch-protection/apply-ruleset.sh stella/stella \
+  .github/branch-protection/ruleset-main.json
+
+# With github-actions[bot] bypass (for SBOM workflow etc.)
+.github/branch-protection/apply-ruleset.sh --github-actions-bypass \
+  stella/stella .github/branch-protection/ruleset-main.json
 ```
 
 ---
