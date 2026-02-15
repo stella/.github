@@ -33,12 +33,12 @@ jobs:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.CLA_APP_PRIVATE_KEY }}
           owner: stella
-          repositories: cla
+          repositories: cla,stella
 
       - name: CLA Assistant
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           PERSONAL_ACCESS_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           path-to-signatures: "signatures/cla.json"
