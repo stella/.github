@@ -5,8 +5,9 @@ on:
     inputs:
       app-id:
         description: "GitHub App ID for CLA bot"
-        required: true
+        required: false
         type: string
+        default: "2871141"
       allowlist:
         description: "Comma-separated list of GitHub usernames or bot patterns to skip CLA check"
         required: false
