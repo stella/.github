@@ -123,11 +123,13 @@ Create or update a GitHub ruleset from a JSON file. Idempotent:
 looks up by name, creates if missing, updates if found.
 
 ```bash
-# Basic usage
-./apply-ruleset.sh stella/stella .github/branch-protection/ruleset-main.json
+# Basic usage (from repository root)
+.github/branch-protection/apply-ruleset.sh stella/stella \
+  .github/branch-protection/ruleset-main.json
 
 # With github-actions[bot] bypass (for SBOM workflow etc.)
-./apply-ruleset.sh --github-actions-bypass stella/stella ruleset-main.json
+.github/branch-protection/apply-ruleset.sh --github-actions-bypass \
+  stella/stella .github/branch-protection/ruleset-main.json
 ```
 
 ---

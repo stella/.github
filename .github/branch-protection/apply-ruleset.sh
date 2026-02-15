@@ -13,11 +13,13 @@
 # Usage:
 #   ./apply-ruleset.sh <owner/repo> <ruleset.json>
 #
-# Examples:
-#   ./apply-ruleset.sh stella/stella .github/branch-protection/ruleset-main.json
+# Example (from repository root):
+#   .github/branch-protection/apply-ruleset.sh stella/stella \
+#     .github/branch-protection/ruleset-main.json
 #
 #   # With a GitHub App token:
-#   GH_TOKEN="$(mint-token)" ./apply-ruleset.sh stella/stella ruleset.json
+#   GH_TOKEN="$(mint-token)" .github/branch-protection/apply-ruleset.sh \
+#     stella/stella .github/branch-protection/ruleset-main.json
 #
 # The script also supports adding the built-in GitHub Actions app as
 # a bypass actor via --github-actions-bypass. This looks up the
@@ -76,8 +78,10 @@ if [ "${GITHUB_ACTIONS_BYPASS}" = true ]; then
   # The built-in GitHub Actions app slug is "github-actions".
   # We need the installation ID for the target repo.
   INSTALLATION_ID=$(
-    gh api "/repos/${REPO}/installation" \
-      --jq '.id' 2>/dev/null || true
+    gh api "repos/${REPO}/installations" \
+      --paginate \
+      --jq '.[] | select(.app_slug == "github-actions") | .id' \
+      2>/dev/null || true
   )
 
   if [ -z "${INSTALLATION_ID}" ]; then
@@ -103,8 +107,16 @@ echo "Checking for existing ruleset..."
 EXISTING=$(
   gh api "repos/${REPO}/rulesets" \
     --paginate \
-    --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id"
+    --jq --arg name "${RULESET_NAME}" \
+    '.[] | select(.name == $name) | .id'
 )
+
+# Guard against multiple rulesets with the same name.
+if [ "$(echo "${EXISTING}" | grep -c .)" -gt 1 ]; then
+  echo "Error: found multiple rulesets named '${RULESET_NAME}'."
+  echo "Resolve duplicates manually before running this script."
+  exit 1
+fi
 
 if [ -n "${EXISTING}" ]; then
   RULESET_ID="${EXISTING}"

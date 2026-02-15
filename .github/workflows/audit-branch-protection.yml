@@ -48,7 +48,8 @@ jobs:
         run: |
           gh api "repos/${REPO}/rulesets" \
             --paginate \
-            --jq '.' > live-rulesets.json
+            --slurp \
+            --jq 'add // []' > live-rulesets.json
 
           echo "::group::Live rulesets"
           cat live-rulesets.json | jq .
