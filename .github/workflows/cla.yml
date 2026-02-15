@@ -47,13 +47,5 @@ jobs:
           remote-organization-name: "stella"
           remote-repository-name: "cla"
           allowlist: ${{ inputs.allowlist }}
-          custom-notsigned-prcomment: |
-            Thank you for your pull request! Before we can merge it,
-            we need you to sign the
-            [Contributor License Agreement](https://github.com/stella/cla/blob/main/CLA.md).
-
-            To sign, please post the following comment on this PR
-            (exactly as written):
-
-            > I have read the CLA Document and I hereby sign the CLA
+          custom-notsigned-prcomment: "Thank you for your pull request! Before we can merge it, we need you to sign the [Contributor License Agreement](https://github.com/stella/cla/blob/main/CLA.md).\n\nTo sign, please post the following comment on this PR (exactly as written):\n\n> I have read the CLA Document and I hereby sign the CLA"
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
