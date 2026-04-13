@@ -1,0 +1,52 @@
+name: "Provenance Check"
+description: "Install a pinned stella/provenance CLI revision and verify committed provenance artifacts"
+
+inputs:
+  root:
+    description: "Repository root to scan"
+    required: false
+    default: "."
+  provenance-ref:
+    description: "Git ref in stella/provenance to install"
+    required: false
+    default: "eba1d86"
+  provenance-repository:
+    description: "Repository that hosts the provenance CLI"
+    required: false
+    default: "stella/provenance"
+  show-diff-on-failure:
+    description: "Whether to print provenance diff output when the check fails"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: provenance
+
+    - uses: oven-sh/setup-bun@v2
+
+    - name: Install provenance
+      shell: bash
+      run: >
+        cargo install
+        --git https://github.com/${{ inputs.provenance-repository }}
+        --rev ${{ inputs.provenance-ref }}
+        --locked
+        provenance
+
+    - name: Check provenance artifacts
+      shell: bash
+      run: |
+        if ! provenance check --root "${{ inputs.root }}"; then
+          if [ "${{ inputs.show-diff-on-failure }}" = "true" ]; then
+            echo "::group::provenance diff"
+            provenance diff --root "${{ inputs.root }}" || true
+            echo "::endgroup::"
+          fi
+          exit 1
+        fi
