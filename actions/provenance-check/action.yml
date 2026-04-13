@@ -50,7 +50,16 @@ runs:
 
     - name: Install cdxgen
       shell: bash
-      run: npm install --global "@cyclonedx/cdxgen@${{ inputs.cdxgen-version }}"
+      env:
+        CDXGEN_VERSION: ${{ inputs.cdxgen-version }}
+      run: |
+        case "$CDXGEN_VERSION" in
+          ''|*[!A-Za-z0-9._-]*)
+            echo "::error::Invalid cdxgen-version input: $CDXGEN_VERSION"
+            exit 1
+            ;;
+        esac
+        npm install --global "@cyclonedx/cdxgen@$CDXGEN_VERSION"
 
     - id: syft
       if: inputs.install-syft == 'true'
@@ -60,24 +69,44 @@ runs:
 
     - name: Install provenance
       shell: bash
-      run: >
-        cargo install
-        --git https://github.com/${{ inputs.provenance-repository }}
-        --rev ${{ inputs.provenance-ref }}
-        --locked
-        provenance
+      env:
+        PROVENANCE_REPOSITORY: ${{ inputs.provenance-repository }}
+        PROVENANCE_REF: ${{ inputs.provenance-ref }}
+      run: |
+        case "$PROVENANCE_REPOSITORY" in
+          ''|*[!A-Za-z0-9._/-]*)
+            echo "::error::Invalid provenance-repository input: $PROVENANCE_REPOSITORY"
+            exit 1
+            ;;
+        esac
+        case "$PROVENANCE_REF" in
+          ''|*[!A-Za-z0-9._/-]*)
+            echo "::error::Invalid provenance-ref input: $PROVENANCE_REF"
+            exit 1
+            ;;
+        esac
+        cargo install \
+          --git "https://github.com/$PROVENANCE_REPOSITORY" \
+          --rev "$PROVENANCE_REF" \
+          --locked \
+          provenance
 
     - name: Check provenance artifacts
       shell: bash
+      env:
+        INSTALL_SYFT: ${{ inputs.install-syft }}
+        PROVENANCE_ROOT: ${{ inputs.root }}
+        PROVENANCE_SYFT: ${{ steps.syft.outputs.cmd }}
+        SHOW_DIFF_ON_FAILURE: ${{ inputs.show-diff-on-failure }}
       run: |
         export PROVENANCE_CDXGEN="$(command -v cdxgen)"
-        if [ "${{ inputs.install-syft }}" = "true" ]; then
-          export PROVENANCE_SYFT="${{ steps.syft.outputs.cmd }}"
+        if [ "$INSTALL_SYFT" = "true" ]; then
+          export PROVENANCE_SYFT
         fi
-        if ! provenance check --root "${{ inputs.root }}"; then
-          if [ "${{ inputs.show-diff-on-failure }}" = "true" ]; then
+        if ! provenance check --root "$PROVENANCE_ROOT"; then
+          if [ "$SHOW_DIFF_ON_FAILURE" = "true" ]; then
             echo "::group::provenance diff"
-            provenance diff --root "${{ inputs.root }}" || true
+            provenance diff --root "$PROVENANCE_ROOT" || true
             echo "::endgroup::"
           fi
           exit 1
