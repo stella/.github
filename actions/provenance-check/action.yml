@@ -102,6 +102,8 @@ runs:
         export PROVENANCE_CDXGEN="$(command -v cdxgen)"
         if [ "$INSTALL_SYFT" = "true" ]; then
           export PROVENANCE_SYFT
+        else
+          unset PROVENANCE_SYFT
         fi
         if ! provenance check --root "$PROVENANCE_ROOT"; then
           if [ "$SHOW_DIFF_ON_FAILURE" = "true" ]; then
