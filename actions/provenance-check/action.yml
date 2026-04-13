@@ -1,5 +1,5 @@
 name: "Provenance Check"
-description: "Install a pinned stella/provenance CLI revision and verify committed provenance artifacts"
+description: "Install a pinned stella/provenance release binary and verify committed provenance artifacts"
 
 inputs:
   root:
@@ -22,10 +22,10 @@ inputs:
     description: "Pinned Syft release tag"
     required: false
     default: "v1.42.4"
-  provenance-ref:
-    description: "Git ref in stella/provenance to install"
+  provenance-version:
+    description: "GitHub release tag in stella/provenance to install"
     required: false
-    default: "eba1d86"
+    default: "v0.1.0"
   provenance-repository:
     description: "Repository that hosts the provenance CLI"
     required: false
@@ -38,15 +38,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
-      with:
-        toolchain: stable
-
-    - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-      with:
-        shared-key: provenance
-
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+    - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
       with:
         node-version: ${{ inputs.node-version }}
 
@@ -73,7 +65,7 @@ runs:
       shell: bash
       env:
         PROVENANCE_REPOSITORY: ${{ inputs.provenance-repository }}
-        PROVENANCE_REF: ${{ inputs.provenance-ref }}
+        PROVENANCE_VERSION: ${{ inputs.provenance-version }}
       run: |
         case "$PROVENANCE_REPOSITORY" in
           ''|*[!A-Za-z0-9._/-]*)
@@ -81,17 +73,91 @@ runs:
             exit 1
             ;;
         esac
-        case "$PROVENANCE_REF" in
+        case "$PROVENANCE_VERSION" in
           ''|*[!A-Za-z0-9._/-]*)
-            echo "::error::Invalid provenance-ref input: $PROVENANCE_REF"
+            echo "::error::Invalid provenance-version input: $PROVENANCE_VERSION"
             exit 1
             ;;
         esac
-        cargo install \
-          --git "https://github.com/$PROVENANCE_REPOSITORY" \
-          --rev "$PROVENANCE_REF" \
-          --locked \
-          provenance
+        case "${RUNNER_OS}:${RUNNER_ARCH}" in
+          Linux:X64)
+            target="x86_64-unknown-linux-gnu"
+            asset_ext="tar.gz"
+            binary_name="provenance"
+            ;;
+          macOS:ARM64)
+            target="aarch64-apple-darwin"
+            asset_ext="tar.gz"
+            binary_name="provenance"
+            ;;
+          macOS:X64)
+            target="x86_64-apple-darwin"
+            asset_ext="tar.gz"
+            binary_name="provenance"
+            ;;
+          Windows:X64)
+            target="x86_64-pc-windows-msvc"
+            asset_ext="zip"
+            binary_name="provenance.exe"
+            ;;
+          *)
+            echo "::error::Unsupported runner platform: ${RUNNER_OS}:${RUNNER_ARCH}"
+            exit 1
+            ;;
+        esac
+
+        asset_name="provenance-${PROVENANCE_VERSION}-${target}.${asset_ext}"
+        checksums_name="provenance-${PROVENANCE_VERSION}-checksums.txt"
+        release_base_url="https://github.com/${PROVENANCE_REPOSITORY}/releases/download/${PROVENANCE_VERSION}"
+        asset_path="${RUNNER_TEMP}/${asset_name}"
+        checksums_path="${RUNNER_TEMP}/${checksums_name}"
+        install_root="${RUNNER_TEMP}/provenance-install"
+        install_bin="${RUNNER_TEMP}/provenance-bin"
+
+        curl --fail --silent --show-error --location \
+          --output "$asset_path" \
+          "${release_base_url}/${asset_name}"
+        curl --fail --silent --show-error --location \
+          --output "$checksums_path" \
+          "${release_base_url}/${checksums_name}"
+
+        expected_checksum="$(
+          awk -v asset="$asset_name" '$2 == asset { print $1 }' "$checksums_path"
+        )"
+        if [ -z "$expected_checksum" ]; then
+          echo "::error::Checksum for ${asset_name} not found in ${checksums_name}"
+          exit 1
+        fi
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual_checksum="$(sha256sum "$asset_path" | awk '{ print $1 }')"
+        else
+          actual_checksum="$(shasum -a 256 "$asset_path" | awk '{ print $1 }')"
+        fi
+
+        if [ "$actual_checksum" != "$expected_checksum" ]; then
+          echo "::error::Checksum mismatch for ${asset_name}"
+          exit 1
+        fi
+
+        rm -rf "$install_root" "$install_bin"
+        mkdir -p "$install_root" "$install_bin"
+
+        if [ "$asset_ext" = "zip" ]; then
+          unzip -q "$asset_path" -d "$install_root"
+        else
+          tar -xzf "$asset_path" -C "$install_root"
+        fi
+
+        extracted_binary="$(find "$install_root" -type f -name "$binary_name" | head -n 1)"
+        if [ -z "$extracted_binary" ]; then
+          echo "::error::Failed to locate ${binary_name} in extracted release archive"
+          exit 1
+        fi
+
+        cp "$extracted_binary" "$install_bin/$binary_name"
+        chmod +x "$install_bin/$binary_name"
+        echo "$install_bin" >> "$GITHUB_PATH"
 
     - name: Check provenance artifacts
       shell: bash

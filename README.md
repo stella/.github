@@ -181,7 +181,7 @@ steps:
 
 ### provenance-check
 
-Install a pinned `stella/provenance` revision and fail if committed
+Install a pinned `stella/provenance` release binary and fail if committed
 `provenance/` artifacts are stale.
 
 ```yaml
@@ -191,7 +191,7 @@ steps:
   - name: Provenance
     uses: stella/.github/actions/provenance-check@main
     with:
-      provenance-ref: eba1d86
+      provenance-version: v0.1.0
 ```
 
 **Inputs:**
@@ -200,6 +200,6 @@ steps:
 - `cdxgen-version` - Pinned `@cyclonedx/cdxgen` version (default: `12.1.5`)
 - `install-syft` - Install Syft for container provenance checks (default: `false`)
 - `syft-version` - Pinned Syft release tag (default: `v1.42.4`)
-- `provenance-ref` - Git ref in `stella/provenance` to install (default: `eba1d86`)
+- `provenance-version` - GitHub release tag in `stella/provenance` to install (default: `v0.1.0`)
 - `provenance-repository` - Provenance repository slug (default: `stella/provenance`)
 - `show-diff-on-failure` - Print `provenance diff` output on failure (default: `true`)
