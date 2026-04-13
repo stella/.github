@@ -6,6 +6,22 @@ inputs:
     description: "Repository root to scan"
     required: false
     default: "."
+  node-version:
+    description: "Node.js version used to install cdxgen"
+    required: false
+    default: "22"
+  cdxgen-version:
+    description: "Pinned @cyclonedx/cdxgen version"
+    required: false
+    default: "12.1.5"
+  install-syft:
+    description: "Whether to install Syft for container provenance checks"
+    required: false
+    default: "false"
+  syft-version:
+    description: "Pinned Syft release tag"
+    required: false
+    default: "v1.42.4"
   provenance-ref:
     description: "Git ref in stella/provenance to install"
     required: false
@@ -22,13 +38,25 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
       with:
         shared-key: provenance
 
-    - uses: oven-sh/setup-bun@v2
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install cdxgen
+      shell: bash
+      run: npm install --global "@cyclonedx/cdxgen@${{ inputs.cdxgen-version }}"
+
+    - id: syft
+      if: inputs.install-syft == 'true'
+      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      with:
+        syft-version: ${{ inputs.syft-version }}
 
     - name: Install provenance
       shell: bash
@@ -42,6 +70,10 @@ runs:
     - name: Check provenance artifacts
       shell: bash
       run: |
+        export PROVENANCE_CDXGEN="$(command -v cdxgen)"
+        if [ "${{ inputs.install-syft }}" = "true" ]; then
+          export PROVENANCE_SYFT="${{ steps.syft.outputs.cmd }}"
+        fi
         if ! provenance check --root "${{ inputs.root }}"; then
           if [ "${{ inputs.show-diff-on-failure }}" = "true" ]; then
             echo "::group::provenance diff"
