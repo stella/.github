@@ -18,6 +18,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 |--------|-------------|
 | `typescript-checks` | Setup pnpm, install deps, run lint + format + typecheck |
 | `notify-failure` | Send failure notification to Google Chat webhook |
+| `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
 
 ### Templates
 
@@ -178,3 +179,27 @@ steps:
       message: 'Failed to build service-name in production.'
 ```
 
+### provenance-check
+
+Install a pinned `stella/provenance` revision and fail if committed
+`provenance/` artifacts are stale.
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+
+  - name: Provenance
+    uses: stella/.github/actions/provenance-check@main
+    with:
+      provenance-ref: eba1d86
+```
+
+**Inputs:**
+- `root` - Repository root to scan (default: `.`)
+- `node-version` - Node.js version used to install cdxgen (default: `22`)
+- `cdxgen-version` - Pinned `@cyclonedx/cdxgen` version (default: `12.1.5`)
+- `install-syft` - Install Syft for container provenance checks (default: `false`)
+- `syft-version` - Pinned Syft release tag (default: `v1.42.4`)
+- `provenance-ref` - Git ref in `stella/provenance` to install (default: `eba1d86`)
+- `provenance-repository` - Provenance repository slug (default: `stella/provenance`)
+- `show-diff-on-failure` - Print `provenance diff` output on failure (default: `true`)

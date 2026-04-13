@@ -1,0 +1,115 @@
+name: "Provenance Check"
+description: "Install a pinned stella/provenance CLI revision and verify committed provenance artifacts"
+
+inputs:
+  root:
+    description: "Repository root to scan"
+    required: false
+    default: "."
+  node-version:
+    description: "Node.js version used to install cdxgen"
+    required: false
+    default: "22"
+  cdxgen-version:
+    description: "Pinned @cyclonedx/cdxgen version"
+    required: false
+    default: "12.1.5"
+  install-syft:
+    description: "Whether to install Syft for container provenance checks"
+    required: false
+    default: "false"
+  syft-version:
+    description: "Pinned Syft release tag"
+    required: false
+    default: "v1.42.4"
+  provenance-ref:
+    description: "Git ref in stella/provenance to install"
+    required: false
+    default: "eba1d86"
+  provenance-repository:
+    description: "Repository that hosts the provenance CLI"
+    required: false
+    default: "stella/provenance"
+  show-diff-on-failure:
+    description: "Whether to print provenance diff output when the check fails"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+
+    - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      with:
+        shared-key: provenance
+
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install cdxgen
+      shell: bash
+      env:
+        CDXGEN_VERSION: ${{ inputs.cdxgen-version }}
+      run: |
+        case "$CDXGEN_VERSION" in
+          ''|*[!A-Za-z0-9._-]*)
+            echo "::error::Invalid cdxgen-version input: $CDXGEN_VERSION"
+            exit 1
+            ;;
+        esac
+        npm install --global "@cyclonedx/cdxgen@$CDXGEN_VERSION"
+
+    - id: syft
+      if: inputs.install-syft == 'true'
+      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      with:
+        syft-version: ${{ inputs.syft-version }}
+
+    - name: Install provenance
+      shell: bash
+      env:
+        PROVENANCE_REPOSITORY: ${{ inputs.provenance-repository }}
+        PROVENANCE_REF: ${{ inputs.provenance-ref }}
+      run: |
+        case "$PROVENANCE_REPOSITORY" in
+          ''|*[!A-Za-z0-9._/-]*)
+            echo "::error::Invalid provenance-repository input: $PROVENANCE_REPOSITORY"
+            exit 1
+            ;;
+        esac
+        case "$PROVENANCE_REF" in
+          ''|*[!A-Za-z0-9._/-]*)
+            echo "::error::Invalid provenance-ref input: $PROVENANCE_REF"
+            exit 1
+            ;;
+        esac
+        cargo install \
+          --git "https://github.com/$PROVENANCE_REPOSITORY" \
+          --rev "$PROVENANCE_REF" \
+          --locked \
+          provenance
+
+    - name: Check provenance artifacts
+      shell: bash
+      env:
+        INSTALL_SYFT: ${{ inputs.install-syft }}
+        PROVENANCE_ROOT: ${{ inputs.root }}
+        PROVENANCE_SYFT: ${{ steps.syft.outputs.cmd }}
+        SHOW_DIFF_ON_FAILURE: ${{ inputs.show-diff-on-failure }}
+      run: |
+        export PROVENANCE_CDXGEN="$(command -v cdxgen)"
+        if [ "$INSTALL_SYFT" = "true" ]; then
+          export PROVENANCE_SYFT
+        else
+          unset PROVENANCE_SYFT
+        fi
+        if ! provenance check --root "$PROVENANCE_ROOT"; then
+          if [ "$SHOW_DIFF_ON_FAILURE" = "true" ]; then
+            echo "::group::provenance diff"
+            provenance diff --root "$PROVENANCE_ROOT" || true
+            echo "::endgroup::"
+          fi
+          exit 1
+        fi
