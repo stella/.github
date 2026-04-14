@@ -11,6 +11,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `pr-lint.yml` | PR linting: conventional commits, labels, auto-assign |
 | `base-checks.yml` | Composite workflow calling pr-lint |
 | `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
+| `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
 
 ### Composite Actions
 
@@ -117,6 +118,46 @@ jobs:
 
 **Inputs:**
 - `expected-config-path` — path to the expected ruleset JSON (default: `.github/branch-protection/ruleset-main.json`)
+
+### Provenance Update
+
+Runs `provenance generate` in the calling repository and opens or updates
+a pull request when checked-in `provenance/` artifacts drift. This workflow
+never pushes directly to `main`.
+
+The schedule must live in the calling repository.
+
+```yaml
+# .github/workflows/provenance-nightly.yml
+name: Provenance Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  provenance-update:
+    uses: stella/.github/.github/workflows/provenance-update.yml@main
+    with:
+      install-command: bun install --frozen-lockfile
+      provenance-version: v0.1.0
+    secrets: inherit
+```
+
+**Inputs:**
+- `root` — repository root to scan (default: `.`)
+- `node-version` — Node.js version used to install cdxgen (default: `22`)
+- `cdxgen-version` — pinned `@cyclonedx/cdxgen` version (default: `12.1.5`)
+- `install-syft` — install Syft before generation (default: `false`)
+- `syft-version` — pinned Syft release tag (default: `v1.42.4`)
+- `provenance-version` — GitHub release tag in `stella/provenance` to install (default: `v0.1.0`)
+- `provenance-repository` — provenance repository slug (default: `stella/provenance`)
+- `install-command` — optional dependency install command run before generation (default: `bun install --frozen-lockfile`)
+- `branch` — branch used for refresh PRs (default: `chore/provenance-update`)
+- `commit-message` — commit message for generated refreshes
+- `pr-title` — pull request title for generated refreshes
+- `pr-body` — pull request body for generated refreshes
 
 ### Apply Ruleset
 
