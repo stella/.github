@@ -38,6 +38,11 @@ on:
         required: false
         type: string
         default: "stella/provenance"
+      auth-token:
+        description: "Optional token for create-pull-request when PR-triggered CI should run"
+        required: false
+        type: string
+        default: ""
       install-command:
         description: "Optional repository install command to run before provenance generate"
         required: false
@@ -202,8 +207,28 @@ jobs:
       - name: Install repository dependencies
         if: inputs.install-command != ''
         shell: bash
+        env:
+          INSTALL_CMD: ${{ inputs.install-command }}
         working-directory: ${{ inputs.root }}
-        run: ${{ inputs.install-command }}
+        run: $INSTALL_CMD
+
+      - name: Resolve managed provenance paths
+        id: paths
+        shell: bash
+        env:
+          PROVENANCE_ROOT: ${{ inputs.root }}
+        run: |
+          root="${PROVENANCE_ROOT%/}"
+          if [ -z "$root" ] || [ "$root" = "." ]; then
+            add_paths='provenance/**'
+          else
+            add_paths="$root/provenance/**"
+          fi
+          {
+            echo "add_paths<<EOF"
+            echo "$add_paths"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Generate provenance artifacts
         shell: bash
@@ -224,13 +249,13 @@ jobs:
         id: cpr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
+          token: ${{ inputs.auth-token != '' && inputs.auth-token || github.token }}
           branch: ${{ inputs.branch }}
           delete-branch: true
           commit-message: ${{ inputs.commit-message }}
           title: ${{ inputs.pr-title }}
           body: ${{ inputs.pr-body }}
-          add-paths: |
-            provenance/**
+          add-paths: ${{ steps.paths.outputs.add_paths }}
 
       - name: Report updater result
         shell: bash
