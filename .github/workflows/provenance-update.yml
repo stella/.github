@@ -32,7 +32,7 @@ on:
         description: "GitHub release tag in stella/provenance to install"
         required: false
         type: string
-        default: "v0.1.0"
+        default: "v0.1.1"
       provenance-repository:
         description: "Repository that hosts the provenance CLI"
         required: false

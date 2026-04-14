@@ -144,7 +144,7 @@ jobs:
     uses: stella/.github/.github/workflows/provenance-update.yml@<commit-sha>
     with:
       install-command: bun install --frozen-lockfile
-      provenance-version: v0.1.0
+      provenance-version: v0.1.1
     secrets: inherit
 ```
 
@@ -154,7 +154,7 @@ jobs:
 - `cdxgen-version` — pinned `@cyclonedx/cdxgen` version (default: `12.1.5`)
 - `install-syft` — install Syft before generation (default: `false`)
 - `syft-version` — pinned Syft release tag (default: `v1.42.4`)
-- `provenance-version` — GitHub release tag in `stella/provenance` to install (default: `v0.1.0`)
+- `provenance-version` — GitHub release tag in `stella/provenance` to install (default: `v0.1.1`)
 - `provenance-repository` — provenance repository slug (default: `stella/provenance`)
 - `auth-token` — optional token for updater PR creation when downstream CI should run (default: empty)
 - `install-command` — optional dependency install command run before generation (default: `bun install --frozen-lockfile`)
