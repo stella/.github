@@ -219,7 +219,7 @@ jobs:
           bun run build
           --target ${{ matrix.settings.target }}
       - name: Build (cross-compile)
-        if: ${{ inputs.build-changed == 'true' && matrix.settings.use-cross }}
+        if: inputs.build-changed == 'true' && matrix.settings.use-cross
         run: >
           bun run build
           --target ${{ matrix.settings.target }}
