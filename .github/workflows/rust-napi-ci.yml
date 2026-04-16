@@ -1,0 +1,268 @@
+name: Rust NAPI CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "22"
+      trusted:
+        description: "Whether the caller has deemed this run trusted"
+        required: false
+        type: string
+        default: "false"
+      rust-changed:
+        description: "Whether Rust-related inputs changed"
+        required: false
+        type: string
+        default: "true"
+      build-changed:
+        description: "Whether build-related inputs changed"
+        required: false
+        type: string
+        default: "true"
+      provenance-changed:
+        description: "Whether provenance-affecting inputs changed"
+        required: false
+        type: string
+        default: "true"
+      provenance-version:
+        description: "Pinned stella/provenance release tag"
+        required: false
+        type: string
+        default: "v0.1.1"
+      property-test-command:
+        description: "Optional extra test command to run on ubuntu-latest"
+        required: false
+        type: string
+        default: ""
+      rust-format-command:
+        description: "Cargo fmt command"
+        required: false
+        type: string
+        default: "cargo fmt --all -- --check"
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+
+  version-check:
+    name: Version sync
+    if: inputs.trusted == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ inputs.node-version }}
+      - run: node scripts/version-sync.mjs check
+
+  lint:
+    name: Lint
+    if: inputs.trusted == 'true'
+    needs: [workflow-lint, version-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  runtime-compat:
+    name: Runtime - ${{ matrix.runtime }} / ${{ matrix.os }}
+    if: inputs.trusted == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            runtime: bun
+          - os: ubuntu-latest
+            runtime: node
+          - os: macos-15
+            runtime: bun
+          - os: macos-15
+            runtime: node
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ inputs.node-version }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          targets: wasm32-wasip1-threads
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run build:js
+      - name: Bun runtime smoke
+        if: matrix.runtime == 'bun'
+        run: bun run test:runtime:bun
+      - name: Node runtime smoke
+        if: matrix.runtime == 'node'
+        run: node scripts/runtime-smoke.mjs
+
+  rust-checks:
+    name: Rust checks
+    if: inputs.trusted == 'true' && inputs.rust-changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: rust-checks
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -Dwarnings
+      - name: Format
+        run: $RUST_FORMAT_CMD
+        env:
+          RUST_FORMAT_CMD: ${{ inputs.rust-format-command }}
+      - name: Tests
+        run: cargo test --all-targets --all-features
+      - name: License audit
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+      - name: Docs
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+
+  provenance:
+    name: Provenance
+    if: inputs.trusted == 'true' && inputs.provenance-changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun install --frozen-lockfile
+      - uses: stella/.github/actions/provenance-check@0107276320ff349dda9bcd9e111680cca1951fce
+        with:
+          provenance-version: ${{ inputs.provenance-version }}
+
+  build:
+    name: Build - ${{ matrix.settings.target }}
+    if: inputs.trusted == 'true' && inputs.build-changed == 'true'
+    runs-on: ${{ matrix.settings.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-apple-darwin
+            os: macos-15
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use-cross: true
+          - target: wasm32-wasip1-threads
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ inputs.node-version }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: build-${{ matrix.settings.target }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun install --frozen-lockfile
+      - name: Build (native)
+        if: >-
+          !matrix.settings.use-cross
+          && matrix.settings.target != 'wasm32-wasip1-threads'
+        run: >
+          bun run build
+          --target ${{ matrix.settings.target }}
+      - name: Build (cross-compile)
+        if: ${{ matrix.settings.use-cross }}
+        run: >
+          bun run build
+          --target ${{ matrix.settings.target }}
+          --use-napi-cross
+      - name: Build (WASM)
+        if: matrix.settings.target == 'wasm32-wasip1-threads'
+        run: bun run build:wasm
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            *.node
+            *.wasm
+            !*.debug.wasm
+            *.cjs
+            *.wasi-browser.js
+            wasi-worker*.mjs
+          if-no-files-found: error
+
+  test:
+    name: Test (${{ matrix.os }})
+    if: inputs.trusted == 'true' && inputs.build-changed == 'true'
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: artifacts
+      - name: Move artifacts
+        shell: bash
+        run: |
+          ls -R artifacts/
+          for dir in artifacts/bindings-*; do
+            cp -- "$dir"/*.node . 2>/dev/null || true
+            cp -- "$dir"/*.wasm . 2>/dev/null || true
+            cp -- "$dir"/*.cjs . 2>/dev/null || true
+            cp -- "$dir"/*.wasi-browser.js . 2>/dev/null || true
+            cp -- "$dir"/wasi-worker*.mjs . 2>/dev/null || true
+          done
+          ls -la -- *.node 2>/dev/null || echo "No .node files"
+          ls -la -- *.wasm 2>/dev/null || echo "No .wasm files"
+      - run: bun test
+      - name: Property tests
+        if: matrix.os == 'ubuntu-latest' && inputs.property-test-command != ''
+        run: $PROPERTY_TEST_CMD
+        env:
+          PROPERTY_TEST_CMD: ${{ inputs.property-test-command }}
