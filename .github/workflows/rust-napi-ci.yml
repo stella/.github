@@ -44,6 +44,9 @@ on:
         type: string
         default: "cargo fmt --all -- --check"
 
+env:
+  CARGO_INCREMENTAL: 0
+
 jobs:
   workflow-lint:
     name: Workflow lint
