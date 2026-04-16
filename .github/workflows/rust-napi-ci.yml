@@ -32,7 +32,7 @@ on:
         description: "Pinned stella/provenance release tag"
         required: false
         type: string
-        default: "v0.1.1"
+        default: "v0.1.2"
       property-test-command:
         description: "Optional extra test command to run on ubuntu-latest"
         required: false

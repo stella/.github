@@ -144,7 +144,7 @@ jobs:
     uses: stella/.github/.github/workflows/provenance-update.yml@<commit-sha>
     with:
       install-command: bun install --frozen-lockfile
-      provenance-version: v0.1.1
+      provenance-version: v0.1.2
     secrets: inherit
 ```
 
@@ -154,7 +154,7 @@ jobs:
 - `cdxgen-version` — pinned `@cyclonedx/cdxgen` version (default: `12.1.5`)
 - `install-syft` — install Syft before generation (default: `false`)
 - `syft-version` — pinned Syft release tag (default: `v1.42.4`)
-- `provenance-version` — GitHub release tag in `stella/provenance` to install (default: `v0.1.1`)
+- `provenance-version` — GitHub release tag in `stella/provenance` to install (default: `v0.1.2`)
 - `provenance-repository` — provenance repository slug (default: `stella/provenance`)
 - `install-command` — optional dependency install command run before generation (default: `bun install --frozen-lockfile`)
 - `branch` — branch used for refresh PRs (default: `chore/provenance-update`)
@@ -238,7 +238,7 @@ steps:
   - name: Provenance
     uses: stella/.github/actions/provenance-check@main
     with:
-      provenance-version: v0.1.0
+      provenance-version: v0.1.2
 ```
 
 **Inputs:**
@@ -247,6 +247,6 @@ steps:
 - `cdxgen-version` - Pinned `@cyclonedx/cdxgen` version (default: `12.1.5`)
 - `install-syft` - Install Syft for container provenance checks (default: `false`)
 - `syft-version` - Pinned Syft release tag (default: `v1.42.4`)
-- `provenance-version` - GitHub release tag in `stella/provenance` to install (default: `v0.1.0`)
+- `provenance-version` - GitHub release tag in `stella/provenance` to install (default: `v0.1.2`)
 - `provenance-repository` - Provenance repository slug (default: `stella/provenance`)
 - `show-diff-on-failure` - Print `provenance diff` output on failure (default: `true`)
