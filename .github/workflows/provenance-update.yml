@@ -67,6 +67,12 @@ on:
       auth_token:
         description: "Optional token for create-pull-request when updater PRs should trigger downstream CI"
         required: false
+      app_id:
+        description: "Optional GitHub App ID used to mint a token inside this workflow"
+        required: false
+      app_private_key:
+        description: "Optional GitHub App private key used to mint a token inside this workflow"
+        required: false
 
 permissions:
   contents: write
@@ -76,10 +82,29 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      HAS_AUTH_TOKEN: ${{ secrets.auth_token != '' }}
+      HAS_APP_CREDENTIALS: >-
+        ${{ secrets.app_id != ''
+            && secrets.app_private_key != '' }}
 
     steps:
+      - name: Mint App token
+        id: app-token
+        if: >-
+          env.HAS_AUTH_TOKEN != 'true'
+          && env.HAS_APP_CREDENTIALS == 'true'
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          token: ${{ secrets.auth_token || steps.app-token.outputs.token || github.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
@@ -252,7 +277,7 @@ jobs:
         id: cpr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.auth_token || github.token }}
+          token: ${{ secrets.auth_token || steps.app-token.outputs.token || github.token }}
           branch: ${{ inputs.branch }}
           delete-branch: true
           commit-message: ${{ inputs.commit-message }}
