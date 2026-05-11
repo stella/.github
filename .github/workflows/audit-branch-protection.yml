@@ -46,10 +46,13 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
+          # gh CLI no longer permits --slurp with --jq (mutually exclusive
+          # since v2.59). Pipe to jq instead to keep the original "flatten
+          # paginated array pages, default to []" semantics intact.
           gh api "repos/${REPO}/rulesets" \
             --paginate \
             --slurp \
-            --jq 'add // []' > live-rulesets.json
+            | jq 'add // []' > live-rulesets.json
 
           echo "::group::Live rulesets"
           cat live-rulesets.json | jq .
