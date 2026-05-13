@@ -46,9 +46,17 @@ TARBALL=$(realpath "${TARBALL}")
 # Extract name and version from the tarball's bundled package.json
 # rather than the working tree — the published artifact is whatever
 # bytes are in the .tgz, so the idempotency check must reflect that.
-PACKAGE_JSON=$(tar -xOf "${TARBALL}" package/package.json)
-PACKAGE_NAME=$(jq -r '.name' <<<"${PACKAGE_JSON}")
-PACKAGE_VERSION=$(jq -r '.version' <<<"${PACKAGE_JSON}")
+# Use node for the JSON parse since it's already a hard requirement
+# (we verified the npm version above) — `jq` is not listed as a
+# caller prerequisite and is not present on every runner.
+PKG_JSON_FILE="${RUNNER_TEMP:-/tmp}/npm-publish-hardened-pkg-$$.json"
+trap 'rm -f "${PKG_JSON_FILE}"' EXIT
+tar -xOf "${TARBALL}" package/package.json > "${PKG_JSON_FILE}"
+
+read -r PACKAGE_NAME PACKAGE_VERSION < <(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write((j.name ?? "") + "\t" + (j.version ?? ""));
+' "${PKG_JSON_FILE}")
 
 if [[ -z "${PACKAGE_NAME}" || "${PACKAGE_NAME}" == "null" \
    || -z "${PACKAGE_VERSION}" || "${PACKAGE_VERSION}" == "null" ]]; then
