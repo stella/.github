@@ -8,8 +8,11 @@ set -euo pipefail
 # exchange. If a legacy token is in env, the publish below would silently
 # fall back to bearer auth and the whole point of this action is lost.
 if [[ -n "${NPM_TOKEN:-}" || -n "${NODE_AUTH_TOKEN:-}" ]]; then
+  # Workflow commands (::error::) must be written to stdout to be picked
+  # up by the runner's annotation processor; >&2 suppresses the UI
+  # annotation. This rule applies to every ::error:: line below as well.
   printf '::error::NPM_TOKEN/NODE_AUTH_TOKEN must not be set when using %s\n' \
-    "the hardened publish action — trusted publishing only." >&2
+    "the hardened publish action — trusted publishing only."
   exit 2
 fi
 
@@ -26,17 +29,17 @@ if (( NPM_MAJOR < 11 )) \
    || (( NPM_MAJOR == 11 && NPM_MINOR < 5 )) \
    || (( NPM_MAJOR == 11 && NPM_MINOR == 5 && NPM_PATCH < 1 )); then
   printf '::error::npm %s is too old; trusted publishing requires 11.5.1+.\n' \
-    "${NPM_VERSION}" >&2
+    "${NPM_VERSION}"
   exit 2
 fi
 
 if [[ -z "${TARBALL:-}" ]]; then
   # shellcheck disable=SC2016
-  printf '::error::Required input `tarball` is empty.\n' >&2
+  printf '::error::Required input `tarball` is empty.\n'
   exit 2
 fi
 if [[ ! -f "${TARBALL}" ]]; then
-  printf '::error::Tarball not found: %s\n' "${TARBALL}" >&2
+  printf '::error::Tarball not found: %s\n' "${TARBALL}"
   exit 2
 fi
 
@@ -61,7 +64,7 @@ read -r PACKAGE_NAME PACKAGE_VERSION < <(node -e '
 if [[ -z "${PACKAGE_NAME}" || "${PACKAGE_NAME}" == "null" \
    || -z "${PACKAGE_VERSION}" || "${PACKAGE_VERSION}" == "null" ]]; then
   printf '::error::Failed to read name/version from %s/package.json.\n' \
-    "${TARBALL}" >&2
+    "${TARBALL}"
   exit 2
 fi
 
@@ -80,27 +83,53 @@ if already_published; then
   exit 0
 fi
 
-# Publish. npm 11.5+ auto-detects ACTIONS_ID_TOKEN_REQUEST_URL and
-# ACTIONS_ID_TOKEN_REQUEST_TOKEN (set by GitHub Actions when the calling
-# job has `id-token: write`) and exchanges the OIDC token for a one-shot
-# registry token. --provenance generates the SLSA v1 attestation.
+# Publish, with retries. npm 11.5+ auto-detects
+# ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN (set
+# by GitHub Actions when the calling job has `id-token: write`) and
+# exchanges the OIDC token for a one-shot registry token. --provenance
+# generates the SLSA v1 attestation.
+#
+# Two failure modes the retry handles:
+#   1. transient registry / network error (5xx, TLS, DNS) — `npm
+#      publish` fails outright; we retry the publish.
+#   2. registry eventual consistency — `npm publish` returns non-zero
+#      but the artifact was actually accepted; the `already_published`
+#      check between attempts catches that and exits cleanly.
 PUBLISH_LOG="${RUNNER_TEMP:-/tmp}/npm-publish-${PACKAGE_NAME//\//-}.log"
-if npm publish "${TARBALL}" --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
-  exit 0
-fi
+MAX_ATTEMPTS=5
+for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+  if npm publish "${TARBALL}" --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
+    exit 0
+  fi
 
-cat "${PUBLISH_LOG}" >&2
+  cat "${PUBLISH_LOG}" >&2
 
-# Eventual-consistency retry: npm publish occasionally reports failure
-# while the artifact has actually been accepted, but registry visibility
-# lags behind by a few seconds. Poll for the new version before giving up.
-for attempt in 1 2 3 4 5; do
-  sleep "${attempt}"
   if already_published; then
-    printf '::notice::%s@%s became visible after publish failure; treating as success.\n' \
+    printf '::notice::%s@%s became visible after publish attempt %d; treating as success.\n' \
+      "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${attempt}"
+    exit 0
+  fi
+
+  if (( attempt == MAX_ATTEMPTS )); then
+    break
+  fi
+
+  # Backoff between publish attempts: 5s, 10s, 15s, 20s (50s total).
+  sleep $((attempt * 5))
+done
+
+# After all publish attempts failed, give the registry a final
+# eventual-consistency window: sometimes the last publish was actually
+# accepted but visibility lags behind the API response by a few seconds.
+for poll in 1 2 3 4 5; do
+  sleep "${poll}"
+  if already_published; then
+    printf '::notice::%s@%s became visible after final publish failure; treating as success.\n' \
       "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
     exit 0
   fi
 done
 
+printf '::error::Failed to publish %s@%s after %d attempts and post-failure polling.\n' \
+  "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${MAX_ATTEMPTS}"
 exit 1
