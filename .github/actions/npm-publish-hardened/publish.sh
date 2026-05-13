@@ -108,11 +108,25 @@ for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
   fi
 
   if (( attempt == MAX_ATTEMPTS )); then
-    printf '::error::Failed to publish %s@%s after %d attempts.\n' \
-      "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${attempt}" >&2
-    exit 1
+    break
   fi
 
-  # Backoff: 5s, 10s, 15s, 20s before each subsequent retry (50s total).
+  # Backoff between publish attempts: 5s, 10s, 15s, 20s (50s total).
   sleep $((attempt * 5))
 done
+
+# After all publish attempts failed, give the registry a final
+# eventual-consistency window: sometimes the last publish was actually
+# accepted but visibility lags behind the API response by a few seconds.
+for poll in 1 2 3 4 5; do
+  sleep "${poll}"
+  if already_published; then
+    printf '::notice::%s@%s became visible after final publish failure; treating as success.\n' \
+      "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
+    exit 0
+  fi
+done
+
+printf '::error::Failed to publish %s@%s after %d attempts and post-failure polling.\n' \
+  "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${MAX_ATTEMPTS}" >&2
+exit 1
