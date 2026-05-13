@@ -39,4 +39,10 @@ runs:
       env:
         TARBALL: ${{ inputs.tarball }}
         DIST_TAG: ${{ inputs.tag }}
-      run: ${{ github.action_path }}/publish.sh
+      # Invoke bash explicitly rather than running the path as a command.
+      # The GitHub Actions runner does not always preserve the file-mode
+      # exec bit on action checkouts, so `./publish.sh` can silently
+      # fail with "permission denied" while still surfacing as exit 1
+      # with no script output. `bash <path>` removes that dependency
+      # entirely — bash reads the file regardless of its mode.
+      run: bash "${{ github.action_path }}/publish.sh"
