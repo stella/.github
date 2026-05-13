@@ -66,7 +66,12 @@ jobs:
 
       - name: Drift detection
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
           EXPECTED_PATH: ${{ inputs.expected-config-path }}
+        # Same pipefail rationale as `Fetch live rulesets`: the gh api
+        # → jq pipeline must surface upstream failures.
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           if [ ! -f "${EXPECTED_PATH}" ]; then
             echo "::error::Expected config not found: ${EXPECTED_PATH}"
@@ -76,44 +81,60 @@ jobs:
           EXPECTED_NAME=$(jq -r '.name' "${EXPECTED_PATH}")
           echo "Looking for ruleset: ${EXPECTED_NAME}"
 
-          # Extract the matching ruleset from the live config.
-          # The live API returns an array; find by name.
-          jq --arg name "${EXPECTED_NAME}" \
-            '.[] | select(.name == $name)' \
-            live-rulesets.json > live-matched.json
+          # Match by name on the list endpoint to resolve the ruleset ID.
+          MATCHED_ID=$(jq --arg name "${EXPECTED_NAME}" \
+            '.[] | select(.name == $name) | .id' \
+            live-rulesets.json)
 
-          if [ ! -s live-matched.json ]; then
+          if [ -z "${MATCHED_ID}" ]; then
             echo "::error::Ruleset '${EXPECTED_NAME}' not found on GitHub."
-            echo "DRIFT_DETECTED=true" >> "$GITHUB_ENV"
+            {
+              echo "DRIFT_DETECTED=true"
+              echo "EXPECTED_NAME=${EXPECTED_NAME}"
+            } >> "$GITHUB_ENV"
             exit 0
           fi
 
-          # Normalize both configs for comparison.
-          # Strip server-managed fields from the live config so we
-          # compare only the fields we control.
+          # The list endpoint returns only summary fields (id, name, target,
+          # enforcement, source, *_at). conditions / bypass_actors / rules
+          # are only on the per-ruleset detail endpoint — without this
+          # fetch, drift detection compares against nulls and always
+          # reports drift.
+          gh api "repos/${REPO}/rulesets/${MATCHED_ID}" > live-matched.json
+
+          echo "::group::Live ruleset (detail)"
+          jq . live-matched.json
+          echo "::endgroup::"
+
+          # Normalize: keep only the fields we control. The live ruleset
+          # also returns server-managed metadata (id, source, timestamps,
+          # _links, etc.) that must not participate in the diff.
           LIVE_FIELDS=(
             name target enforcement conditions
             bypass_actors rules
           )
-
           LIVE_JQ_FILTER=$(printf ', %s' "${LIVE_FIELDS[@]}")
           LIVE_JQ_FILTER="{ ${LIVE_JQ_FILTER:2} }"
 
-          jq "${LIVE_JQ_FILTER}" live-matched.json \
-            > live-normalized.json
+          jq "${LIVE_JQ_FILTER}" live-matched.json > live-normalized.json
           jq -S '.' "${EXPECTED_PATH}" > expected-sorted.json
           jq -S '.' live-normalized.json > live-sorted.json
 
           if diff expected-sorted.json live-sorted.json > drift.diff; then
             echo "No drift detected."
-            echo "DRIFT_DETECTED=false" >> "$GITHUB_ENV"
+            DRIFT=false
           else
             echo "::warning::Drift detected in ruleset '${EXPECTED_NAME}'."
             echo "::group::Diff (expected vs live)"
             cat drift.diff
             echo "::endgroup::"
-            echo "DRIFT_DETECTED=true" >> "$GITHUB_ENV"
+            DRIFT=true
           fi
+
+          {
+            echo "DRIFT_DETECTED=${DRIFT}"
+            echo "EXPECTED_NAME=${EXPECTED_NAME}"
+          } >> "$GITHUB_ENV"
 
       - name: Prepare evidence
         run: |
@@ -148,7 +169,9 @@ jobs:
       - name: Upload evidence
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: branch-protection-evidence-${{ github.run_id }}
+          # Include the ruleset name so parallel callers (one job per
+          # expected ruleset) don't collide on a shared run_id.
+          name: branch-protection-evidence-${{ github.run_id }}-${{ env.EXPECTED_NAME }}
           path: evidence/
           retention-days: 365
 
