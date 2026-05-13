@@ -26,7 +26,9 @@ inputs:
   tarball:
     description: >
       Path to a pre-packed .tgz to publish. Mutually exclusive with
-      `tarballs` — exactly one of the two must be set.
+      `tarballs`. One of `tarball` or `tarballs` must be set (both
+      are `required: false` because they're alternatives, but the
+      action exits 2 if neither is provided).
     required: false
   tarballs:
     description: >
@@ -35,7 +37,7 @@ inputs:
       `name@version` already on the registry) and published
       independently. The action exits 1 on the first publish failure
       that can't be recovered via the eventual-consistency poll.
-      Mutually exclusive with `tarball`.
+      Mutually exclusive with `tarball`; one of the two must be set.
     required: false
   tag:
     description: npm dist-tag for the publish (e.g. latest, next, rc)
