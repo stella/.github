@@ -1,8 +1,21 @@
 # npm-publish-hardened
 
-Composite action that publishes a single npm package using **OIDC
-trusted publishing** with **SLSA v1 provenance**. Refuses to fall
-back to `NPM_TOKEN` auth and is idempotent over the package version.
+Composite action that publishes a pre-packed npm tarball using **OIDC
+trusted publishing** with **SLSA v1 provenance**. Refuses to fall back
+to `NPM_TOKEN` auth and is idempotent over the tarball's contents.
+
+## Why tarball-only
+
+The publish-from-tarball flow lets the **exact same `.tgz`** that
+goes to npm also be uploaded as a GitHub release asset. Downstream
+users can then verify byte-for-byte that the artifact they install
+from npm matches the public reference on GitHub.
+
+The publish-from-directory flow (`cd dir && npm publish`) doesn't
+give you that — npm packs in-memory and nothing intermediate is
+exposed. So this action only supports tarballs; the caller is
+responsible for the `npm pack` step and for uploading the same
+tarball to the GitHub release.
 
 ## What it does
 
@@ -12,10 +25,11 @@ back to `NPM_TOKEN` auth and is idempotent over the package version.
    and defeat the purpose.
 2. Verifies the npm CLI is v11.5.1+ (the cutoff for trusted
    publishing support).
-3. Skips publish if the exact `name@version` from `package.json` is
-   already on the registry (re-runs of the same release are no-ops).
-4. Runs `npm publish --provenance --access public --tag <tag>`. npm
-   detects the GitHub Actions OIDC env vars
+3. Extracts `name@version` from the tarball's bundled
+   `package/package.json` and skips publish if that exact version is
+   already on the registry.
+4. Runs `npm publish <tarball> --provenance --access public --tag
+   <tag>`. npm detects the GitHub Actions OIDC env vars
    (`ACTIONS_ID_TOKEN_REQUEST_URL` and `_TOKEN`) and exchanges them
    for a one-shot registry token automatically.
 5. Retries with exponential-ish backoff if publish reports failure
@@ -64,23 +78,23 @@ publish time with a 401.
 ## Usage
 
 ```yaml
-- uses: stella/.github/.github/actions/npm-publish-hardened@<sha>
+- name: Pack
+  id: pack
+  run: |
+    pack_json="$(npm pack --json --ignore-scripts --pack-destination release-artifacts)"
+    tarball="$(echo "$pack_json" | jq -r '.[0].filename')"
+    echo "tarball=release-artifacts/$tarball" >> "$GITHUB_OUTPUT"
+
+- name: Publish
+  uses: stella/.github/.github/actions/npm-publish-hardened@<sha>
   with:
-    package-dir: packages/anonymize
+    tarball: ${{ steps.pack.outputs.tarball }}
     # tag: latest    # default
 ```
 
 ## Inputs
 
-| Name          | Required | Default  | Description                                                          |
-| ------------- | -------- | -------- | -------------------------------------------------------------------- |
-| `package-dir` | yes      | —        | Working directory containing the package's `package.json`            |
-| `tag`         | no       | `latest` | npm dist-tag for the publish                                         |
-
-## Why a composite action and not a reusable workflow
-
-The publish step is what's actually shared across publishing repos.
-Build/test scaffolding diverges (napi-rs cross-compilation,
-TypeScript bundling, etc.) and a full reusable workflow would need
-30+ inputs to handle every shape. Composite keeps the scope tight to
-the part that's identical across all callers.
+| Name      | Required | Default  | Description                                                          |
+| --------- | -------- | -------- | -------------------------------------------------------------------- |
+| `tarball` | yes      | —        | Path to a pre-packed `.tgz` to publish                               |
+| `tag`     | no       | `latest` | npm dist-tag for the publish                                         |
