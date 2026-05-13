@@ -7,12 +7,16 @@ set -euo pipefail
 # `actions/setup-node@v6` with `registry-url:` exports
 # NODE_AUTH_TOKEN=XXXXX-XXXXX-XXXXX-XXXXX as a literal placeholder, so
 # its `.npmrc` template `_authToken=${NODE_AUTH_TOKEN}` expands to a
-# non-empty (but useless) string. Treat that placeholder as if the
-# variable were unset — otherwise this guard refuses every standard
-# setup-node + publish flow.
-SETUP_NODE_PLACEHOLDER='XXXXX-XXXXX-XXXXX-XXXXX'
+# non-empty (but useless) string. We must neutralise the placeholder
+# WITHOUT leaving the variable unset — npm config does env-var
+# expansion when reading .npmrc, and an unset variable can leak the
+# literal `${NODE_AUTH_TOKEN}` syntax into the Authorization header
+# instead of being treated as absent. Setting it to an empty string
+# expands cleanly to `_authToken=` (no auth) and lets npm's OIDC
+# trusted-publishing path take over.
+readonly SETUP_NODE_PLACEHOLDER='XXXXX-XXXXX-XXXXX-XXXXX'
 if [[ "${NODE_AUTH_TOKEN:-}" == "${SETUP_NODE_PLACEHOLDER}" ]]; then
-  unset NODE_AUTH_TOKEN
+  export NODE_AUTH_TOKEN=''
 fi
 
 # Defence in depth: trusted publishing performs auth via the OIDC token
@@ -23,8 +27,8 @@ if [[ -n "${NPM_TOKEN:-}" || -n "${NODE_AUTH_TOKEN:-}" ]]; then
   # Workflow commands (::error::) must be written to stdout to be picked
   # up by the runner's annotation processor; >&2 suppresses the UI
   # annotation. This rule applies to every ::error:: line below as well.
-  printf '::error::NPM_TOKEN/NODE_AUTH_TOKEN must not be set when using %s\n' \
-    "the hardened publish action — trusted publishing only."
+  printf '::error::NPM_TOKEN/NODE_AUTH_TOKEN must not be set to a real %s\n' \
+    "value when using the hardened publish action — trusted publishing only."
   exit 2
 fi
 
