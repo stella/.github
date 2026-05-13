@@ -45,4 +45,9 @@ runs:
       # fail with "permission denied" while still surfacing as exit 1
       # with no script output. `bash <path>` removes that dependency
       # entirely — bash reads the file regardless of its mode.
-      run: bash "${{ github.action_path }}/publish.sh"
+      #
+      # `-e -o pipefail` mirror the runner's default shell flags. The
+      # shebang's flags are ignored when invoked via `bash <path>`, so
+      # passing them explicitly here protects the empty window between
+      # bash startup and the script's own `set -euo pipefail` on line 2.
+      run: bash -eo pipefail "${{ github.action_path }}/publish.sh"
