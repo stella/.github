@@ -16,8 +16,15 @@ fi
 # npm 11.5.1 introduced trusted publishing support. Older clients silently
 # skip the OIDC exchange and try anonymous publish → 401.
 NPM_VERSION=$(npm --version)
-NPM_MAJOR=${NPM_VERSION%%.*}
-if (( NPM_MAJOR < 11 )); then
+IFS='.' read -r NPM_MAJOR NPM_MINOR NPM_PATCH <<<"${NPM_VERSION}"
+# Strip any pre-release suffix from the patch component (e.g. "1-beta.0").
+NPM_PATCH=${NPM_PATCH%%-*}
+NPM_MAJOR=${NPM_MAJOR:-0}
+NPM_MINOR=${NPM_MINOR:-0}
+NPM_PATCH=${NPM_PATCH:-0}
+if (( NPM_MAJOR < 11 )) \
+   || (( NPM_MAJOR == 11 && NPM_MINOR < 5 )) \
+   || (( NPM_MAJOR == 11 && NPM_MINOR == 5 && NPM_PATCH < 1 )); then
   printf '::error::npm %s is too old; trusted publishing requires 11.5.1+.\n' \
     "${NPM_VERSION}" >&2
   exit 2
