@@ -9,7 +9,7 @@ updates:
       time: "09:00"
       timezone: "Europe/Prague"
     cooldown:
-      default-days: 3
+      default-days: 5
     groups:
       actions:
         patterns:
