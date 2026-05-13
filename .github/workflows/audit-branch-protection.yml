@@ -45,6 +45,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+        # Custom shell to enable pipefail — the default `bash -e {0}` would
+        # let a failing `gh api` upstream of the jq pipe still exit 0
+        # because the last command (`jq 'add // []'` over empty stdin)
+        # returns `[]` and 0, silently masking auth / rate-limit / 5xx
+        # errors and producing a "no drift" false negative.
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           # gh CLI no longer permits --slurp with --jq (mutually exclusive
           # since v2.59). Pipe to jq instead to keep the original "flatten
@@ -55,7 +61,7 @@ jobs:
             | jq 'add // []' > live-rulesets.json
 
           echo "::group::Live rulesets"
-          cat live-rulesets.json | jq .
+          jq . live-rulesets.json
           echo "::endgroup::"
 
       - name: Drift detection
