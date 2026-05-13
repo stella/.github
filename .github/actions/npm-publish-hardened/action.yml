@@ -1,0 +1,34 @@
+name: Hardened npm publish (OIDC + idempotent)
+description: >
+  Publish a single npm package via OIDC trusted publishing with SLSA
+  provenance attestation. Idempotent — skips if the exact version is
+  already on the registry. Refuses to fall back to NPM_TOKEN auth.
+
+  Caller workflow must declare `permissions: id-token: write` on the
+  calling job, and have set up npm CLI v11.5.1+ (which detects the
+  GitHub Actions OIDC env vars and performs the token exchange
+  automatically).
+
+  One-time per-package configuration is required on the npm side:
+  npmjs.com → package settings → Publishing → add a trusted publisher
+  pointing at this GitHub repository and workflow path. Without this,
+  the action will fail at publish time with a 401.
+
+inputs:
+  package-dir:
+    description: Working directory containing the package's package.json
+    required: true
+  tag:
+    description: npm dist-tag for the publish (e.g. latest, next, rc)
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Publish
+      shell: bash
+      working-directory: ${{ inputs.package-dir }}
+      env:
+        DIST_TAG: ${{ inputs.tag }}
+      run: ${{ github.action_path }}/publish.sh

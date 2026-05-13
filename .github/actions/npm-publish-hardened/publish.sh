@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Hardened npm publish via OIDC trusted publishing.
+# See action.yml for the contract.
+
+set -euo pipefail
+
+# Defence in depth: trusted publishing performs auth via the OIDC token
+# exchange. If a legacy token is in env, the publish below would silently
+# fall back to bearer auth and the whole point of this action is lost.
+if [[ -n "${NPM_TOKEN:-}" || -n "${NODE_AUTH_TOKEN:-}" ]]; then
+  printf '::error::NPM_TOKEN/NODE_AUTH_TOKEN must not be set when using %s\n' \
+    "the hardened publish action — trusted publishing only." >&2
+  exit 2
+fi
+
+# npm 11.5.1 introduced trusted publishing support. Older clients silently
+# skip the OIDC exchange and try anonymous publish → 401.
+NPM_VERSION=$(npm --version)
+NPM_MAJOR=${NPM_VERSION%%.*}
+if (( NPM_MAJOR < 11 )); then
+  printf '::error::npm %s is too old; trusted publishing requires 11.5.1+.\n' \
+    "${NPM_VERSION}" >&2
+  exit 2
+fi
+
+PACKAGE_NAME=$(node -p "require('./package.json').name")
+PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+# Idempotency: skip if exact version is already published. `npm view`
+# exits non-zero when the version doesn't exist, so the && guard handles
+# both "not published" and any view-time errors uniformly.
+already_published() {
+  local seen
+  seen=$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null) || return 1
+  [[ "${seen}" == "${PACKAGE_VERSION}" ]]
+}
+
+if already_published; then
+  printf '::notice::%s@%s already published; skipping.\n' \
+    "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
+  exit 0
+fi
+
+# Publish. npm 11.5+ auto-detects ACTIONS_ID_TOKEN_REQUEST_URL and
+# ACTIONS_ID_TOKEN_REQUEST_TOKEN (set by GitHub Actions when the calling
+# job has `id-token: write`) and exchanges the OIDC token for a one-shot
+# registry token. --provenance generates the SLSA v1 attestation.
+PUBLISH_LOG="${RUNNER_TEMP:-/tmp}/npm-publish-${PACKAGE_NAME//\//-}.log"
+if npm publish --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
+  exit 0
+fi
+
+cat "${PUBLISH_LOG}" >&2
+
+# Eventual-consistency retry: npm publish occasionally reports failure
+# while the artifact has actually been accepted, but registry visibility
+# lags behind by a few seconds. Poll for the new version before giving up.
+for attempt in 1 2 3 4 5; do
+  sleep "${attempt}"
+  if already_published; then
+    printf '::notice::%s@%s became visible after publish failure; treating as success.\n' \
+      "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
+    exit 0
+  fi
+done
+
+exit 1
