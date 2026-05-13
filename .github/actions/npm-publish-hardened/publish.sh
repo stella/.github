@@ -80,27 +80,39 @@ if already_published; then
   exit 0
 fi
 
-# Publish. npm 11.5+ auto-detects ACTIONS_ID_TOKEN_REQUEST_URL and
-# ACTIONS_ID_TOKEN_REQUEST_TOKEN (set by GitHub Actions when the calling
-# job has `id-token: write`) and exchanges the OIDC token for a one-shot
-# registry token. --provenance generates the SLSA v1 attestation.
+# Publish, with retries. npm 11.5+ auto-detects
+# ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN (set
+# by GitHub Actions when the calling job has `id-token: write`) and
+# exchanges the OIDC token for a one-shot registry token. --provenance
+# generates the SLSA v1 attestation.
+#
+# Two failure modes the retry handles:
+#   1. transient registry / network error (5xx, TLS, DNS) — `npm
+#      publish` fails outright; we retry the publish.
+#   2. registry eventual consistency — `npm publish` returns non-zero
+#      but the artifact was actually accepted; the `already_published`
+#      check between attempts catches that and exits cleanly.
 PUBLISH_LOG="${RUNNER_TEMP:-/tmp}/npm-publish-${PACKAGE_NAME//\//-}.log"
-if npm publish "${TARBALL}" --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
-  exit 0
-fi
-
-cat "${PUBLISH_LOG}" >&2
-
-# Eventual-consistency retry: npm publish occasionally reports failure
-# while the artifact has actually been accepted, but registry visibility
-# lags behind by a few seconds. Poll for the new version before giving up.
-for attempt in 1 2 3 4 5; do
-  sleep "${attempt}"
-  if already_published; then
-    printf '::notice::%s@%s became visible after publish failure; treating as success.\n' \
-      "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
+MAX_ATTEMPTS=5
+for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+  if npm publish "${TARBALL}" --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
     exit 0
   fi
-done
 
-exit 1
+  cat "${PUBLISH_LOG}" >&2
+
+  if already_published; then
+    printf '::notice::%s@%s became visible after publish attempt %d; treating as success.\n' \
+      "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${attempt}"
+    exit 0
+  fi
+
+  if (( attempt == MAX_ATTEMPTS )); then
+    printf '::error::Failed to publish %s@%s after %d attempts.\n' \
+      "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${attempt}" >&2
+    exit 1
+  fi
+
+  # Backoff: 5s, 10s, 15s, 20s before each subsequent retry (50s total).
+  sleep $((attempt * 5))
+done
