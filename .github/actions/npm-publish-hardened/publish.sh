@@ -8,8 +8,11 @@ set -euo pipefail
 # exchange. If a legacy token is in env, the publish below would silently
 # fall back to bearer auth and the whole point of this action is lost.
 if [[ -n "${NPM_TOKEN:-}" || -n "${NODE_AUTH_TOKEN:-}" ]]; then
+  # Workflow commands (::error::) must be written to stdout to be picked
+  # up by the runner's annotation processor; >&2 suppresses the UI
+  # annotation. This rule applies to every ::error:: line below as well.
   printf '::error::NPM_TOKEN/NODE_AUTH_TOKEN must not be set when using %s\n' \
-    "the hardened publish action — trusted publishing only." >&2
+    "the hardened publish action — trusted publishing only."
   exit 2
 fi
 
@@ -26,17 +29,17 @@ if (( NPM_MAJOR < 11 )) \
    || (( NPM_MAJOR == 11 && NPM_MINOR < 5 )) \
    || (( NPM_MAJOR == 11 && NPM_MINOR == 5 && NPM_PATCH < 1 )); then
   printf '::error::npm %s is too old; trusted publishing requires 11.5.1+.\n' \
-    "${NPM_VERSION}" >&2
+    "${NPM_VERSION}"
   exit 2
 fi
 
 if [[ -z "${TARBALL:-}" ]]; then
   # shellcheck disable=SC2016
-  printf '::error::Required input `tarball` is empty.\n' >&2
+  printf '::error::Required input `tarball` is empty.\n'
   exit 2
 fi
 if [[ ! -f "${TARBALL}" ]]; then
-  printf '::error::Tarball not found: %s\n' "${TARBALL}" >&2
+  printf '::error::Tarball not found: %s\n' "${TARBALL}"
   exit 2
 fi
 
@@ -61,7 +64,7 @@ read -r PACKAGE_NAME PACKAGE_VERSION < <(node -e '
 if [[ -z "${PACKAGE_NAME}" || "${PACKAGE_NAME}" == "null" \
    || -z "${PACKAGE_VERSION}" || "${PACKAGE_VERSION}" == "null" ]]; then
   printf '::error::Failed to read name/version from %s/package.json.\n' \
-    "${TARBALL}" >&2
+    "${TARBALL}"
   exit 2
 fi
 
@@ -128,5 +131,5 @@ for poll in 1 2 3 4 5; do
 done
 
 printf '::error::Failed to publish %s@%s after %d attempts and post-failure polling.\n' \
-  "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${MAX_ATTEMPTS}" >&2
+  "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${MAX_ATTEMPTS}"
 exit 1
