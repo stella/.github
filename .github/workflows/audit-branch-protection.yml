@@ -131,9 +131,17 @@ jobs:
             DRIFT=true
           fi
 
+          # actions/upload-artifact rejects names containing any of:
+          #   / \ : * ? " < > | and newlines.
+          # Ruleset names can legitimately contain ref patterns like
+          # `release/*` or `feature:hotfix`, so the raw name is not safe
+          # as an artifact suffix. Slug it down to [A-Za-z0-9._-].
+          EXPECTED_SLUG=$(printf '%s' "${EXPECTED_NAME}" | tr -c '[:alnum:]._-' '_')
+
           {
             echo "DRIFT_DETECTED=${DRIFT}"
             echo "EXPECTED_NAME=${EXPECTED_NAME}"
+            echo "EXPECTED_SLUG=${EXPECTED_SLUG}"
           } >> "$GITHUB_ENV"
 
       - name: Prepare evidence
@@ -169,9 +177,11 @@ jobs:
       - name: Upload evidence
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          # Include the ruleset name so parallel callers (one job per
+          # Include the ruleset slug so parallel callers (one job per
           # expected ruleset) don't collide on a shared run_id.
-          name: branch-protection-evidence-${{ github.run_id }}-${{ env.EXPECTED_NAME }}
+          # EXPECTED_SLUG is the ruleset name with disallowed artifact-
+          # name characters (e.g. `/`, `:`, `*`) replaced.
+          name: branch-protection-evidence-${{ github.run_id }}-${{ env.EXPECTED_SLUG }}
           path: evidence/
           retention-days: 365
 
