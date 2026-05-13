@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hardened npm publish via OIDC trusted publishing.
+# Hardened npm publish via OIDC trusted publishing, tarball flavor.
 # See action.yml for the contract.
 
 set -euo pipefail
@@ -30,8 +30,40 @@ if (( NPM_MAJOR < 11 )) \
   exit 2
 fi
 
-PACKAGE_NAME=$(node -p "require('./package.json').name")
-PACKAGE_VERSION=$(node -p "require('./package.json').version")
+if [[ -z "${TARBALL:-}" ]]; then
+  # shellcheck disable=SC2016
+  printf '::error::Required input `tarball` is empty.\n' >&2
+  exit 2
+fi
+if [[ ! -f "${TARBALL}" ]]; then
+  printf '::error::Tarball not found: %s\n' "${TARBALL}" >&2
+  exit 2
+fi
+
+# Resolve to absolute path so npm publish works regardless of cwd.
+TARBALL=$(realpath "${TARBALL}")
+
+# Extract name and version from the tarball's bundled package.json
+# rather than the working tree — the published artifact is whatever
+# bytes are in the .tgz, so the idempotency check must reflect that.
+# Use node for the JSON parse since it's already a hard requirement
+# (we verified the npm version above) — `jq` is not listed as a
+# caller prerequisite and is not present on every runner.
+PKG_JSON_FILE="${RUNNER_TEMP:-/tmp}/npm-publish-hardened-pkg-$$.json"
+trap 'rm -f "${PKG_JSON_FILE}"' EXIT
+tar -xOf "${TARBALL}" package/package.json > "${PKG_JSON_FILE}"
+
+read -r PACKAGE_NAME PACKAGE_VERSION < <(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write((j.name ?? "") + "\t" + (j.version ?? ""));
+' "${PKG_JSON_FILE}")
+
+if [[ -z "${PACKAGE_NAME}" || "${PACKAGE_NAME}" == "null" \
+   || -z "${PACKAGE_VERSION}" || "${PACKAGE_VERSION}" == "null" ]]; then
+  printf '::error::Failed to read name/version from %s/package.json.\n' \
+    "${TARBALL}" >&2
+  exit 2
+fi
 
 # Idempotency: skip if exact version is already published. `npm view`
 # exits non-zero when the version doesn't exist, so the && guard handles
@@ -53,7 +85,7 @@ fi
 # job has `id-token: write`) and exchanges the OIDC token for a one-shot
 # registry token. --provenance generates the SLSA v1 attestation.
 PUBLISH_LOG="${RUNNER_TEMP:-/tmp}/npm-publish-${PACKAGE_NAME//\//-}.log"
-if npm publish --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
+if npm publish "${TARBALL}" --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
   exit 0
 fi
 
