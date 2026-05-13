@@ -28,7 +28,7 @@ jobs:
           custom_labels: '{"feat": "enhancement", "fix": "bug", "refactor": "enhancement"}'
 
       - name: copy-issue-labels
-        uses: michalvankodev/copy-issue-labels@f54e957e58fc976eba5ffa36e1a1030572dbb78d  # 2023-09-12
+        uses: michalvankodev/copy-issue-labels@c4df96ee53d2cdf639ba169a26c43b04d5085cb3  # 2023-09-12
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
