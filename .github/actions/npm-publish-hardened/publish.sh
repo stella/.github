@@ -72,9 +72,14 @@ PKG_JSON_FILE="${RUNNER_TEMP:-/tmp}/npm-publish-hardened-pkg-$$.json"
 trap 'rm -f "${PKG_JSON_FILE}"' EXIT
 tar -xOf "${TARBALL}" package/package.json > "${PKG_JSON_FILE}"
 
+# shellcheck disable=SC2016  # JS template literals don't need shell expansion
 read -r PACKAGE_NAME PACKAGE_VERSION < <(node -e '
   const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  process.stdout.write((j.name ?? "") + "\t" + (j.version ?? ""));
+  // console.log appends a trailing newline. The newline is required:
+  // bash `read` returns non-zero on EOF without a delimiter even when
+  // the variables were assigned, and under `set -e` that kills the
+  // script silently right here.
+  console.log(`${j.name ?? ""}\t${j.version ?? ""}`);
 ' "${PKG_JSON_FILE}")
 
 if [[ -z "${PACKAGE_NAME}" || "${PACKAGE_NAME}" == "null" \
