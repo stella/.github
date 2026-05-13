@@ -4,9 +4,21 @@
 
 set -euo pipefail
 
+# `actions/setup-node@v6` with `registry-url:` exports
+# NODE_AUTH_TOKEN=XXXXX-XXXXX-XXXXX-XXXXX as a literal placeholder, so
+# its `.npmrc` template `_authToken=${NODE_AUTH_TOKEN}` expands to a
+# non-empty (but useless) string. Treat that placeholder as if the
+# variable were unset — otherwise this guard refuses every standard
+# setup-node + publish flow.
+SETUP_NODE_PLACEHOLDER='XXXXX-XXXXX-XXXXX-XXXXX'
+if [[ "${NODE_AUTH_TOKEN:-}" == "${SETUP_NODE_PLACEHOLDER}" ]]; then
+  unset NODE_AUTH_TOKEN
+fi
+
 # Defence in depth: trusted publishing performs auth via the OIDC token
-# exchange. If a legacy token is in env, the publish below would silently
-# fall back to bearer auth and the whole point of this action is lost.
+# exchange. If a real legacy token is in env, the publish below would
+# silently fall back to bearer auth and the whole point of this action
+# is lost.
 if [[ -n "${NPM_TOKEN:-}" || -n "${NODE_AUTH_TOKEN:-}" ]]; then
   # Workflow commands (::error::) must be written to stdout to be picked
   # up by the runner's annotation processor; >&2 suppresses the UI
