@@ -49,108 +49,141 @@ if (( NPM_MAJOR < 11 )) \
   exit 2
 fi
 
-if [[ -z "${TARBALL:-}" ]]; then
+# Build the publish queue from either `tarball` (singular) or `tarballs`
+# (newline-separated). Exactly one of the two inputs must be non-empty.
+declare -a PUBLISH_QUEUE=()
+if [[ -n "${TARBALL:-}" && -n "${TARBALLS:-}" ]]; then
   # shellcheck disable=SC2016
-  printf '::error::Required input `tarball` is empty.\n'
+  printf '::error::Set exactly one of `tarball` or `tarballs` — not both.\n'
   exit 2
 fi
-if [[ ! -f "${TARBALL}" ]]; then
-  printf '::error::Tarball not found: %s\n' "${TARBALL}"
+if [[ -n "${TARBALL:-}" ]]; then
+  PUBLISH_QUEUE+=("${TARBALL}")
+elif [[ -n "${TARBALLS:-}" ]]; then
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    PUBLISH_QUEUE+=("${line}")
+  done <<<"${TARBALLS}"
+fi
+if (( ${#PUBLISH_QUEUE[@]} == 0 )); then
+  # shellcheck disable=SC2016
+  printf '::error::No tarballs to publish — set `tarball` or `tarballs`.\n'
   exit 2
 fi
 
-# Resolve to absolute path so npm publish works regardless of cwd.
-TARBALL=$(realpath "${TARBALL}")
+# Pre-validate every tarball exists before publishing anything, so a
+# typo in the 5th entry doesn't surface after 4 successful publishes.
+for i in "${!PUBLISH_QUEUE[@]}"; do
+  if [[ ! -f "${PUBLISH_QUEUE[$i]}" ]]; then
+    printf '::error::Tarball not found: %s\n' "${PUBLISH_QUEUE[$i]}"
+    exit 2
+  fi
+  PUBLISH_QUEUE[i]=$(realpath "${PUBLISH_QUEUE[$i]}")
+done
 
-# Extract name and version from the tarball's bundled package.json
-# rather than the working tree — the published artifact is whatever
-# bytes are in the .tgz, so the idempotency check must reflect that.
-# Use node for the JSON parse since it's already a hard requirement
-# (we verified the npm version above) — `jq` is not listed as a
-# caller prerequisite and is not present on every runner.
+# Per-tarball publish routine. Shared by both single and multi modes.
 PKG_JSON_FILE="${RUNNER_TEMP:-/tmp}/npm-publish-hardened-pkg-$$.json"
 trap 'rm -f "${PKG_JSON_FILE}"' EXIT
-tar -xOf "${TARBALL}" package/package.json > "${PKG_JSON_FILE}"
 
-# shellcheck disable=SC2016  # JS template literals don't need shell expansion
-read -r PACKAGE_NAME PACKAGE_VERSION < <(node -e '
-  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  // console.log appends a trailing newline. The newline is required:
-  // bash `read` returns non-zero on EOF without a delimiter even when
-  // the variables were assigned, and under `set -e` that kills the
-  // script silently right here.
-  console.log(`${j.name ?? ""}\t${j.version ?? ""}`);
-' "${PKG_JSON_FILE}")
+publish_one() {
+  local tarball="$1"
+  local package_name package_version
 
-if [[ -z "${PACKAGE_NAME}" || "${PACKAGE_NAME}" == "null" \
-   || -z "${PACKAGE_VERSION}" || "${PACKAGE_VERSION}" == "null" ]]; then
-  printf '::error::Failed to read name/version from %s/package.json.\n' \
-    "${TARBALL}"
-  exit 2
-fi
+  # Extract name and version from the tarball's bundled package.json
+  # rather than the working tree — the published artifact is whatever
+  # bytes are in the .tgz, so the idempotency check must reflect that.
+  # Use node for the JSON parse since it's already a hard requirement
+  # (we verified the npm version above) — `jq` is not listed as a
+  # caller prerequisite and is not present on every runner.
+  tar -xOf "${tarball}" package/package.json > "${PKG_JSON_FILE}"
 
-# Idempotency: skip if exact version is already published. `npm view`
-# exits non-zero when the version doesn't exist, so the && guard handles
-# both "not published" and any view-time errors uniformly.
-already_published() {
-  local seen
-  seen=$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null) || return 1
-  [[ "${seen}" == "${PACKAGE_VERSION}" ]]
+  # shellcheck disable=SC2016  # JS template literals don't need shell expansion
+  read -r package_name package_version < <(node -e '
+    const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    // console.log appends a trailing newline. The newline is required:
+    // bash `read` returns non-zero on EOF without a delimiter even when
+    // the variables were assigned, and under `set -e` that kills the
+    // script silently right here.
+    console.log(`${j.name ?? ""}\t${j.version ?? ""}`);
+  ' "${PKG_JSON_FILE}")
+
+  if [[ -z "${package_name}" || "${package_name}" == "null" \
+     || -z "${package_version}" || "${package_version}" == "null" ]]; then
+    printf '::error::Failed to read name/version from %s/package.json.\n' \
+      "${tarball}"
+    return 2
+  fi
+
+  # Idempotency: skip if exact version is already published.
+  already_published() {
+    local seen
+    seen=$(npm view "${package_name}@${package_version}" version 2>/dev/null) || return 1
+    [[ "${seen}" == "${package_version}" ]]
+  }
+
+  if already_published; then
+    printf '::notice::%s@%s already published; skipping.\n' \
+      "${package_name}" "${package_version}"
+    return 0
+  fi
+
+  # Publish, with retries. npm 11.5+ auto-detects
+  # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN (set
+  # by GitHub Actions when the calling job has `id-token: write`) and
+  # exchanges the OIDC token for a one-shot registry token. --provenance
+  # generates the SLSA v1 attestation.
+  #
+  # Two failure modes the retry handles:
+  #   1. transient registry / network error (5xx, TLS, DNS) — `npm
+  #      publish` fails outright; we retry the publish.
+  #   2. registry eventual consistency — `npm publish` returns non-zero
+  #      but the artifact was actually accepted; the `already_published`
+  #      check between attempts catches that and exits cleanly.
+  local publish_log
+  publish_log="${RUNNER_TEMP:-/tmp}/npm-publish-${package_name//\//-}.log"
+  local max_attempts=5
+  local attempt
+  for attempt in $(seq 1 "${max_attempts}"); do
+    if npm publish "${tarball}" --provenance --access public --tag "${DIST_TAG}" 2>"${publish_log}"; then
+      return 0
+    fi
+
+    cat "${publish_log}" >&2
+
+    if already_published; then
+      printf '::notice::%s@%s became visible after publish attempt %d; treating as success.\n' \
+        "${package_name}" "${package_version}" "${attempt}"
+      return 0
+    fi
+
+    if (( attempt == max_attempts )); then
+      break
+    fi
+
+    # Backoff between publish attempts: 5s, 10s, 15s, 20s (50s total).
+    sleep $((attempt * 5))
+  done
+
+  # After all publish attempts failed, give the registry a final
+  # eventual-consistency window: sometimes the last publish was actually
+  # accepted but visibility lags behind the API response by a few seconds.
+  local poll
+  for poll in 1 2 3 4 5; do
+    sleep "${poll}"
+    if already_published; then
+      printf '::notice::%s@%s became visible after final publish failure; treating as success.\n' \
+        "${package_name}" "${package_version}"
+      return 0
+    fi
+  done
+
+  printf '::error::Failed to publish %s@%s after %d attempts and post-failure polling.\n' \
+    "${package_name}" "${package_version}" "${max_attempts}"
+  return 1
 }
 
-if already_published; then
-  printf '::notice::%s@%s already published; skipping.\n' \
-    "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
-  exit 0
-fi
-
-# Publish, with retries. npm 11.5+ auto-detects
-# ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN (set
-# by GitHub Actions when the calling job has `id-token: write`) and
-# exchanges the OIDC token for a one-shot registry token. --provenance
-# generates the SLSA v1 attestation.
-#
-# Two failure modes the retry handles:
-#   1. transient registry / network error (5xx, TLS, DNS) — `npm
-#      publish` fails outright; we retry the publish.
-#   2. registry eventual consistency — `npm publish` returns non-zero
-#      but the artifact was actually accepted; the `already_published`
-#      check between attempts catches that and exits cleanly.
-PUBLISH_LOG="${RUNNER_TEMP:-/tmp}/npm-publish-${PACKAGE_NAME//\//-}.log"
-MAX_ATTEMPTS=5
-for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
-  if npm publish "${TARBALL}" --provenance --access public --tag "${DIST_TAG}" 2>"${PUBLISH_LOG}"; then
-    exit 0
-  fi
-
-  cat "${PUBLISH_LOG}" >&2
-
-  if already_published; then
-    printf '::notice::%s@%s became visible after publish attempt %d; treating as success.\n' \
-      "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${attempt}"
-    exit 0
-  fi
-
-  if (( attempt == MAX_ATTEMPTS )); then
-    break
-  fi
-
-  # Backoff between publish attempts: 5s, 10s, 15s, 20s (50s total).
-  sleep $((attempt * 5))
+# Sequential — order matters when a meta-package (e.g. napi-rs root)
+# depends on its platform sub-packages being published first.
+for tarball in "${PUBLISH_QUEUE[@]}"; do
+  publish_one "${tarball}"
 done
-
-# After all publish attempts failed, give the registry a final
-# eventual-consistency window: sometimes the last publish was actually
-# accepted but visibility lags behind the API response by a few seconds.
-for poll in 1 2 3 4 5; do
-  sleep "${poll}"
-  if already_published; then
-    printf '::notice::%s@%s became visible after final publish failure; treating as success.\n' \
-      "${PACKAGE_NAME}" "${PACKAGE_VERSION}"
-    exit 0
-  fi
-done
-
-printf '::error::Failed to publish %s@%s after %d attempts and post-failure polling.\n' \
-  "${PACKAGE_NAME}" "${PACKAGE_VERSION}" "${MAX_ATTEMPTS}"
-exit 1

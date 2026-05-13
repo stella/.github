@@ -24,8 +24,19 @@ description: >
 
 inputs:
   tarball:
-    description: Path to a pre-packed .tgz to publish
-    required: true
+    description: >
+      Path to a pre-packed .tgz to publish. Mutually exclusive with
+      `tarballs` — exactly one of the two must be set.
+    required: false
+  tarballs:
+    description: >
+      Newline-separated list of pre-packed .tgz paths to publish in
+      order. Each tarball is checked for idempotency (skip if
+      `name@version` already on the registry) and published
+      independently. The action exits 1 on the first publish failure
+      that can't be recovered via the eventual-consistency poll.
+      Mutually exclusive with `tarball`.
+    required: false
   tag:
     description: npm dist-tag for the publish (e.g. latest, next, rc)
     required: false
@@ -38,6 +49,7 @@ runs:
       shell: bash
       env:
         TARBALL: ${{ inputs.tarball }}
+        TARBALLS: ${{ inputs.tarballs }}
         DIST_TAG: ${{ inputs.tag }}
       # Invoke bash explicitly rather than running the path as a command.
       # The GitHub Actions runner does not always preserve the file-mode
