@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: "cargo fmt --all -- --check"
+      install-command:
+        description: "Command used to install dependencies. `--no-verify` works around bun's integrity check on napi-rs platform sub-packages."
+        required: false
+        type: string
+        default: "bun install --frozen-lockfile --no-verify"
 
 env:
   CARGO_INCREMENTAL: 0
@@ -80,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: bun install --frozen-lockfile
+      - run: ${{ inputs.install-command }}
       - run: bun run lint
 
   runtime-compat:
@@ -111,7 +116,7 @@ jobs:
         with:
           targets: wasm32-wasip1-threads
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: bun install --frozen-lockfile
+      - run: ${{ inputs.install-command }}
       - run: bun run build
       - run: bun run build:js
       - name: Bun runtime smoke
@@ -162,7 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: bun install --frozen-lockfile
+      - run: ${{ inputs.install-command }}
       - uses: stella/.github/actions/provenance-check@0107276320ff349dda9bcd9e111680cca1951fce
         with:
           provenance-version: ${{ inputs.provenance-version }}
@@ -209,7 +214,7 @@ jobs:
       - if: inputs.build-changed == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - if: inputs.build-changed == 'true'
-        run: bun install --frozen-lockfile
+        run: ${{ inputs.install-command }}
       - name: Build (native)
         if: >-
           inputs.build-changed == 'true' &&
@@ -260,7 +265,7 @@ jobs:
       - if: inputs.build-changed == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - if: inputs.build-changed == 'true'
-        run: bun install --frozen-lockfile
+        run: ${{ inputs.install-command }}
       - if: inputs.build-changed == 'true'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
