@@ -1,0 +1,153 @@
+name: Changelog Update
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag the changelog was just cut for (e.g. v1.1.0)"
+        required: true
+        type: string
+      changelog-path:
+        description: "Path to the CHANGELOG file (relative to repo root)"
+        required: false
+        type: string
+        default: "CHANGELOG.md"
+      cliff-config:
+        description: "Path to a cliff.toml in the repo OR a built-in cliff preset name (e.g. 'keepachangelog')"
+        required: false
+        type: string
+        default: "keepachangelog"
+      branch:
+        description: "Branch name used for the generated PR"
+        required: false
+        type: string
+        default: "chore/changelog-update"
+      commit-message:
+        description: "Commit message for the changelog update"
+        required: false
+        type: string
+        default: "chore: refresh CHANGELOG.md"
+      pr-title:
+        description: "Pull request title"
+        required: false
+        type: string
+        default: "chore: refresh CHANGELOG.md"
+      pr-body:
+        description: "Pull request body"
+        required: false
+        type: string
+        default: "Automated CHANGELOG.md regeneration after a release."
+    secrets:
+      auth_token:
+        description: "Optional token for create-pull-request when changelog PRs should trigger downstream CI"
+        required: false
+      app_id:
+        description: "Optional GitHub App ID used to mint a token inside this workflow"
+        required: false
+      app_private_key:
+        description: "Optional GitHub App private key used to mint a token inside this workflow"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HAS_AUTH_TOKEN: ${{ secrets.auth_token != '' }}
+      HAS_APP_CREDENTIALS: >-
+        ${{ secrets.app_id != ''
+            && secrets.app_private_key != '' }}
+
+    steps:
+      - name: Mint App token
+        id: app-token
+        if: >-
+          env.HAS_AUTH_TOKEN != 'true'
+          && env.HAS_APP_CREDENTIALS == 'true'
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          token: ${{ secrets.auth_token || steps.app-token.outputs.token || github.token }}
+          fetch-depth: 0
+
+      - name: Validate inputs
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          CHANGELOG_PATH: ${{ inputs.changelog-path }}
+          CLIFF_CONFIG: ${{ inputs.cliff-config }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          case "$TAG" in
+            ''|*[!A-Za-z0-9._/+-]*)
+              echo "::error::Invalid tag input: $TAG"
+              exit 1
+              ;;
+          esac
+          case "$CHANGELOG_PATH" in
+            ''|*..*|/*)
+              echo "::error::changelog-path must be a non-empty repo-relative path: $CHANGELOG_PATH"
+              exit 1
+              ;;
+          esac
+          case "$CLIFF_CONFIG" in
+            '')
+              echo "::error::cliff-config must be non-empty"
+              exit 1
+              ;;
+          esac
+          case "$BRANCH" in
+            ''|*..*|/*|*' '*)
+              echo "::error::Invalid branch input: $BRANCH"
+              exit 1
+              ;;
+          esac
+
+      - name: Generate CHANGELOG
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: ${{ inputs.cliff-config }}
+          args: --tag ${{ inputs.tag }}
+        env:
+          OUTPUT: ${{ inputs.changelog-path }}
+
+      - name: Open or update PR
+        id: cpr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.auth_token || steps.app-token.outputs.token || github.token }}
+          branch: ${{ inputs.branch }}
+          delete-branch: true
+          commit-message: ${{ inputs.commit-message }}
+          title: ${{ inputs.pr-title }}
+          body: ${{ inputs.pr-body }}
+          add-paths: ${{ inputs.changelog-path }}
+
+      - name: Report result
+        shell: bash
+        env:
+          OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+        run: |
+          case "$OPERATION" in
+            created|updated)
+              echo "Opened or updated CHANGELOG PR: $PR_URL"
+              ;;
+            closed)
+              echo "Closed stale CHANGELOG PR — no remaining changes."
+              ;;
+            *)
+              echo "No CHANGELOG changes detected."
+              ;;
+          esac
