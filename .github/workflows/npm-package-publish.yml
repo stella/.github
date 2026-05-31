@@ -1,0 +1,148 @@
+name: npm Package Publish
+
+on:
+  workflow_call:
+    inputs:
+      package-directories:
+        description: "Newline-separated package directories to pack and publish in order"
+        required: true
+        type: string
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "22"
+      npm-version:
+        description: "npm CLI version; must support trusted publishing"
+        required: false
+        type: string
+        default: "11.11.1"
+      bun-version:
+        description: "Bun version"
+        required: false
+        type: string
+        default: "1.3.14"
+      install-command:
+        description: "Dependency install command"
+        required: false
+        type: string
+        default: "bun install --frozen-lockfile"
+      typecheck-command:
+        description: "Optional typecheck command"
+        required: false
+        type: string
+        default: "bun run typecheck"
+      lint-command:
+        description: "Optional lint command"
+        required: false
+        type: string
+        default: "bun run lint"
+      publint-command:
+        description: "Optional publint command"
+        required: false
+        type: string
+        default: "bun run publint"
+      pack-dry-run-command:
+        description: "Optional package dry-run command"
+        required: false
+        type: string
+        default: "bun run pack:dry-run"
+      tag:
+        description: "npm dist-tag"
+        required: false
+        type: string
+        default: "latest"
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Set up npm
+        run: npm install --global "npm@${{ inputs.npm-version }}"
+
+      - name: Install dependencies
+        if: inputs.install-command != ''
+        run: ${{ inputs.install-command }}
+
+      - name: Typecheck
+        if: inputs.typecheck-command != ''
+        run: ${{ inputs.typecheck-command }}
+
+      - name: Lint
+        if: inputs.lint-command != ''
+        run: ${{ inputs.lint-command }}
+
+      - name: Publint
+        if: inputs.publint-command != ''
+        run: ${{ inputs.publint-command }}
+
+      - name: Pack dry run
+        if: inputs.pack-dry-run-command != ''
+        run: ${{ inputs.pack-dry-run-command }}
+
+      - name: Pack release tarballs
+        id: pack
+        shell: bash
+        env:
+          PACKAGE_DIRECTORIES: ${{ inputs.package-directories }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+
+          tarballs=()
+          while IFS= read -r package_dir; do
+            [[ -n "${package_dir//[[:space:]]/}" ]] || continue
+
+            case "$package_dir" in
+              /* | *".."* )
+                echo "::error::Package directories must be relative paths without '..': $package_dir"
+                exit 2
+                ;;
+            esac
+
+            if [[ ! -d "$package_dir" ]]; then
+              echo "::error::Package directory does not exist: $package_dir"
+              exit 2
+            fi
+
+            pack_json="$(
+              cd "$package_dir"
+              npm pack --json --ignore-scripts --pack-destination "$GITHUB_WORKSPACE/release-artifacts"
+            )"
+            tarball_file="$(node -e 'const pack = JSON.parse(process.argv[1]); console.log(pack[0].filename);' "$pack_json")"
+            tarballs+=("release-artifacts/$tarball_file")
+          done <<< "$PACKAGE_DIRECTORIES"
+
+          if (( ${#tarballs[@]} == 0 )); then
+            echo "::error::No package directories were provided."
+            exit 2
+          fi
+
+          {
+            echo "tarballs<<EOF"
+            printf '%s\n' "${tarballs[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        uses: stella/.github/.github/actions/npm-publish-hardened@d11bdc933dec609e291f6685f470b039d8342b6a
+        with:
+          tag: ${{ inputs.tag }}
+          tarballs: ${{ steps.pack.outputs.tarballs }}
