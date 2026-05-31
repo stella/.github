@@ -1,18 +1,44 @@
 name: Sync package versions
-description: Sync package.json versions from a central VERSION file.
+description: Sync package.json versions from a central VERSION, tag, or explicit version.
 
 inputs:
-  version-file:
-    description: Path to the central VERSION file.
-    required: false
-    default: VERSION
   package-files:
     description: Newline-separated package.json files to sync.
     required: true
+  version:
+    description: Explicit semver version. Takes precedence over tag and version-file.
+    required: false
+    default: ""
+  tag:
+    description: Git tag such as v1.2.3. Used when version is empty.
+    required: false
+    default: ""
+  version-file:
+    description: Path to the central VERSION file. Used when version and tag are empty.
+    required: false
+    default: VERSION
   check-only:
     description: Check package versions without writing changes.
     required: false
     default: "false"
+  dependency-name-prefixes:
+    description: >
+      Optional newline-separated package name prefixes whose dependency entries
+      should be synced to the same version, for example @stll/regex-set-.
+    required: false
+    default: ""
+  dependency-names:
+    description: Optional newline-separated exact dependency names to sync.
+    required: false
+    default: ""
+  dependency-sections:
+    description: Newline-separated dependency sections to inspect.
+    required: false
+    default: |
+      dependencies
+      optionalDependencies
+      peerDependencies
+      devDependencies
 
 runs:
   using: composite
@@ -20,9 +46,14 @@ runs:
     - name: Sync package versions
       shell: bash
       env:
-        VERSION_FILE: ${{ inputs.version-file }}
         PACKAGE_FILES: ${{ inputs.package-files }}
+        VERSION: ${{ inputs.version }}
+        TAG: ${{ inputs.tag }}
+        VERSION_FILE: ${{ inputs.version-file }}
         CHECK_ONLY: ${{ inputs.check-only }}
+        DEPENDENCY_NAME_PREFIXES: ${{ inputs.dependency-name-prefixes }}
+        DEPENDENCY_NAMES: ${{ inputs.dependency-names }}
+        DEPENDENCY_SECTIONS: ${{ inputs.dependency-sections }}
       run: |
         set -euo pipefail
         node <<'NODE'
@@ -31,37 +62,62 @@ runs:
 
         const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-(rc|beta|alpha)\.[0-9]+)?$/;
 
-        const versionFile = process.env.VERSION_FILE;
-        const packageFilesInput = process.env.PACKAGE_FILES;
-        const checkOnly = process.env.CHECK_ONLY === "true";
+        const lines = (value) =>
+          (value ?? "")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
 
-        if (!versionFile) {
-          console.error("::error::version-file input is required.");
-          process.exit(2);
-        }
+        const fail = (message, code = 2) => {
+          console.error(`::error::${message}`);
+          process.exit(code);
+        };
 
-        if (!packageFilesInput) {
-          console.error("::error::package-files input is required.");
-          process.exit(2);
-        }
+        const resolveVersion = () => {
+          const explicitVersion = process.env.VERSION?.trim();
+          if (explicitVersion) {
+            return { source: "version", value: explicitVersion };
+          }
 
-        const version = readFileSync(versionFile, "utf8").trim();
+          const tag = process.env.TAG?.trim();
+          if (tag) {
+            return { source: "tag", value: tag.replace(/^v/, "") };
+          }
+
+          const versionFile = process.env.VERSION_FILE?.trim();
+          if (!versionFile) {
+            fail("version-file input is required when version and tag are empty.");
+          }
+
+          return {
+            source: versionFile,
+            value: readFileSync(versionFile, "utf8").trim(),
+          };
+        };
+
+        const { source, value: version } = resolveVersion();
         if (!VERSION_PATTERN.test(version)) {
-          console.error(
-            `::error::${versionFile} must look like 1.2.3, 1.2.3-rc.1, 1.2.3-beta.1, or 1.2.3-alpha.1; got '${version}'`,
+          fail(
+            `${source} must resolve to 1.2.3, 1.2.3-rc.1, 1.2.3-beta.1, or 1.2.3-alpha.1; got '${version}'`,
           );
-          process.exit(2);
         }
 
-        const packageFiles = packageFilesInput
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0);
-
+        const packageFiles = lines(process.env.PACKAGE_FILES);
         if (packageFiles.length === 0) {
-          console.error("::error::package-files did not contain any paths.");
-          process.exit(2);
+          fail("package-files did not contain any paths.");
         }
+
+        const checkOnly = process.env.CHECK_ONLY === "true";
+        const dependencyNames = new Set(lines(process.env.DEPENDENCY_NAMES));
+        const dependencyNamePrefixes = lines(process.env.DEPENDENCY_NAME_PREFIXES);
+        const dependencySections = lines(process.env.DEPENDENCY_SECTIONS);
+
+        const shouldSyncDependency = (name) =>
+          dependencyNames.has(name) ||
+          dependencyNamePrefixes.some((prefix) => name.startsWith(prefix));
+
+        const describeValue = (value) =>
+          typeof value === "string" ? value : JSON.stringify(value);
 
         let hasMismatch = false;
 
@@ -73,23 +129,64 @@ runs:
             packageJson === null ||
             Array.isArray(packageJson)
           ) {
-            console.error(`::error::${file} is not a package.json object.`);
-            process.exit(2);
+            fail(`${file} is not a package.json object.`);
           }
 
-          if (packageJson.version === version) {
+          const mismatches = [];
+
+          if (packageJson.version !== version) {
+            mismatches.push({
+              path: "version",
+              current: packageJson.version,
+              apply: () => {
+                packageJson.version = version;
+              },
+            });
+          }
+
+          for (const section of dependencySections) {
+            const dependencies = packageJson[section];
+            if (
+              typeof dependencies !== "object" ||
+              dependencies === null ||
+              Array.isArray(dependencies)
+            ) {
+              continue;
+            }
+
+            for (const [name, current] of Object.entries(dependencies)) {
+              if (!shouldSyncDependency(name) || current === version) {
+                continue;
+              }
+
+              mismatches.push({
+                path: `${section}.${name}`,
+                current,
+                apply: () => {
+                  dependencies[name] = version;
+                },
+              });
+            }
+          }
+
+          if (mismatches.length === 0) {
             continue;
           }
 
           if (checkOnly) {
-            console.error(
-              `::error::${file} has version ${packageJson.version}; expected ${version}.`,
-            );
+            for (const mismatch of mismatches) {
+              console.error(
+                `::error::${file} has ${mismatch.path}=${describeValue(mismatch.current)}; expected ${version}.`,
+              );
+            }
             hasMismatch = true;
             continue;
           }
 
-          packageJson.version = version;
+          for (const mismatch of mismatches) {
+            mismatch.apply();
+          }
+
           writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
           console.log(`Updated ${file} to ${version}`);
         }
