@@ -1,0 +1,100 @@
+name: Sync package versions
+description: Sync package.json versions from a central VERSION file.
+
+inputs:
+  version-file:
+    description: Path to the central VERSION file.
+    required: false
+    default: VERSION
+  package-files:
+    description: Newline-separated package.json files to sync.
+    required: true
+  check-only:
+    description: Check package versions without writing changes.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Sync package versions
+      shell: bash
+      env:
+        VERSION_FILE: ${{ inputs.version-file }}
+        PACKAGE_FILES: ${{ inputs.package-files }}
+        CHECK_ONLY: ${{ inputs.check-only }}
+      run: |
+        set -euo pipefail
+        node <<'NODE'
+        const { readFileSync, writeFileSync } = require("node:fs");
+        const process = require("node:process");
+
+        const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-(rc|beta|alpha)\.[0-9]+)?$/;
+
+        const versionFile = process.env.VERSION_FILE;
+        const packageFilesInput = process.env.PACKAGE_FILES;
+        const checkOnly = process.env.CHECK_ONLY === "true";
+
+        if (!versionFile) {
+          console.error("::error::version-file input is required.");
+          process.exit(2);
+        }
+
+        if (!packageFilesInput) {
+          console.error("::error::package-files input is required.");
+          process.exit(2);
+        }
+
+        const version = readFileSync(versionFile, "utf8").trim();
+        if (!VERSION_PATTERN.test(version)) {
+          console.error(
+            `::error::${versionFile} must look like 1.2.3, 1.2.3-rc.1, 1.2.3-beta.1, or 1.2.3-alpha.1; got '${version}'`,
+          );
+          process.exit(2);
+        }
+
+        const packageFiles = packageFilesInput
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+
+        if (packageFiles.length === 0) {
+          console.error("::error::package-files did not contain any paths.");
+          process.exit(2);
+        }
+
+        let hasMismatch = false;
+
+        for (const file of packageFiles) {
+          const packageJson = JSON.parse(readFileSync(file, "utf8"));
+
+          if (
+            typeof packageJson !== "object" ||
+            packageJson === null ||
+            Array.isArray(packageJson)
+          ) {
+            console.error(`::error::${file} is not a package.json object.`);
+            process.exit(2);
+          }
+
+          if (packageJson.version === version) {
+            continue;
+          }
+
+          if (checkOnly) {
+            console.error(
+              `::error::${file} has version ${packageJson.version}; expected ${version}.`,
+            );
+            hasMismatch = true;
+            continue;
+          }
+
+          packageJson.version = version;
+          writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
+          console.log(`Updated ${file} to ${version}`);
+        }
+
+        if (hasMismatch) {
+          process.exit(1);
+        }
+        NODE
