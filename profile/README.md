@@ -1,4 +1,4 @@
-![Stella](./banner.png)
+![Stella](https://raw.githubusercontent.com/stella/.github/main/profile/banner.png)
 
 # Stella
 
