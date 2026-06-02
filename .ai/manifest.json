@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "agents": {
+    "title": "Stella GitHub Development Guidelines",
+    "modules": [
+      "stella-public-repo",
+      "engineering",
+      "testing"
+    ],
+    "local": ".ai/local/agents.md"
+  }
+}
