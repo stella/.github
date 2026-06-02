@@ -11,4 +11,4 @@ consistent TypeScript/Rust tooling, and agent-readable project guidance.
 Start with [`stella`](https://github.com/stella/stella) for the workspace, or browse
 the smaller libraries if you need focused building blocks for legal data pipelines.
 
-See ['stll.app'](https://stll.app) for our hosted infrastructure.
+See [`stll.app`](https://stll.app) for our hosted legal workspace app.
