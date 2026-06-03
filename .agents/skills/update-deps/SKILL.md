@@ -120,8 +120,7 @@ If the request is vague, default to:
    Good defaults:
 
    ```bash
-   bun info <pkg>@<version> --json
-   npm view <pkg>@<version>
+   npm view <pkg>@<version> --json
    bun pm untrusted
    ```
 
