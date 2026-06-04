@@ -41,6 +41,12 @@ on:
         description: "true when this run created or updated release state."
         value: ${{ jobs.finalize.outputs.changed }}
     secrets:
+      RELEASE_APP_ID:
+        description: Optional GitHub App ID for release tag and GitHub release writes.
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        description: Optional GitHub App private key for release tag and GitHub release writes.
+        required: false
       CHANGELOG_APP_ID:
         description: Optional GitHub App ID for changelog PRs.
         required: false
@@ -57,15 +63,32 @@ jobs:
     name: Release state
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      HAS_RELEASE_APP_CREDENTIALS: >-
+        ${{ (secrets.RELEASE_APP_ID != ''
+              && secrets.RELEASE_APP_PRIVATE_KEY != '')
+            || (secrets.CHANGELOG_APP_ID != ''
+                && secrets.CHANGELOG_APP_PRIVATE_KEY != '') }}
     outputs:
       version: ${{ steps.validate.outputs.version }}
       tag: ${{ steps.validate.outputs.tag }}
       dist-tag: ${{ steps.validate.outputs.dist_tag }}
       changed: ${{ steps.validate.outputs.changed }}
     steps:
+      - name: Mint release token
+        id: release-token
+        if: env.HAS_RELEASE_APP_CREDENTIALS == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID || secrets.CHANGELOG_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY || secrets.CHANGELOG_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          token: ${{ steps.release-token.outputs.token || github.token }}
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
@@ -86,7 +109,7 @@ jobs:
         id: validate
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token || github.token }}
           VERSION_FILE: ${{ inputs.version-file }}
           PACKAGE_FILES: ${{ inputs.package-files }}
           PUBLISH_TO_NPM: ${{ inputs.publish-to-npm }}
@@ -329,21 +352,24 @@ jobs:
       - name: Create tag
         if: steps.validate.outputs.changed == 'true'
         env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token || github.token }}
+          REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.validate.outputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+          if gh api "repos/${REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$RELEASE_TAG" -m "$RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
+          gh api "repos/${REPOSITORY}/git/refs" \
+            --method POST \
+            --field ref="refs/tags/${RELEASE_TAG}" \
+            --field sha="${TARGET_SHA}" >/dev/null
 
       - name: Stage GitHub release
         if: steps.validate.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token || github.token }}
           RELEASE_TAG: ${{ steps.validate.outputs.tag }}
         run: |
           set -euo pipefail
@@ -421,7 +447,7 @@ jobs:
       - name: Publish GitHub release
         if: steps.validate.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token || github.token }}
           RELEASE_TAG: ${{ steps.validate.outputs.tag }}
         run: gh release edit "$RELEASE_TAG" --draft=false
 
@@ -439,5 +465,5 @@ jobs:
       contents: write
       pull-requests: write
     secrets:
-      app_id: ${{ secrets.CHANGELOG_APP_ID }}
-      app_private_key: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}
+      app_id: ${{ secrets.CHANGELOG_APP_ID || secrets.RELEASE_APP_ID }}
+      app_private_key: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY || secrets.RELEASE_APP_PRIVATE_KEY }}
