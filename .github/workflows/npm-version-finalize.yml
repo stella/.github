@@ -433,12 +433,24 @@ jobs:
             .map((manifest) => manifest.name);
 
           for (const name of packages) {
-            try {
-              execFileSync("npm", ["view", `${name}@${process.env.VERSION}`, "version"], {
-                stdio: "ignore",
-              });
-            } catch {
-              console.error(`::error::npm is missing ${name}@${process.env.VERSION}.`);
+            const spec = `${name}@${process.env.VERSION}`;
+            let visible = false;
+            for (let attempt = 1; attempt <= 6; attempt += 1) {
+              try {
+                execFileSync("npm", ["view", spec, "version"], {
+                  stdio: "ignore",
+                });
+                visible = true;
+                break;
+              } catch {
+                if (attempt === 6) {
+                  break;
+                }
+                execFileSync("sleep", [String(attempt * 5)], { stdio: "ignore" });
+              }
+            }
+            if (!visible) {
+              console.error(`::error::npm is missing ${spec}.`);
               process.exit(1);
             }
           }
