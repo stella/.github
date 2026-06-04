@@ -12,4 +12,4 @@ the smaller libraries if you need focused building blocks for legal data pipelin
 
 See [`stll.app`](https://stll.app) for the hosted version of the app.
 
-Contributions welcome: open an issue or a PR, or start a discussion to share ideas.
+Contributions welcome: open an issue or a PR, start a discussion, or join our [Discord](https://discord.gg/8dZjmVFjTK).
