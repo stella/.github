@@ -1,0 +1,276 @@
+name: npm version preflight
+
+on:
+  workflow_call:
+    inputs:
+      version-file:
+        description: Repo-relative file containing the release version.
+        required: false
+        type: string
+        default: VERSION
+      package-files:
+        description: Newline-separated package.json files that are published.
+        required: true
+        type: string
+      dependency-name-prefixes:
+        description: Newline-separated dependency package-name prefixes that must equal VERSION.
+        required: false
+        type: string
+        default: ""
+      dependency-names:
+        description: Newline-separated exact dependency package names that must equal VERSION.
+        required: false
+        type: string
+        default: ""
+      dependency-sections:
+        description: Newline-separated dependency sections to inspect.
+        required: false
+        type: string
+        default: |
+          dependencies
+          optionalDependencies
+          peerDependencies
+          devDependencies
+      publish-to-npm:
+        description: Whether this release is expected to publish npm packages.
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      version:
+        description: Resolved semver version.
+        value: ${{ jobs.preflight.outputs.version }}
+      tag:
+        description: Release tag, e.g. v1.2.3.
+        value: ${{ jobs.preflight.outputs.tag }}
+      dist-tag:
+        description: npm dist-tag derived from VERSION.
+        value: ${{ jobs.preflight.outputs.dist-tag }}
+      already-released:
+        description: "true when npm, git tag, and GitHub release already agree."
+        value: ${{ jobs.preflight.outputs.already-released }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Version state
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.state.outputs.version }}
+      tag: ${{ steps.state.outputs.tag }}
+      dist-tag: ${{ steps.state.outputs.dist_tag }}
+      already-released: ${{ steps.state.outputs.already_released }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate release state
+        id: state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_FILE: ${{ inputs.version-file }}
+          PACKAGE_FILES: ${{ inputs.package-files }}
+          DEPENDENCY_NAME_PREFIXES: ${{ inputs.dependency-name-prefixes }}
+          DEPENDENCY_NAMES: ${{ inputs.dependency-names }}
+          DEPENDENCY_SECTIONS: ${{ inputs.dependency-sections }}
+          PUBLISH_TO_NPM: ${{ inputs.publish-to-npm }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { readFileSync } = require("node:fs");
+          const process = require("node:process");
+
+          const SEMVER_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.[0-9]+)?$/;
+
+          const lines = (value) =>
+            (value ?? "")
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0);
+
+          const fail = (message, code = 1) => {
+            console.error(`::error::${message}`);
+            process.exit(code);
+          };
+
+          const run = (command, args, options = {}) =>
+            execFileSync(command, args, {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "pipe"],
+              ...options,
+            }).trim();
+
+          const commandSucceeds = (command, args) => {
+            try {
+              run(command, args);
+              return true;
+            } catch {
+              return false;
+            }
+          };
+
+          const npmVersionExists = (name, version) =>
+            commandSucceeds("npm", ["view", `${name}@${version}`, "version"]);
+
+          const tagCommit = (tag) => {
+            if (!commandSucceeds("git", ["show-ref", "--verify", "--quiet", `refs/tags/${tag}`])) {
+              return null;
+            }
+            return run("git", ["rev-list", "-n", "1", tag]);
+          };
+
+          const githubRelease = (tag) => {
+            try {
+              return JSON.parse(run("gh", ["release", "view", tag, "--json", "tagName,isDraft"]));
+            } catch {
+              return null;
+            }
+          };
+
+          const versionFile = process.env.VERSION_FILE;
+          const version = readFileSync(versionFile, "utf8").trim();
+          if (!SEMVER_PATTERN.test(version)) {
+            fail(
+              `${versionFile} must be 1.2.3, 1.2.3-rc.1, 1.2.3-beta.1, or 1.2.3-alpha.1; got '${version}'`,
+            );
+          }
+
+          const dependencyNames = new Set(lines(process.env.DEPENDENCY_NAMES));
+          const dependencyNamePrefixes = lines(process.env.DEPENDENCY_NAME_PREFIXES);
+          const dependencySections = lines(process.env.DEPENDENCY_SECTIONS);
+          const shouldCheckDependency = (name) =>
+            dependencyNames.has(name) ||
+            dependencyNamePrefixes.some((prefix) => name.startsWith(prefix));
+
+          const packageFiles = lines(process.env.PACKAGE_FILES);
+          if (packageFiles.length === 0) {
+            fail("package-files did not contain any package.json paths.");
+          }
+
+          const packages = [];
+          const mismatches = [];
+
+          for (const file of packageFiles) {
+            const manifest = JSON.parse(readFileSync(file, "utf8"));
+            if (
+              typeof manifest !== "object" ||
+              manifest === null ||
+              Array.isArray(manifest)
+            ) {
+              fail(`${file} is not a package.json object.`);
+            }
+            if (!manifest.private) {
+              if (typeof manifest.name !== "string" || manifest.name.length === 0) {
+                mismatches.push(`${file}: missing package name`);
+              } else {
+                packages.push({ file, name: manifest.name });
+              }
+            }
+            if (manifest.version !== version) {
+              mismatches.push(`${file}: version=${manifest.version}; expected ${version}`);
+            }
+            for (const section of dependencySections) {
+              const dependencies = manifest[section];
+              if (
+                typeof dependencies !== "object" ||
+                dependencies === null ||
+                Array.isArray(dependencies)
+              ) {
+                continue;
+              }
+              for (const [name, value] of Object.entries(dependencies)) {
+                if (shouldCheckDependency(name) && value !== version) {
+                  mismatches.push(`${file}: ${section}.${name}=${value}; expected ${version}`);
+                }
+              }
+            }
+          }
+
+          if (mismatches.length > 0) {
+            for (const mismatch of mismatches) {
+              console.error(`::error::${mismatch}`);
+            }
+            process.exit(1);
+          }
+          if (packages.length === 0) {
+            fail("No public npm packages were found in package-files.");
+          }
+
+          run("git", ["fetch", "--force", "--tags", "origin"]);
+
+          const tag = `v${version}`;
+          const prerelease = version.match(/-(alpha|beta|rc)\./)?.[1];
+          const distTag = prerelease ?? "latest";
+          const head = process.env.GITHUB_SHA;
+          const tagTarget = tagCommit(tag);
+          const tagExists = tagTarget !== null;
+          const tagAtHead = tagTarget === head;
+          const release = githubRelease(tag);
+          const releaseExists = release !== null;
+          const releaseIsDraft = release?.isDraft === true;
+          const npmStates = packages.map((pkg) => ({
+            ...pkg,
+            exists: npmVersionExists(pkg.name, version),
+          }));
+          const npmExisting = npmStates.filter((pkg) => pkg.exists);
+          const npmMissing = npmStates.filter((pkg) => !pkg.exists);
+          let alreadyReleased = false;
+          if (npmMissing.length === 0) {
+            if (!tagExists || !releaseExists) {
+              fail(
+                `npm already has every ${version} package, but ${tag} is missing its git tag or GitHub release.`,
+              );
+            }
+            if (!releaseIsDraft) {
+              alreadyReleased = true;
+            } else if (!tagAtHead) {
+              fail(`${tag} has a draft GitHub release but points at ${tagTarget}, not ${head}.`);
+            }
+          } else if (npmExisting.length > 0) {
+            if (!tagExists || !tagAtHead) {
+              fail(
+                `npm has a partial ${version} publication, and ${tag} does not point at this commit.`,
+              );
+            }
+            if (releaseExists && !releaseIsDraft) {
+              fail(`GitHub release ${tag} is already public before npm publication is complete.`);
+            }
+          } else if (releaseExists && !releaseIsDraft) {
+            fail(`GitHub release ${tag} exists before npm packages exist.`);
+          } else if (tagExists && !tagAtHead) {
+            fail(`${tag} already exists at ${tagTarget}, not ${head}.`);
+          } else if (releaseIsDraft && !tagAtHead) {
+            fail(`${tag} has a draft GitHub release but does not point at this commit.`);
+          }
+
+          const missingNames = npmMissing.map((pkg) => pkg.name).join(", ");
+          if (alreadyReleased) {
+            console.log(`::notice::${tag} is already complete across npm, git, and GitHub release.`);
+          } else if (missingNames) {
+            console.log(`::notice::${tag} can publish missing npm packages: ${missingNames}`);
+          } else {
+            console.log(`::notice::${tag} can be released from this commit.`);
+          }
+
+          const output = process.env.GITHUB_OUTPUT;
+          require("node:fs").appendFileSync(
+            output,
+            [
+              `version=${version}`,
+              `tag=${tag}`,
+              `dist_tag=${distTag}`,
+              `already_released=${alreadyReleased ? "true" : "false"}`,
+            ].join("\n") + "\n",
+          );
+          NODE

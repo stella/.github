@@ -1,0 +1,443 @@
+name: npm version finalize
+
+on:
+  workflow_call:
+    inputs:
+      version-file:
+        description: Repo-relative file containing the release version.
+        required: false
+        type: string
+        default: VERSION
+      package-files:
+        description: Newline-separated package.json files that are published.
+        required: true
+        type: string
+      artifact-pattern:
+        description: Artifact name or pattern containing release assets.
+        required: false
+        type: string
+        default: release-artifacts
+      publish-to-npm:
+        description: Publish missing npm packages after creating the GitHub release.
+        required: false
+        type: boolean
+        default: true
+      update-changelog:
+        description: Open or update the post-release changelog PR.
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      version:
+        description: Resolved semver version.
+        value: ${{ jobs.finalize.outputs.version }}
+      tag:
+        description: Release tag, e.g. v1.2.3.
+        value: ${{ jobs.finalize.outputs.tag }}
+      dist-tag:
+        description: npm dist-tag used for publishing.
+        value: ${{ jobs.finalize.outputs.dist-tag }}
+      changed:
+        description: "true when this run created or updated release state."
+        value: ${{ jobs.finalize.outputs.changed }}
+    secrets:
+      CHANGELOG_APP_ID:
+        description: Optional GitHub App ID for changelog PRs.
+        required: false
+      CHANGELOG_APP_PRIVATE_KEY:
+        description: Optional GitHub App private key for changelog PRs.
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  finalize:
+    name: Release state
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      tag: ${{ steps.validate.outputs.tag }}
+      dist-tag: ${{ steps.validate.outputs.dist_tag }}
+      changed: ${{ steps.validate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm for trusted publishing
+        run: npm install --global npm@11.11.1
+
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.artifact-pattern }}
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Validate release assets
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_FILE: ${{ inputs.version-file }}
+          PACKAGE_FILES: ${{ inputs.package-files }}
+          PUBLISH_TO_NPM: ${{ inputs.publish-to-npm }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { readdirSync, readFileSync, statSync, writeFileSync } = require("node:fs");
+          const { join } = require("node:path");
+          const process = require("node:process");
+
+          const SEMVER_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.[0-9]+)?$/;
+
+          const lines = (value) =>
+            (value ?? "")
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0);
+
+          const fail = (message, code = 1) => {
+            console.error(`::error::${message}`);
+            process.exit(code);
+          };
+
+          const run = (command, args, options = {}) =>
+            execFileSync(command, args, {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "pipe"],
+              ...options,
+            }).trim();
+
+          const commandSucceeds = (command, args) => {
+            try {
+              run(command, args);
+              return true;
+            } catch {
+              return false;
+            }
+          };
+
+          const listFiles = (directory) => {
+            const results = [];
+            for (const entry of readdirSync(directory)) {
+              const path = join(directory, entry);
+              const stat = statSync(path);
+              if (stat.isDirectory()) {
+                results.push(...listFiles(path));
+              } else {
+                results.push(path);
+              }
+            }
+            return results;
+          };
+
+          const npmVersionExists = (name, version) =>
+            commandSucceeds("npm", ["view", `${name}@${version}`, "version"]);
+
+          const tagCommit = (tag) => {
+            if (!commandSucceeds("git", ["show-ref", "--verify", "--quiet", `refs/tags/${tag}`])) {
+              return null;
+            }
+            return run("git", ["rev-list", "-n", "1", tag]);
+          };
+
+          const githubRelease = (tag) => {
+            try {
+              return JSON.parse(run("gh", ["release", "view", tag, "--json", "tagName,isDraft"]));
+            } catch {
+              return null;
+            }
+          };
+
+          const version = readFileSync(process.env.VERSION_FILE, "utf8").trim();
+          if (!SEMVER_PATTERN.test(version)) {
+            fail(`${process.env.VERSION_FILE} contains invalid version '${version}'.`);
+          }
+
+          const packageFiles = lines(process.env.PACKAGE_FILES);
+          if (packageFiles.length === 0) {
+            fail("package-files did not contain any package.json paths.");
+          }
+
+          const expectedPackages = new Map();
+          for (const file of packageFiles) {
+            const manifest = JSON.parse(readFileSync(file, "utf8"));
+            if (manifest.private) {
+              continue;
+            }
+            if (manifest.version !== version) {
+              fail(`${file} has version ${manifest.version}; expected ${version}.`);
+            }
+            if (typeof manifest.name !== "string" || manifest.name.length === 0) {
+              fail(`${file} is missing package name.`);
+            }
+            expectedPackages.set(manifest.name, { file, published: false });
+          }
+          if (expectedPackages.size === 0) {
+            fail("No public packages were configured for release.");
+          }
+
+          const tarballs = listFiles("release-artifacts")
+            .filter((file) => file.endsWith(".tgz"))
+            .sort();
+          if (tarballs.length === 0) {
+            fail("No .tgz release assets were downloaded.");
+          }
+
+          const tarballPackages = new Map();
+          const seenTarballPackages = new Set();
+          for (const tarball of tarballs) {
+            let manifestText = "";
+            try {
+              manifestText = run("tar", ["-xOf", tarball, "package/package.json"]);
+            } catch {
+              fail(`${tarball} does not contain package/package.json.`);
+            }
+            const manifest = JSON.parse(manifestText);
+            if (manifest.version !== version) {
+              fail(`${tarball} contains ${manifest.name}@${manifest.version}; expected version ${version}.`);
+            }
+            if (!expectedPackages.has(manifest.name)) {
+              fail(`${tarball} contains unexpected package ${manifest.name}.`);
+            }
+            if (seenTarballPackages.has(manifest.name)) {
+              fail(`Multiple tarballs were provided for ${manifest.name}.`);
+            }
+            seenTarballPackages.add(manifest.name);
+            tarballPackages.set(manifest.name, { tarball, manifest });
+          }
+
+          for (const name of expectedPackages.keys()) {
+            if (!seenTarballPackages.has(name)) {
+              fail(`No tarball was provided for expected package ${name}.`);
+            }
+          }
+
+          const orderedPackageNames = [];
+          const visiting = new Set();
+          const visited = new Set();
+          const dependencySections = ["dependencies", "optionalDependencies", "peerDependencies"];
+
+          const visit = (name) => {
+            if (visited.has(name)) {
+              return;
+            }
+            if (visiting.has(name)) {
+              fail(`Release packages contain a dependency cycle involving ${name}.`);
+            }
+            visiting.add(name);
+
+            const entry = tarballPackages.get(name);
+            for (const section of dependencySections) {
+              const dependencies = entry.manifest[section];
+              if (
+                typeof dependencies !== "object" ||
+                dependencies === null ||
+                Array.isArray(dependencies)
+              ) {
+                continue;
+              }
+              for (const dependencyName of Object.keys(dependencies).sort()) {
+                if (expectedPackages.has(dependencyName)) {
+                  visit(dependencyName);
+                }
+              }
+            }
+
+            visiting.delete(name);
+            visited.add(name);
+            orderedPackageNames.push(name);
+          };
+
+          for (const name of [...expectedPackages.keys()].sort()) {
+            visit(name);
+          }
+
+          const tarballLines = orderedPackageNames.map((name) => tarballPackages.get(name).tarball);
+
+          run("git", ["fetch", "--force", "--tags", "origin"]);
+
+          const tag = `v${version}`;
+          const prerelease = version.match(/-(alpha|beta|rc)\./)?.[1];
+          const distTag = prerelease ?? "latest";
+          const head = process.env.GITHUB_SHA;
+          const tagTarget = tagCommit(tag);
+          const tagExists = tagTarget !== null;
+          const tagAtHead = tagTarget === head;
+          const release = githubRelease(tag);
+          const releaseExists = release !== null;
+          const releaseIsDraft = release?.isDraft === true;
+          const npmStates = [...expectedPackages.keys()].map((name) => ({
+            name,
+            exists: npmVersionExists(name, version),
+          }));
+          const npmMissing = npmStates.filter((pkg) => !pkg.exists);
+          const npmExisting = npmStates.filter((pkg) => pkg.exists);
+          const publishToNpm = process.env.PUBLISH_TO_NPM === "true";
+
+          if (npmMissing.length === 0 && tagExists && releaseExists && !releaseIsDraft) {
+            console.log(`::notice::${tag} is already complete; no release state changed.`);
+            writeFileSync(
+              process.env.GITHUB_OUTPUT,
+              [
+                `version=${version}`,
+                `tag=${tag}`,
+                `dist_tag=${distTag}`,
+                "changed=false",
+                "tarballs<<EOF",
+                ...tarballLines,
+                "EOF",
+              ].join("\n") + "\n",
+            );
+            process.exit(0);
+          }
+
+          if (releaseExists && !releaseIsDraft) {
+            fail(`GitHub release ${tag} is public but the release state is incomplete.`);
+          }
+          if (tagExists && !tagAtHead) {
+            fail(`${tag} already points at ${tagTarget}, not ${head}.`);
+          }
+          if (!publishToNpm && npmMissing.length > 0) {
+            fail(`publish-to-npm is false and ${tag} is not already complete.`);
+          }
+
+          writeFileSync(
+            process.env.GITHUB_OUTPUT,
+            [
+              `version=${version}`,
+              `tag=${tag}`,
+              `dist_tag=${distTag}`,
+              "changed=true",
+              "tarballs<<EOF",
+              ...tarballLines,
+              "EOF",
+            ].join("\n") + "\n",
+          );
+          NODE
+
+      - name: Create tag
+        if: steps.validate.outputs.changed == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+
+      - name: Stage GitHub release
+        if: steps.validate.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release-artifacts -type f | sort)
+          if ((${#assets[@]} == 0)); then
+            echo "::error::No release assets were downloaded."
+            exit 1
+          fi
+
+          release_flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --draft \
+              "${release_flags[@]}"
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+            exit 0
+          fi
+
+          gh release create "$RELEASE_TAG" \
+            "${assets[@]}" \
+            --title "$RELEASE_TAG" \
+            --draft \
+            --generate-notes \
+            --verify-tag \
+            "${release_flags[@]}"
+
+      - name: Publish to npm
+        if: steps.validate.outputs.changed == 'true' && inputs.publish-to-npm
+        uses: stella/.github/.github/actions/npm-publish-hardened@d11bdc933dec609e291f6685f470b039d8342b6a
+        with:
+          tarballs: ${{ steps.validate.outputs.tarballs }}
+          tag: ${{ steps.validate.outputs.dist_tag }}
+
+      - name: Verify npm state
+        if: steps.validate.outputs.changed == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          PACKAGE_FILES: ${{ inputs.package-files }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { readFileSync } = require("node:fs");
+          const process = require("node:process");
+
+          const lines = (value) =>
+            (value ?? "")
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0);
+
+          const packages = lines(process.env.PACKAGE_FILES)
+            .map((file) => JSON.parse(readFileSync(file, "utf8")))
+            .filter((manifest) => !manifest.private)
+            .map((manifest) => manifest.name);
+
+          for (const name of packages) {
+            try {
+              execFileSync("npm", ["view", `${name}@${process.env.VERSION}`, "version"], {
+                stdio: "ignore",
+              });
+            } catch {
+              console.error(`::error::npm is missing ${name}@${process.env.VERSION}.`);
+              process.exit(1);
+            }
+          }
+          NODE
+
+      - name: Publish GitHub release
+        if: steps.validate.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.validate.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
+
+  update-changelog:
+    name: Update CHANGELOG
+    needs: finalize
+    if: >-
+      inputs.update-changelog
+      && inputs.publish-to-npm
+      && needs.finalize.outputs.changed == 'true'
+    uses: stella/.github/.github/workflows/changelog-update.yml@314d81ed84537155fb17d57ebdf227aeaca4f907
+    with:
+      tag: ${{ needs.finalize.outputs.tag }}
+    permissions:
+      contents: write
+      pull-requests: write
+    secrets:
+      app_id: ${{ secrets.CHANGELOG_APP_ID }}
+      app_private_key: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}
