@@ -17,6 +17,25 @@ exposed. So this action only supports tarballs; the caller is
 responsible for the `npm pack` step and for uploading the same
 tarball to the GitHub release.
 
+## New-package preflight
+
+Before publishing anything, the action verifies every package in the
+queue already exists on the registry. Trusted publishing cannot create
+a brand-new package (npm requires the package to exist before a
+trusted publisher can be configured), so a first-ever publish would
+otherwise fail late with an opaque `ENEEDAUTH` after sibling packages
+already published. A missing package fails the run immediately with
+bootstrap instructions:
+
+1. `npm publish` a placeholder manually (e.g. `0.0.1-placeholder.0`
+   with `--tag placeholder`),
+2. add a trusted publisher in the package settings on npmjs.com
+   (allow "publish"),
+3. re-run the workflow.
+
+Transient registry errors during the preflight only warn — the
+publish loop has its own retries.
+
 ## What it does
 
 1. Hard-fails if `NPM_TOKEN` or `NODE_AUTH_TOKEN` is in the
