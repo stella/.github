@@ -85,6 +85,49 @@ done
 PKG_JSON_FILE="${RUNNER_TEMP:-/tmp}/npm-publish-hardened-pkg-$$.json"
 trap 'rm -f "${PKG_JSON_FILE}"' EXIT
 
+pkg_name_from_tarball() {
+  local tarball="$1"
+  tar -xOf "${tarball}" package/package.json > "${PKG_JSON_FILE}"
+  node -e '
+    const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    console.log(j.name ?? "");
+  ' "${PKG_JSON_FILE}"
+}
+
+# Preflight: every package in the queue must already exist on the
+# registry. OIDC trusted publishing cannot create a brand-new package —
+# npm requires a package to exist before a trusted publisher can be
+# configured for it — so a first-ever publish would otherwise burn all
+# retries and fail late with an opaque ENEEDAUTH, after sibling
+# packages already published. Fail fast, before publishing anything,
+# with bootstrap instructions instead.
+declare -a PREFLIGHT_MISSING=()
+for tarball in "${PUBLISH_QUEUE[@]}"; do
+  preflight_name=$(pkg_name_from_tarball "${tarball}")
+  if [[ -z "${preflight_name}" || "${preflight_name}" == "null" ]]; then
+    printf '::error::Failed to read package name from %s.\n' "${tarball}"
+    exit 2
+  fi
+  if view_output=$(npm view "${preflight_name}" name 2>&1); then
+    continue
+  fi
+  if grep -q 'E404' <<<"${view_output}"; then
+    PREFLIGHT_MISSING+=("${preflight_name}")
+  else
+    # Transient registry error must not block an otherwise valid
+    # release; the publish loop below has its own retries.
+    printf '::warning::Could not verify %s exists on the registry; continuing.\n' \
+      "${preflight_name}"
+  fi
+done
+if (( ${#PREFLIGHT_MISSING[@]} > 0 )); then
+  for preflight_name in "${PREFLIGHT_MISSING[@]}"; do
+    printf '::error::%s has never been published. Trusted publishing cannot create new packages. Bootstrap it first: (1) npm publish a placeholder manually (e.g. version 0.0.1-placeholder.0 with --tag placeholder), (2) add a trusted publisher in the package settings on npmjs.com (allow "publish"), then re-run this workflow. Nothing was published in this run.\n' \
+      "${preflight_name}"
+  done
+  exit 2
+fi
+
 publish_one() {
   local tarball="$1"
   local package_name package_version
