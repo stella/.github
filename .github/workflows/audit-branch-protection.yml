@@ -106,21 +106,42 @@ jobs:
           jq . live-matched.json
           echo "::endgroup::"
 
-          # Normalize: keep only the fields we control. The live ruleset
-          # also returns server-managed metadata (id, source, timestamps,
-          # _links, etc.) that must not participate in the diff.
-          LIVE_FIELDS=(
-            name target enforcement conditions
-            bypass_actors rules
-          )
-          LIVE_JQ_FILTER=$(printf ', %s' "${LIVE_FIELDS[@]}")
-          LIVE_JQ_FILTER="{ ${LIVE_JQ_FILTER:2} }"
+          # Normalize both inputs before comparison. The API returns
+          # server-managed metadata, may reorder set-like arrays, and may
+          # materialize optional settings at their disabled defaults.
+          # Canonicalizing those representations avoids false drift while
+          # preserving differences in effective protection policy.
+          NORMALIZE_RULESET_FILTER='
+            def sort_arrays:
+              walk(if type == "array" then sort else . end);
 
-          jq "${LIVE_JQ_FILTER}" live-matched.json > live-normalized.json
-          jq -S '.' "${EXPECTED_PATH}" > expected-sorted.json
-          jq -S '.' live-normalized.json > live-sorted.json
+            {
+              name,
+              target,
+              enforcement,
+              conditions,
+              bypass_actors,
+              rules
+            }
+            | .rules |= map(
+                if .type == "pull_request" then
+                  .parameters.dismissal_restriction //= {
+                    allowed_actors: [],
+                    enabled: false
+                  }
+                else
+                  .
+                end
+              )
+            | sort_arrays
+          '
 
-          if diff expected-sorted.json live-sorted.json > drift.diff; then
+          jq -S "${NORMALIZE_RULESET_FILTER}" \
+            "${EXPECTED_PATH}" > expected-normalized.json
+          jq -S "${NORMALIZE_RULESET_FILTER}" \
+            live-matched.json > live-normalized.json
+
+          if diff expected-normalized.json live-normalized.json > drift.diff; then
             echo "No drift detected."
             DRIFT=false
           else
