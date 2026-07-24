@@ -13,6 +13,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
 | `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
 | `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
+| `npm-independent-release.yml` | Publish independently versioned npm monorepos from caller-built tarballs |
 
 ### Composite Actions
 
@@ -212,6 +213,53 @@ The caller must provide `changeset`, `changeset:version`, and a `.changeset/conf
 For hybrid repositories, `changeset:version` must synchronize the selected package
 version into every npm, Cargo, Python, and central `VERSION` surface before the
 generated PR is committed.
+
+### Independent npm package releases
+
+Independently versioned Changesets monorepos keep build and pack commands in their
+own workflow, with no write credential or OIDC permission in that job. The privileged
+job delegates the complete release transaction to the shared workflow:
+
+```yaml
+jobs:
+  pack:
+    permissions:
+      contents: read
+    # Build each public package, pack one .tgz, then upload one artifact per package.
+
+  release:
+    needs: pack
+    permissions:
+      contents: write
+      id-token: write
+    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.0.0
+    with:
+      artifact-pattern: npm-tarball-*
+      package-files: |
+        packages/core/package.json
+        packages/react/package.json
+    secrets: inherit
+```
+
+The shared job validates an exact one-to-one mapping between the declared public
+manifests and packed tarballs. It rejects unresolved `workspace:`, `catalog:`,
+`link:`, and `file:` dependency specifiers, orders internal dependencies before
+dependants, stages one draft release per `<name>@<version>`, publishes only versions
+missing from npm, verifies the release asset against npm `dist.integrity`, then makes
+the draft releases public. Existing complete versions are immutable no-ops. Safe
+partial runs resume; registry-only versions are repaired with the registry artifact
+and release notes that do not claim a local rebuild was the originally uploaded file.
+
+Each package must have an adjacent `CHANGELOG.md` section headed `## <version>`.
+Uploaded artifacts may include checksum files, but each must contain exactly one
+`.tgz`; only that tarball becomes the corresponding GitHub release asset.
+
+Trusted publishing is authorized against the **calling repository workflow filename**,
+not `npm-independent-release.yml`. Keep that local filename stable and configure the
+npm trusted publisher for it. Both the caller job and reusable workflow grant
+`id-token: write`; no npm token is accepted. Optional `RELEASE_APP_ID` and
+`RELEASE_APP_PRIVATE_KEY` secrets let protected tags and releases use a repository
+GitHub App token.
 
 ### Apply Ruleset
 
