@@ -12,6 +12,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `base-checks.yml` | Composite workflow calling pr-lint |
 | `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
 | `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
+| `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
 
 ### Composite Actions
 
@@ -20,6 +21,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `typescript-checks` | Setup pnpm, install deps, run lint + format + typecheck |
 | `notify-failure` | Send failure notification to Google Chat webhook |
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
+| `changeset-policy` | Require valid release intent for caller-declared package paths |
 
 ### Templates
 
@@ -164,6 +166,52 @@ jobs:
 
 **Optional secrets:**
 - `auth_token` — token for updater PR creation when downstream CI should run; if omitted, the workflow falls back to `github.token`
+
+### Changeset releases
+
+Package repositories keep their source-path and version-synchronization rules local,
+then delegate enforcement and version-PR maintenance to these shared contracts. Changesets
+only prepares release metadata; the existing hardened release workflow remains the
+sole publisher.
+
+```yaml
+jobs:
+  changeset:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<commit-sha>
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: stella/.github/.github/actions/changeset-policy@<commit-sha>
+        with:
+          release-paths: |
+            src/**
+            crates/core/src/**
+          generated-paths: |
+            CHANGELOG.md
+            VERSION
+            Cargo.toml
+            Cargo.lock
+            package.json
+            wasm/package.json
+          package-files: |
+            package.json
+
+# In a separate push-to-main workflow:
+jobs:
+  version:
+    uses: stella/.github/.github/workflows/changeset-release-pr.yml@<commit-sha>
+    secrets: inherit
+```
+
+The caller must provide `changeset`, `changeset:version`, and a `.changeset/config.json`.
+For hybrid repositories, `changeset:version` must synchronize the selected package
+version into every npm, Cargo, Python, and central `VERSION` surface before the
+generated PR is committed.
 
 ### Apply Ruleset
 
