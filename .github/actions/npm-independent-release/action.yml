@@ -16,6 +16,10 @@ inputs:
   github-token:
     description: Token with contents write permission for tags and releases.
     required: true
+  source-sha:
+    description: Immutable caller commit whose manifests and changelogs match the artifacts.
+    required: false
+    default: ""
 
 outputs:
   changed:
@@ -50,6 +54,7 @@ runs:
         DIST_TAG: ${{ inputs.dist-tag }}
         GH_TOKEN: ${{ inputs.github-token }}
         PACKAGE_FILES: ${{ inputs.package-files }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
       run: node "$GITHUB_ACTION_PATH/prepare.mjs"
 
     - name: Publish missing versions to npm
@@ -65,4 +70,5 @@ runs:
         ARTIFACT_DIRECTORY: release-artifacts
         GH_TOKEN: ${{ inputs.github-token }}
         PACKAGE_FILES: ${{ inputs.package-files }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
       run: node "$GITHUB_ACTION_PATH/finalize.mjs"

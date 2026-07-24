@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: latest
+      source-ref:
+        description: Optional caller commit or ref whose manifests and changelogs match the artifacts.
+        required: false
+        type: string
+        default: ""
     outputs:
       changed:
         description: Whether the run created or completed release state.
@@ -50,14 +55,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ inputs.source-ref || github.sha }}
+
+      - name: Resolve immutable release source
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # This immutable release contains the implementation used by this workflow.
-      # Callers should pin this workflow to the same v1.0.0 release.
+      # Callers should pin this workflow to the same v1.1.0 release.
       - name: Checkout release tooling
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: stella/.github
-          ref: v1.0.0
+          ref: v1.1.0
           path: .release-tooling
           persist-credentials: false
 
@@ -80,3 +91,4 @@ jobs:
           artifact-pattern: ${{ inputs.artifact-pattern }}
           dist-tag: ${{ inputs.dist-tag }}
           github-token: ${{ steps.release-token.outputs.token || github.token }}
+          source-sha: ${{ steps.source.outputs.sha }}

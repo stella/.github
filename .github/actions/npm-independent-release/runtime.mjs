@@ -30,6 +30,14 @@ const fail = (message) => {
   throw new Error(message);
 };
 
+export const resolveSourceSha = ({ githubSha, sourceSha }) => {
+  const resolved = sourceSha || githubSha;
+  if (!/^[0-9a-f]{40}$/.test(resolved ?? "")) {
+    fail("SOURCE_SHA or GITHUB_SHA must be a full lowercase commit SHA.");
+  }
+  return resolved;
+};
+
 const run = (command, args, options = {}) =>
   execFileSync(command, args, {
     encoding: "utf8",
@@ -287,9 +295,11 @@ const createDraft = ({
 
 const load = () => {
   const repository = process.env.GITHUB_REPOSITORY;
-  const head = process.env.GITHUB_SHA;
-  if (!repository || !head)
-    fail("GITHUB_REPOSITORY and GITHUB_SHA are required.");
+  const head = resolveSourceSha({
+    githubSha: process.env.GITHUB_SHA,
+    sourceSha: process.env.SOURCE_SHA,
+  });
+  if (!repository) fail("GITHUB_REPOSITORY is required.");
   const packages = readPackages(lines(process.env.PACKAGE_FILES));
   const tarballs = listTarballs(
     process.env.ARTIFACT_DIRECTORY,

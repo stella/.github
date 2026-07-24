@@ -232,7 +232,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.0.0
+    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.1.0
     with:
       artifact-pattern: npm-tarball-*
       package-files: |
@@ -260,6 +260,11 @@ npm trusted publisher for it. Both the caller job and reusable workflow grant
 `id-token: write`; no npm token is accepted. Optional `RELEASE_APP_ID` and
 `RELEASE_APP_PRIVATE_KEY` secrets let protected tags and releases use a repository
 GitHub App token.
+
+Callers that pack a verified commit other than the triggering `github.sha` (for
+example, a `workflow_run` gated on a promoted application release) pass that commit
+as `source-ref`. The shared workflow resolves the ref once after checkout and uses
+the resulting immutable SHA for package tag and release provenance.
 
 ### Apply Ruleset
 
