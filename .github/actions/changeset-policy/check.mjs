@@ -119,6 +119,41 @@ export const validateWorkflowChangelogOwnership = (directory = ".github/workflow
   }
 };
 
+const BUN_INSTALL = /(?:^|\s)bun\s+(?:install|i)(?:\s|$)/u;
+const FROZEN_LOCKFILE = /(?:^|\s)--frozen-lockfile(?:\s|$)/u;
+const BUN_LOCKFILE = /(?:^|[\s"'`\\/])bun\.lockb?(?:$|\s|["'`])/u;
+const DELETION_COMMAND = /(?:^|\s)(?:rm|unlink|del|remove-item)(?:\s|$)/iu;
+
+export const validateChangesetVersionCommand = (file, command) => {
+  if (typeof command !== "string" || command.trim().length === 0) {
+    fail(`${file} must define 'changeset:version' as a non-empty command.`);
+  }
+
+  for (const segment of command.split(/&&|\|\||[;|\n]/u)) {
+    const normalized = segment.trim();
+    if (BUN_LOCKFILE.test(normalized) && DELETION_COMMAND.test(normalized)) {
+      fail(
+        `${file} 'changeset:version' must not delete bun.lock or bun.lockb. ` +
+          "Versioning must preserve the committed lockfile.",
+      );
+    }
+    if (BUN_INSTALL.test(normalized) && !FROZEN_LOCKFILE.test(normalized)) {
+      fail(
+        `${file} 'changeset:version' must not regenerate the Bun lockfile. ` +
+          "Remove `bun install`, or use `bun install --frozen-lockfile` when an install is required.",
+      );
+    }
+  }
+};
+
+export const validateChangesetVersionPolicy = (file = "package.json") => {
+  if (!existsSync(file)) return;
+  const manifest = JSON.parse(readFileSync(file, "utf8"));
+  const command = manifest?.scripts?.["changeset:version"];
+  if (command === undefined) return;
+  validateChangesetVersionCommand(file, command);
+};
+
 const run = (command, args) =>
   execFileSync(command, args, {
     encoding: "utf8",
@@ -157,6 +192,7 @@ const main = (environment) => {
     validateChangeset(file, readFileSync(file, "utf8"), packageNames);
   }
 
+  validateChangesetVersionPolicy();
   validateWorkflowChangelogOwnership();
 
   const runtimeChanged =
