@@ -1,0 +1,82 @@
+name: Independent npm release
+
+on:
+  workflow_call:
+    inputs:
+      package-files:
+        description: Newline-separated public package.json files to release.
+        required: true
+        type: string
+      artifact-pattern:
+        description: Artifact name pattern containing one tarball per public package.
+        required: false
+        type: string
+        default: npm-tarball-*
+      dist-tag:
+        description: npm dist-tag used for newly published versions.
+        required: false
+        type: string
+        default: latest
+    outputs:
+      changed:
+        description: Whether the run created or completed release state.
+        value: ${{ jobs.release.outputs.changed }}
+    secrets:
+      RELEASE_APP_ID:
+        description: Optional GitHub App ID for protected tag and release writes.
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        description: Optional GitHub App private key for protected tag and release writes.
+        required: false
+
+permissions: {}
+
+jobs:
+  release:
+    name: Publish packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # Create immutable package tags and GitHub releases.
+      id-token: write # Exchange a short-lived npm trusted-publishing credential.
+    outputs:
+      changed: ${{ steps.release.outputs.changed }}
+    env:
+      HAS_RELEASE_APP_CREDENTIALS: >-
+        ${{ secrets.RELEASE_APP_ID != ''
+            && secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # This immutable release contains the implementation used by this workflow.
+      # Callers should pin this workflow to the same v1.0.0 release.
+      - name: Checkout release tooling
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: stella/.github
+          ref: v1.0.0
+          path: .release-tooling
+          persist-credentials: false
+
+      - name: Mint release token
+        id: release-token
+        if: env.HAS_RELEASE_APP_CREDENTIALS == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Release independently versioned packages
+        id: release
+        uses: ./.release-tooling/.github/actions/npm-independent-release
+        with:
+          package-files: ${{ inputs.package-files }}
+          artifact-pattern: ${{ inputs.artifact-pattern }}
+          dist-tag: ${{ inputs.dist-tag }}
+          github-token: ${{ steps.release-token.outputs.token || github.token }}
