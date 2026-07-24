@@ -1,0 +1,48 @@
+name: Changeset policy
+description: Require valid Changesets entries for release-relevant pull request changes.
+
+inputs:
+  release-paths:
+    description: Newline-separated Git pathspecs for release-relevant files.
+    required: true
+  generated-paths:
+    description: Newline-separated root-relative pathspecs allowed in the version PR.
+    required: true
+  package-files:
+    description: Newline-separated public package.json files allowed in Changesets entries.
+    required: true
+  base-ref:
+    description: Git ref used as the pull request comparison base.
+    required: false
+    default: origin/main
+  version-file:
+    description: Metadata file that must change in a generated version PR.
+    required: false
+    default: VERSION
+  version-branch:
+    description: Branch maintained by changesets/action.
+    required: false
+    default: changeset-release/main
+  version-pr-author:
+    description: GitHub login of the app that maintains the version PR.
+    required: false
+    default: "stella-provenance-updater[bot]"
+
+runs:
+  using: composite
+  steps:
+    - name: Validate changeset policy
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        GENERATED_PATHS: ${{ inputs.generated-paths }}
+        HEAD_REF: ${{ github.head_ref }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        PACKAGE_FILES: ${{ inputs.package-files }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        RELEASE_PATHS: ${{ inputs.release-paths }}
+        REPOSITORY: ${{ github.repository }}
+        VERSION_BRANCH: ${{ inputs.version-branch }}
+        VERSION_FILE: ${{ inputs.version-file }}
+        VERSION_PR_AUTHOR: ${{ inputs.version-pr-author }}
+      run: node "$GITHUB_ACTION_PATH/check.mjs"
