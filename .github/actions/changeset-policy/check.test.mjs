@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   generatedExclusions,
   isGeneratedVersionPullRequest,
+  validateChangelogOwnership,
   validateChangeset,
 } from "./check.mjs";
 
@@ -81,5 +82,56 @@ test("generated version exclusions stay rooted and include consumed changesets",
       ":(top,exclude)packages/*/package.json",
       ":(top,exclude).changeset/*.md",
     ],
+  );
+});
+
+test("accepts a release finalizer when Changesets remains the changelog owner", () => {
+  validateChangelogOwnership(
+    ".github/workflows/release.yml",
+    `jobs:
+  finalize:
+    uses: stella/.github/.github/workflows/npm-version-finalize.yml@immutable
+    with:
+      package-files: package.json
+      update-changelog: false
+    permissions:
+      contents: write
+`,
+  );
+});
+
+test("rejects a release finalizer with the conflicting changelog writer enabled", () => {
+  assert.throws(
+    () =>
+      validateChangelogOwnership(
+        ".github/workflows/release.yml",
+        `jobs:
+  finalize:
+    uses: stella/.github/.github/workflows/npm-version-finalize.yml@immutable
+    with:
+      package-files: package.json
+`,
+      ),
+    /second, conflicting writer/,
+  );
+});
+
+test("does not mistake another job's input for the finalizer setting", () => {
+  assert.throws(
+    () =>
+      validateChangelogOwnership(
+        ".github/workflows/release.yml",
+        `jobs:
+  finalize:
+    uses: stella/.github/.github/workflows/npm-version-finalize.yml@immutable
+    with:
+      package-files: package.json
+  unrelated:
+    uses: owner/repository/.github/workflows/example.yml@immutable
+    with:
+      update-changelog: false
+`,
+      ),
+    /second, conflicting writer/,
   );
 });
