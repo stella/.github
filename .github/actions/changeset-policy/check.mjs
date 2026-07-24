@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -80,6 +80,45 @@ export const generatedExclusions = (generatedPaths, changesetPathspec) =>
     (pathspec) => `:(top,exclude)${pathspec}`,
   );
 
+const FINALIZER_WORKFLOW = "/.github/workflows/npm-version-finalize.yml@";
+
+export const validateChangelogOwnership = (file, text) => {
+  const workflowLines = text.split(/\r?\n/);
+  for (let index = 0; index < workflowLines.length; index += 1) {
+    const use = workflowLines[index].match(/^(\s*)uses:\s*(\S+)\s*(?:#.*)?$/);
+    if (!use?.[2].includes(FINALIZER_WORKFLOW)) continue;
+
+    const useIndent = use[1].length;
+    const jobLines = [workflowLines[index]];
+    for (let cursor = index + 1; cursor < workflowLines.length; cursor += 1) {
+      const line = workflowLines[cursor];
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#")) {
+        const indent = line.length - line.trimStart().length;
+        if (indent < useIndent) break;
+      }
+      jobLines.push(line);
+    }
+
+    if (!jobLines.some((line) => /^\s+update-changelog:\s*false\s*(?:#.*)?$/.test(line))) {
+      fail(
+        `${file} delegates to npm-version-finalize.yml without ` +
+          "`update-changelog: false`. Changesets owns CHANGELOG.md; a post-release " +
+          "generator would create a second, conflicting writer.",
+      );
+    }
+  }
+};
+
+export const validateWorkflowChangelogOwnership = (directory = ".github/workflows") => {
+  if (!existsSync(directory)) return;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) continue;
+    const file = `${directory}/${entry.name}`;
+    validateChangelogOwnership(file, readFileSync(file, "utf8"));
+  }
+};
+
 const run = (command, args) =>
   execFileSync(command, args, {
     encoding: "utf8",
@@ -117,6 +156,8 @@ const main = (environment) => {
   for (const file of pendingChangesets) {
     validateChangeset(file, readFileSync(file, "utf8"), packageNames);
   }
+
+  validateWorkflowChangelogOwnership();
 
   const runtimeChanged =
     diff("ACMRD", lines(required(environment, "RELEASE_PATHS"))).length > 0;
