@@ -6,6 +6,7 @@ import {
   isGeneratedVersionPullRequest,
   validateChangelogOwnership,
   validateChangeset,
+  validateChangesetVersionCommand,
 } from "./check.mjs";
 
 const packages = new Set(["@stll/core", "plain-package"]);
@@ -133,5 +134,54 @@ test("does not mistake another job's input for the finalizer setting", () => {
 `,
       ),
     /second, conflicting writer/,
+  );
+});
+
+test("accepts lock-preserving changeset version commands", () => {
+  validateChangesetVersionCommand(
+    "package.json",
+    "changeset version && node scripts/sync-changeset-version.mjs",
+  );
+  validateChangesetVersionCommand(
+    "package.json",
+    "changeset version && bun install --frozen-lockfile",
+  );
+});
+
+test("rejects deleting a Bun lockfile during changeset versioning", () => {
+  assert.throws(
+    () =>
+      validateChangesetVersionCommand(
+        "package.json",
+        "changeset version && rm -f bun.lock && bun install",
+      ),
+    /must not delete bun\.lock or bun\.lockb/,
+  );
+  assert.throws(
+    () =>
+      validateChangesetVersionCommand(
+        "package.json",
+        "changeset version; Remove-Item ./bun.lockb",
+      ),
+    /must not delete bun\.lock or bun\.lockb/,
+  );
+});
+
+test("rejects Bun lockfile regeneration during changeset versioning", () => {
+  assert.throws(
+    () =>
+      validateChangesetVersionCommand(
+        "package.json",
+        "changeset version && bun install",
+      ),
+    /must not regenerate the Bun lockfile/,
+  );
+  assert.throws(
+    () =>
+      validateChangesetVersionCommand(
+        "package.json",
+        "bun install --frozen-lockfile && changeset version && bun i",
+      ),
+    /must not regenerate the Bun lockfile/,
   );
 });
