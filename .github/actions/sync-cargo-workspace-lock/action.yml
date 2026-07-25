@@ -24,6 +24,9 @@ outputs:
   packages:
     description: JSON array of inherited workspace package names.
     value: ${{ steps.sync.outputs.packages }}
+  script:
+    description: Absolute path to the pinned synchronizer for later steps in this job.
+    value: ${{ steps.sync.outputs.script }}
 
 runs:
   using: composite
@@ -41,3 +44,4 @@ runs:
           --mode "$SYNC_MODE" \
           --manifest "$CARGO_MANIFEST_PATH" \
           --lockfile "$CARGO_LOCKFILE_PATH"
+        printf 'script=%s\n' "$GITHUB_ACTION_PATH/sync.mjs" >> "$GITHUB_OUTPUT"
