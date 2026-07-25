@@ -207,15 +207,19 @@ jobs:
 jobs:
   version:
     uses: stella/.github/.github/workflows/changeset-release-pr.yml@<commit-sha>
+    with:
+      sync-cargo-inherited-lock: true
     secrets: inherit
 ```
 
 The caller must provide `changeset`, `changeset:version`, and a `.changeset/config.json`.
 For hybrid repositories, `changeset:version` must synchronize the selected package
-version into every npm, Cargo, Python, and central `VERSION` surface before the
-generated PR is committed. The version command must preserve the committed Bun
-lockfile: deleting `bun.lock`/`bun.lockb` or running an unfrozen `bun install` is
-rejected by the shared policy.
+version into every npm, Cargo manifest, Python, and central `VERSION` surface. With
+`sync-cargo-inherited-lock` enabled, the shared workflow validates the incoming
+lockfile and updates inherited local Cargo package entries inside the same Changesets
+transaction, before the generated PR is committed. The version command must preserve
+the committed Bun lockfile: deleting `bun.lock`/`bun.lockb` or running an unfrozen
+`bun install` is rejected by the shared policy.
 
 Repositories whose Cargo packages use `version.workspace = true` can validate or
 repair the corresponding local `Cargo.lock` entries without maintaining a package
