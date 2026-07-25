@@ -23,6 +23,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `notify-failure` | Send failure notification to Google Chat webhook |
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
 | `changeset-policy` | Require valid release intent for caller-declared package paths |
+| `sync-cargo-workspace-lock` | Synchronize inherited Cargo workspace versions in Cargo.lock |
 
 ### Templates
 
@@ -215,6 +216,20 @@ version into every npm, Cargo, Python, and central `VERSION` surface before the
 generated PR is committed. The version command must preserve the committed Bun
 lockfile: deleting `bun.lock`/`bun.lockb` or running an unfrozen `bun install` is
 rejected by the shared policy.
+
+Repositories whose Cargo packages use `version.workspace = true` can validate or
+repair the corresponding local `Cargo.lock` entries without maintaining a package
+allowlist:
+
+```yaml
+- uses: stella/.github/.github/actions/sync-cargo-workspace-lock@<commit-sha>
+  with:
+    mode: check # use write while generating synchronized release metadata
+```
+
+The action discovers root workspace members with locked Cargo metadata, changes only
+members that explicitly inherit `[workspace.package].version`, and leaves explicitly
+versioned and registry packages untouched.
 
 ### Independent npm package releases
 
