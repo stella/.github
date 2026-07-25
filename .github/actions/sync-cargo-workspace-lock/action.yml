@@ -1,0 +1,43 @@
+name: Sync inherited Cargo workspace versions
+description: >-
+  Check or repair Cargo.lock versions for workspace members that inherit
+  workspace.package.version.
+
+inputs:
+  mode:
+    description: Use check to report drift or write to repair Cargo.lock.
+    required: false
+    default: check
+  manifest:
+    description: Repo-relative path to the root Cargo workspace manifest.
+    required: false
+    default: Cargo.toml
+  lockfile:
+    description: Repo-relative path to the workspace Cargo.lock.
+    required: false
+    default: Cargo.lock
+
+outputs:
+  changed:
+    description: "true when write mode changed Cargo.lock; false otherwise."
+    value: ${{ steps.sync.outputs.changed }}
+  packages:
+    description: JSON array of inherited workspace package names.
+    value: ${{ steps.sync.outputs.packages }}
+
+runs:
+  using: composite
+  steps:
+    - name: Sync inherited Cargo workspace versions
+      id: sync
+      shell: bash
+      env:
+        SYNC_MODE: ${{ inputs.mode }}
+        CARGO_MANIFEST_PATH: ${{ inputs.manifest }}
+        CARGO_LOCKFILE_PATH: ${{ inputs.lockfile }}
+      run: |
+        set -euo pipefail
+        node "$GITHUB_ACTION_PATH/sync.mjs" \
+          --mode "$SYNC_MODE" \
+          --manifest "$CARGO_MANIFEST_PATH" \
+          --lockfile "$CARGO_LOCKFILE_PATH"
