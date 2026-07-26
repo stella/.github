@@ -11,6 +11,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `pr-lint.yml` | PR linting: conventional commits, labels, auto-assign |
 | `base-checks.yml` | Composite workflow calling pr-lint |
 | `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
+| `ai-shared-update.yml` | Update the pinned `stella/ai-shared` submodule, regenerate consumers, and open a PR |
 | `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
 | `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
 | `npm-independent-release.yml` | Publish independently versioned npm monorepos from caller-built tarballs |
@@ -168,6 +169,43 @@ jobs:
 
 **Optional secrets:**
 - `auth_token` — token for updater PR creation when downstream CI should run; if omitted, the workflow falls back to `github.token`
+
+### AI shared updates
+
+Consumer repositories keep `.ai/shared` pinned for reproducible CI, then call the
+shared updater on a schedule. The updater fetches the selected `stella/ai-shared`
+ref, rejects non-fast-forward changes, runs the fetched canonical sync script, and
+opens or updates one PR containing the submodule pointer and every generated file.
+
+```yaml
+name: Update shared AI tooling
+
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    uses: stella/.github/.github/workflows/ai-shared-update.yml@<commit-sha>
+    with:
+      validation-workflow: ci.yml
+```
+
+The caller must enable GitHub Actions to create pull requests when relying on the
+repository `GITHUB_TOKEN`. Alternatively, pass `auth_token`, or `app_id` plus
+`app_private_key`, from a dedicated bot. A PAT or App token triggers normal PR CI;
+the default-token path can explicitly dispatch a caller-selected workflow that
+supports `workflow_dispatch`.
+
+The updater checks out the caller without persisted credentials and does not mint
+an optional App token until after the newly fetched sync script finishes. Consumer
+CI and local commands continue to execute only the committed submodule revision.
 
 ### Changeset releases
 
