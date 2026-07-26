@@ -24,6 +24,24 @@ export const lines = (value) =>
 
 export const packageTag = ({ name, version }) => `${name}@${version}`;
 
+export const validateArtifactRun = ({
+  artifactRun,
+  currentRun,
+  sourceSha,
+}) => {
+  if (artifactRun.head_sha !== sourceSha) {
+    fail(
+      `Recovery artifact run used ${artifactRun.head_sha}, not release commit ${sourceSha}.`,
+    );
+  }
+  if (artifactRun.path !== currentRun.path) {
+    fail(
+      `Recovery artifacts came from '${artifactRun.path}', not '${currentRun.path}'.`,
+    );
+  }
+  return artifactRun;
+};
+
 export const indexReleases = (pages) => {
   const releases = new Map();
   for (const page of pages) {

@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: npm-tarball-*
+      artifact-run-id:
+        description: Optional caller run ID whose exact package artifacts should be resumed.
+        required: false
+        type: string
+        default: ""
       dist-tag:
         description: npm dist-tag used for newly published versions.
         required: false
@@ -42,6 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      actions: read # Download exact artifacts from a verified recovery run.
       contents: write # Create immutable package tags and GitHub releases.
       id-token: write # Exchange a short-lived npm trusted-publishing credential.
     outputs:
@@ -63,14 +69,23 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # This immutable release contains the implementation used by this workflow.
-      # Callers should pin this workflow to the same v1.4.0 release.
+      # Callers should pin this workflow to the same v1.5.0 release.
       - name: Checkout release tooling
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: stella/.github
-          ref: v1.4.0
+          ref: v1.5.0
           path: .release-tooling
           persist-credentials: false
+
+      - name: Verify recovery artifact source
+        if: inputs.artifact-run-id != ''
+        shell: bash
+        env:
+          ARTIFACT_RUN_ID: ${{ inputs.artifact-run-id }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: node .release-tooling/.github/actions/npm-independent-release/verify-artifact-run.mjs
 
       - name: Mint release token
         id: release-token
@@ -89,6 +104,8 @@ jobs:
         with:
           package-files: ${{ inputs.package-files }}
           artifact-pattern: ${{ inputs.artifact-pattern }}
+          artifact-run-id: ${{ inputs.artifact-run-id }}
+          artifact-token: ${{ github.token }}
           dist-tag: ${{ inputs.dist-tag }}
           github-token: ${{ steps.release-token.outputs.token || github.token }}
           source-sha: ${{ steps.source.outputs.sha }}

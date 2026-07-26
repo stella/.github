@@ -9,6 +9,13 @@ inputs:
     description: Artifact name pattern containing one tarball per public package.
     required: false
     default: npm-tarball-*
+  artifact-run-id:
+    description: Optional verified caller run ID whose exact artifacts should be resumed.
+    required: false
+    default: ""
+  artifact-token:
+    description: Token with actions read permission for downloading caller artifacts.
+    required: true
   dist-tag:
     description: npm dist-tag used for newly published versions.
     required: false
@@ -45,6 +52,9 @@ runs:
         pattern: ${{ inputs.artifact-pattern }}
         path: release-artifacts
         merge-multiple: false
+        repository: ${{ github.repository }}
+        run-id: ${{ inputs.artifact-run-id || github.run_id }}
+        github-token: ${{ inputs.artifact-token }}
 
     - name: Validate and stage releases
       id: prepare

@@ -291,7 +291,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.4.0
+    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.5.0
     with:
       artifact-pattern: npm-tarball-*
       package-files: |
@@ -308,6 +308,9 @@ missing from npm, verifies the release asset against npm `dist.integrity`, then 
 the draft releases public. Existing complete versions are immutable no-ops. Safe
 partial runs resume; registry-only versions are repaired with the registry artifact
 and release notes that do not claim a local rebuild was the originally uploaded file.
+Manual recovery can pass both `source-ref` and `artifact-run-id`; the shared workflow
+accepts the earlier artifacts only when that run used the resolved source commit and
+the same caller workflow path.
 
 Each package must have an adjacent `CHANGELOG.md` section headed `## <version>`.
 Uploaded artifacts may include checksum files, but each must contain exactly one
