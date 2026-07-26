@@ -9,6 +9,7 @@ import {
   classifyState,
   createPlan,
   hashBuffer,
+  indexReleases,
   mapArtifacts,
   releaseNotes,
   sha256File,
@@ -65,6 +66,49 @@ test("maps exactly one tarball to every public manifest regardless of input orde
   ]);
   assert.deepEqual([...mapped.keys()], ["@scope/c", "@scope/a", "@scope/b"]);
   assert.equal(mapped.get("@scope/b").pkg.file, "packages/b/package.json");
+});
+
+test("indexes draft releases returned by the paginated releases endpoint", () => {
+  const releases = indexReleases([
+    [
+      {
+        id: 1,
+        tag_name: "@scope/a@1.2.3",
+        draft: true,
+        prerelease: false,
+        assets: [{ id: 2, name: "a-1.2.3.tgz" }],
+      },
+    ],
+    [
+      {
+        id: 3,
+        tag_name: "@scope/b@2.0.0",
+        draft: false,
+        prerelease: false,
+        assets: [{ id: 4, name: "b-2.0.0.tgz" }],
+      },
+    ],
+  ]);
+
+  assert.deepEqual(releases.get("@scope/a@1.2.3"), {
+    id: 1,
+    draft: true,
+    prerelease: false,
+    assets: [{ id: 2, name: "a-1.2.3.tgz" }],
+  });
+  assert.equal(releases.get("@scope/b@2.0.0").draft, false);
+});
+
+test("rejects duplicate drafts for the same package tag", () => {
+  const draft = {
+    id: 1,
+    tag_name: "@scope/a@1.2.3",
+    draft: true,
+    prerelease: false,
+    assets: [{ id: 2, name: "a-1.2.3.tgz" }],
+  };
+
+  assert.throws(() => indexReleases([[draft], [draft]]), /duplicate releases/);
 });
 
 test("rejects missing, duplicate, unexpected, and version-mismatched tarballs", () => {

@@ -16,6 +16,7 @@ import {
   changelogSection,
   createPlan,
   hashBuffer,
+  indexReleases,
   lines,
   mapArtifacts,
   readPackages,
@@ -66,6 +67,12 @@ const githubJson = (endpoint) => {
   fail(`GitHub API request failed for ${endpoint}: ${result.stderr.trim()}`);
 };
 
+const githubJsonPages = (endpoint) => {
+  const result = attempt("gh", ["api", "--paginate", "--slurp", endpoint]);
+  if (result.status === 0) return JSON.parse(result.stdout);
+  fail(`GitHub API request failed for ${endpoint}: ${result.stderr.trim()}`);
+};
+
 const tagTarget = (repository, tag) => {
   let ref = githubJson(`repos/${repository}/git/ref/tags/${apiPath(tag)}`);
   if (!ref) return null;
@@ -103,19 +110,6 @@ const npmState = (name, version) => {
     exists: true,
     integrity: metadata["dist.integrity"] ?? metadata.dist?.integrity ?? null,
     tarball: metadata["dist.tarball"] ?? metadata.dist?.tarball ?? null,
-  };
-};
-
-const releaseState = (repository, tag) => {
-  const release = githubJson(
-    `repos/${repository}/releases/tags/${apiPath(tag)}`,
-  );
-  if (!release) return null;
-  return {
-    id: release.id,
-    draft: release.draft,
-    prerelease: release.prerelease,
-    assets: release.assets.map(({ id, name }) => ({ id, name })),
   };
 };
 
@@ -191,10 +185,16 @@ const readArtifact = (path) => {
   };
 };
 
-const remoteState = (repository, pkg, head, localIntegrity) => {
+const remoteState = ({
+  head,
+  localIntegrity,
+  pkg,
+  releasesByTag,
+  repository,
+}) => {
   const tag = `${pkg.name}@${pkg.version}`;
   const registry = npmState(pkg.name, pkg.version);
-  const release = releaseState(repository, tag);
+  const release = releasesByTag.get(tag) ?? null;
   return {
     head,
     registry,
@@ -307,10 +307,22 @@ const load = () => {
   );
   if (tarballs.length === 0) fail("No .tgz release artifacts were downloaded.");
   const artifactsByName = mapArtifacts(packages, tarballs.map(readArtifact));
+  const releasesByTag = indexReleases(
+    githubJsonPages(`repos/${repository}/releases?per_page=100`),
+  );
   const remoteStates = new Map(
     packages.map((pkg) => {
       const artifact = artifactsByName.get(pkg.name);
-      return [pkg.name, remoteState(repository, pkg, head, artifact.integrity)];
+      return [
+        pkg.name,
+        remoteState({
+          head,
+          localIntegrity: artifact.integrity,
+          pkg,
+          releasesByTag,
+          repository,
+        }),
+      ];
     }),
   );
   return {
