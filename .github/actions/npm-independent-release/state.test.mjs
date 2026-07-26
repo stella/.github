@@ -14,6 +14,7 @@ import {
   releaseNotes,
   sha256File,
   topologicalPackageNames,
+  validateArtifactRun,
   validateDistTag,
 } from "./state.mjs";
 
@@ -97,6 +98,37 @@ test("indexes draft releases returned by the paginated releases endpoint", () =>
     assets: [{ id: 2, name: "a-1.2.3.tgz" }],
   });
   assert.equal(releases.get("@scope/b@2.0.0").draft, false);
+});
+
+test("accepts recovery artifacts only from the same workflow and release source", () => {
+  const currentRun = { path: ".github/workflows/publish.yml" };
+  const artifactRun = {
+    head_sha: "source",
+    path: ".github/workflows/publish.yml",
+  };
+
+  assert.equal(
+    validateArtifactRun({ artifactRun, currentRun, sourceSha: "source" }),
+    artifactRun,
+  );
+  assert.throws(
+    () =>
+      validateArtifactRun({
+        artifactRun: { ...artifactRun, head_sha: "other" },
+        currentRun,
+        sourceSha: "source",
+      }),
+    /not release commit/,
+  );
+  assert.throws(
+    () =>
+      validateArtifactRun({
+        artifactRun: { ...artifactRun, path: ".github/workflows/other.yml" },
+        currentRun,
+        sourceSha: "source",
+      }),
+    /not '.github\/workflows\/publish.yml'/,
+  );
 });
 
 test("rejects duplicate drafts for the same package tag", () => {
