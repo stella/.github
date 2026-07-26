@@ -24,6 +24,28 @@ export const lines = (value) =>
 
 export const packageTag = ({ name, version }) => `${name}@${version}`;
 
+export const indexReleases = (pages) => {
+  const releases = new Map();
+  for (const page of pages) {
+    if (!Array.isArray(page)) fail("GitHub releases response was not paginated.");
+    for (const release of page) {
+      if (typeof release.tag_name !== "string" || !release.tag_name) {
+        fail("GitHub release is missing its tag name.");
+      }
+      if (releases.has(release.tag_name)) {
+        fail(`GitHub returned duplicate releases for '${release.tag_name}'.`);
+      }
+      releases.set(release.tag_name, {
+        id: release.id,
+        draft: release.draft,
+        prerelease: release.prerelease,
+        assets: release.assets.map(({ id, name }) => ({ id, name })),
+      });
+    }
+  }
+  return releases;
+};
+
 export const validateDistTag = (distTag) => {
   if (!DIST_TAG.test(distTag) || SEMVER.test(distTag)) {
     fail(`Invalid npm dist-tag '${distTag}'.`);
