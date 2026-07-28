@@ -134,30 +134,44 @@ const releaseAssetIntegrity = (repository, release) => {
   return hashBuffer("sha512", result.stdout);
 };
 
-const listTarballs = (directory, expectedArtifacts) => {
-  const artifactDirectories = readdirSync(directory)
-    .sort()
-    .map((entry) => join(directory, entry))
-    .filter((path) => statSync(path).isDirectory());
+const tarballsWithin = (root) => {
+  const found = [];
+  const visit = (current) => {
+    for (const entry of readdirSync(current).sort()) {
+      const path = join(current, entry);
+      const stat = statSync(path);
+      if (stat.isDirectory()) visit(path);
+      else if (entry.endsWith(".tgz")) found.push(path);
+    }
+  };
+  visit(root);
+  return found;
+};
+
+export const listTarballs = (directory, expectedArtifacts) => {
+  // download-artifact extracts one matching artifact directly into `path`, but
+  // preserves one top-level directory per artifact when several match.
+  const entries = readdirSync(directory).sort();
+  if (
+    expectedArtifacts > 1 &&
+    entries.some((entry) => !statSync(join(directory, entry)).isDirectory())
+  ) {
+    fail(
+      `Expected ${expectedArtifacts} package artifacts in separate directories; downloaded a flat artifact layout.`,
+    );
+  }
+  const artifactDirectories =
+    expectedArtifacts === 1
+      ? [directory]
+      : entries
+          .map((entry) => join(directory, entry))
+          .filter((path) => statSync(path).isDirectory());
   if (artifactDirectories.length !== expectedArtifacts) {
     fail(
       `Expected ${expectedArtifacts} package artifacts; downloaded ${artifactDirectories.length}.`,
     );
   }
   const results = [];
-  const tarballsWithin = (root) => {
-    const found = [];
-    const visit = (current) => {
-      for (const entry of readdirSync(current).sort()) {
-        const path = join(current, entry);
-        const stat = statSync(path);
-        if (stat.isDirectory()) visit(path);
-        else if (entry.endsWith(".tgz")) found.push(path);
-      }
-    };
-    visit(root);
-    return found;
-  };
   for (const artifactDirectory of artifactDirectories) {
     const found = tarballsWithin(artifactDirectory);
     if (found.length !== 1) {

@@ -69,12 +69,12 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # This immutable release contains the implementation used by this workflow.
-      # Callers should pin this workflow to the same v1.5.0 release.
+      # Callers should pin this workflow to the same v1.5.1 release.
       - name: Checkout release tooling
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: stella/.github
-          ref: v1.5.0
+          ref: v1.5.1
           path: .release-tooling
           persist-credentials: false
 
