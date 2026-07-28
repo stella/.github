@@ -291,7 +291,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.5.0
+    uses: stella/.github/.github/workflows/npm-independent-release.yml@v1.5.1
     with:
       artifact-pattern: npm-tarball-*
       package-files: |
