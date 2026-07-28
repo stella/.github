@@ -26,6 +26,9 @@ import {
 } from "./state.mjs";
 
 const MAX_BUFFER = 512 * 1024 * 1024;
+const STAGING_RECHECK_DELAYS_MILLISECONDS = [
+  1_000, 2_000, 4_000, 8_000, 15_000,
+];
 
 const fail = (message) => {
   throw new Error(message);
@@ -348,6 +351,34 @@ const load = () => {
   };
 };
 
+const pendingStagingEntries = (state) =>
+  state.plan.entries.filter(
+    (entry) =>
+      entry.status === "stage-and-publish" ||
+      entry.status === "repair-release",
+  );
+
+const sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+export const waitForStagedState = async ({
+  loadState = load,
+  recheckDelays = STAGING_RECHECK_DELAYS_MILLISECONDS,
+  wait = sleep,
+} = {}) => {
+  let state = loadState();
+  for (const delay of recheckDelays) {
+    const pending = pendingStagingEntries(state);
+    if (pending.length === 0) return state;
+    console.log(
+      `::notice::Waiting ${delay}ms for GitHub to expose staged release state: ${pending.map((entry) => entry.tag).join(", ")}`,
+    );
+    await wait(delay);
+    state = loadState();
+  }
+  return state;
+};
+
 export const prepare = async () => {
   validateDistTag(process.env.DIST_TAG);
   const state = load();
@@ -391,15 +422,11 @@ export const prepare = async () => {
     }
   }
 
-  // Re-read staged state so no package is published until every exact draft asset exists.
-  const staged = load();
-  for (const entry of staged.plan.entries) {
-    if (
-      entry.status === "stage-and-publish" ||
-      entry.status === "repair-release"
-    ) {
-      fail(`Failed to stage ${entry.tag}.`);
-    }
+  // GitHub's release list can lag a successful draft creation. Re-read with a
+  // bounded backoff so publishing still requires every exact draft asset.
+  const staged = await waitForStagedState();
+  for (const entry of pendingStagingEntries(staged)) {
+    fail(`Failed to stage ${entry.tag}.`);
   }
   appendOutput("tarballs", staged.plan.missingTarballs.join("\n"));
   appendOutput("changed", staged.plan.alreadyReleased ? "false" : "true");

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { listTarballs, resolveSourceSha } from "./runtime.mjs";
+import {
+  listTarballs,
+  resolveSourceSha,
+  waitForStagedState,
+} from "./runtime.mjs";
 
 const githubSha = "1".repeat(40);
 const sourceSha = "2".repeat(40);
@@ -68,4 +72,51 @@ test("preserves artifact count and one-tarball-per-artifact invariants", () => {
     () => listTarballs(nested, 2),
     /Expected 2 package artifacts; downloaded 1/,
   );
+});
+
+const releaseState = (status) => ({
+  plan: {
+    entries: [{ status, tag: "@stll/example@1.0.0" }],
+  },
+});
+
+test("rechecks release state until a created draft becomes visible", async () => {
+  const states = [
+    releaseState("stage-and-publish"),
+    releaseState("stage-and-publish"),
+    releaseState("publish-draft"),
+  ];
+  const waits = [];
+
+  const result = await waitForStagedState({
+    loadState: () => states.shift(),
+    recheckDelays: [10, 20, 40],
+    wait: (delay) => {
+      waits.push(delay);
+    },
+  });
+
+  assert.equal(result.plan.entries[0].status, "publish-draft");
+  assert.deepEqual(waits, [10, 20]);
+  assert.equal(states.length, 0);
+});
+
+test("keeps an unresolved staged release after bounded retries", async () => {
+  let reads = 0;
+  const waits = [];
+
+  const result = await waitForStagedState({
+    loadState: () => {
+      reads += 1;
+      return releaseState("repair-release");
+    },
+    recheckDelays: [10, 20],
+    wait: (delay) => {
+      waits.push(delay);
+    },
+  });
+
+  assert.equal(result.plan.entries[0].status, "repair-release");
+  assert.equal(reads, 3);
+  assert.deepEqual(waits, [10, 20]);
 });
