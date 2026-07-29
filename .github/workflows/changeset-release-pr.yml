@@ -35,6 +35,13 @@ on:
         required: false
         type: string
         default: Cargo.lock
+      prepare-rust-wasm:
+        description: >-
+          Install the wasm32-unknown-unknown target and the wasm-bindgen CLI
+          version resolved by the locked Cargo workspace before versioning.
+        required: false
+        type: boolean
+        default: false
     secrets:
       CHANGELOG_APP_ID:
         description: GitHub App ID used to maintain the version PR.
@@ -62,14 +69,37 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - if: inputs.sync-cargo-inherited-lock
+      - if: inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       # rust-toolchain only prepends the toolchain when it installs one. Keep
       # Cargo available when the runner already has the requested toolchain.
-      - if: inputs.sync-cargo-inherited-lock
+      - if: inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm
         name: Add Cargo to PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - if: inputs.prepare-rust-wasm
+        name: Prepare locked Rust Wasm toolchain
+        shell: bash
+        env:
+          CARGO_MANIFEST_PATH: ${{ inputs.cargo-manifest }}
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-unknown-unknown
+
+          mapfile -t versions < <(
+            cargo metadata \
+              --locked \
+              --manifest-path "$CARGO_MANIFEST_PATH" \
+              --format-version 1 \
+              --all-features \
+              | jq -r '[.packages[] | select(.name == "wasm-bindgen") | .version] | unique | .[]'
+          )
+          if [[ "${#versions[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one locked wasm-bindgen version; found: ${versions[*]:-none}"
+            exit 1
+          fi
+          cargo install wasm-bindgen-cli --version "${versions[0]}" --locked
 
       - if: inputs.sync-cargo-inherited-lock
         name: Validate inherited Cargo lock versions
