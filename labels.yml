@@ -1,27 +1,11 @@
-# Org-wide standardized labels
-# Sync to repos using: gh workflow run label-sync.yml
-
-# Priority
-- name: "🔥 high_priority"
-  color: "F59FC9"
-  description: "Issues with high priority"
-
-- name: "❗ normal_priority"
-  color: "FFBABA"
-  description: "Issues with normal priority"
-
-- name: "❕low_priority"
-  color: "C5DEF5"
-  description: "Issues with low priority"
+# Org-wide standardized labels, applied by .github/workflows/label-sync.yml.
+# Run it from the Actions tab; it defaults to plan mode and reports drift
+# without writing. Priority and effort live in org issue fields, not here.
 
 # Type
 - name: "⚡ epic"
   color: "6B26A1"
   description: "epic, with subtasks"
-
-- name: "documentation"
-  color: "0075ca"
-  description: "Improvements or additions to documentation"
 
 - name: "🧹 refactor"
   color: "C0A97D"
@@ -70,6 +54,29 @@
 - name: "🧮 table"
   color: "ca50b9"
   description: "Table view feature"
+
+# Applied automatically by pr-lint from the conventional-commit type in the
+# PR title (feat and refactor -> enhancement, fix -> bug). These exist so the
+# labeller stops auto-creating them ad hoc with arbitrary colors.
+- name: "enhancement"
+  color: "0cd187"
+  description: "New feature or improvement"
+
+- name: "bug"
+  color: "d73a4a"
+  description: "Something is not working"
+
+- name: "docs"
+  color: "0075ca"
+  description: "Documentation only"
+
+- name: "chore"
+  color: "5d0ca4"
+  description: "Maintenance work with no user-facing change"
+
+- name: "perf"
+  color: "e97234"
+  description: "Performance work"
 
 # CI and governance
 - name: "run-ci"
