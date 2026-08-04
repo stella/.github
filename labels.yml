@@ -39,21 +39,13 @@
   color: "19fd88"
   description: ""
 
-- name: "💬 chat"
-  color: "95d503"
-  description: ""
-
-- name: "📝 word plugin"
-  color: "85fdf5"
-  description: ""
-
 - name: "📬 outlook plugin"
   color: "e87534"
   description: ""
 
 - name: "🧮 table"
   color: "ca50b9"
-  description: "Table view feature"
+  description: "Tabular review"
 
 # Applied automatically by pr-lint from the conventional-commit type in the
 # PR title (feat and refactor -> enhancement, fix -> bug). These exist so the
