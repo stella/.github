@@ -1,0 +1,66 @@
+# Labels specific to stella/stella, merged on top of the org baseline
+# in labels.yml. Entries here override a baseline entry of the same name.
+
+- name: "🤖 AI"
+  color: "5319E7"
+  description: "All related work to AI usage"
+
+- name: "🎨 ux"
+  color: "dced23"
+  description: "Change in graphics"
+
+- name: "🔌 external data"
+  color: "19fd88"
+  description: ""
+
+- name: "📬 outlook plugin"
+  color: "e87534"
+  description: ""
+
+- name: "🧮 table"
+  color: "ca50b9"
+  description: "Tabular review"
+
+- name: "🌍 i18n"
+  color: "0a57e8"
+  description: "Translations, localization and related work"
+
+- name: "📝 docx-editor"
+  color: "5705fa"
+  description: "issues related to the docx-editor in app"
+
+- name: "🐞 bug"
+  color: "ed8ec0"
+  description: ""
+
+- name: "agent-feedback"
+  color: "c4961b"
+  description: ""
+
+- name: "javascript"
+  color: "168700"
+  description: "Pull requests that update javascript code"
+
+- name: "react-doctor: ⚪ N/A"
+  color: "6b7280"
+  description: "React Doctor: no scored changes"
+
+- name: "react-doctor: 💯 100"
+  color: "854d0e"
+  description: "React Doctor: perfect score"
+
+- name: "react-doctor: 🔴 <80"
+  color: "b91c1c"
+  description: "React Doctor: poor (<80)"
+
+- name: "react-doctor: 🟠 80-90"
+  color: "c2410c"
+  description: "React Doctor: needs attention (80-90)"
+
+- name: "react-doctor: 🟡 90-95"
+  color: "a16207"
+  description: "React Doctor: good (90-95)"
+
+- name: "react-doctor: 🟢 >95"
+  color: "15803d"
+  description: "React Doctor: excellent (>95)"

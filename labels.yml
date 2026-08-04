@@ -1,3 +1,5 @@
+# Org-wide baseline labels, applied to every repository that opts in.
+# Product-specific labels live in labels/<repo>.yml and are merged on top.
 # Org-wide standardized labels, applied by .github/workflows/label-sync.yml.
 # Run it from the Actions tab; it defaults to plan mode and reports drift
 # without writing. Priority and effort live in org issue fields, not here.
@@ -15,14 +17,6 @@
   color: "FBCA04"
   description: ""
 
-- name: "🤖 AI"
-  color: "5319E7"
-  description: "All related work to AI usage"
-
-- name: "🎨 ux"
-  color: "dced23"
-  description: "Change in graphics"
-
 - name: "💭 triage"
   color: "EF4B67"
   description: "needs further confirmation if we want to implement"
@@ -34,18 +28,6 @@
 - name: "📦 dependencies"
   color: "54c778"
   description: ""
-
-- name: "🔌 external data"
-  color: "19fd88"
-  description: ""
-
-- name: "📬 outlook plugin"
-  color: "e87534"
-  description: ""
-
-- name: "🧮 table"
-  color: "ca50b9"
-  description: "Tabular review"
 
 # Applied automatically by pr-lint from the conventional-commit type in the
 # PR title (feat and refactor -> enhancement, fix -> bug). These exist so the
@@ -124,3 +106,11 @@
 - name: "wontfix"
   color: "ffffff"
   description: "This will not be worked on"
+
+- name: "run-pr-lint"
+  color: "ededed"
+  description: ""
+
+- name: "invalid"
+  color: "e4e669"
+  description: "This doesn't seem right"

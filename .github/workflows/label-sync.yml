@@ -42,6 +42,7 @@ jobs:
           repository: ${{ github.repository_owner }}/.github
           sparse-checkout: |
             labels.yml
+            labels/
             scripts/sync-labels.sh
           sparse-checkout-cone-mode: false
 
