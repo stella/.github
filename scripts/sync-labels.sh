@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply labels.yml to one or more repositories.
+# Apply the org label manifest to one or more repositories.
 #
 # Usage: sync-labels.sh <plan|apply|apply-with-prune> <owner/repo>...
 #
@@ -8,9 +8,13 @@
 # apply-with-prune additionally delete labels absent from the manifest,
 #                  but only when nothing references them
 #
-# Pruning skips any label still applied to an issue or pull request. A repo
-# may legitimately carry labels beyond the org baseline (CI bots, product
-# areas), so the manifest is a floor, not a whitelist.
+# The manifest is labels.yml, the org-wide baseline, plus labels/<repo>.yml
+# when that repo has product-specific labels. Overlay entries win on name
+# collision.
+#
+# Pruning skips any label still applied to an issue or pull request, so a
+# label a bot introduced and is still using survives until it is declared or
+# retired deliberately.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,10 +46,19 @@ created=0 updated=0 pruned=0 kept=0
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-# name<TAB>color<TAB>description, one per manifest entry.
+# name<TAB>color<TAB>description for the given repo: the org baseline, with
+# labels/<repo>.yml merged on top when it exists. An overlay entry replaces a
+# baseline entry of the same name, so a repo can retune a shared label without
+# forking the whole manifest.
 manifest_tsv() {
-  yq -o=json '.' "$MANIFEST" |
-    jq -r '.[] | [.name, .color, (.description // "")] | @tsv'
+  local overlay="$REPO_ROOT/labels/${1##*/}.yml"
+  local overlay_json='[]'
+  [[ -f "$overlay" ]] && overlay_json="$(yq -o=json '.' "$overlay")"
+
+  jq -rn --argjson base "$(yq -o=json '.' "$MANIFEST")" --argjson extra "$overlay_json" '
+    ($base + $extra)
+    | group_by(.name) | map(.[-1])
+    | .[] | [.name, .color, (.description // "")] | @tsv'
 }
 
 for slug in "$@"; do
@@ -92,11 +105,13 @@ for slug in "$@"; do
       gh api -X PATCH "repos/$slug/labels/$name" \
         -f "new_name=$name" -f "color=$color" -f "description=$description" >/dev/null
     fi
-  done < <(manifest_tsv)
+  done < <(manifest_tsv "$slug")
 
-  [[ "$MODE" != apply-with-prune ]] && continue
+  # plan previews deletions as well as additions: a destructive run must be
+  # reviewable before it happens. Only apply-with-prune actually deletes.
+  [[ "$MODE" == apply ]] && continue
 
-  known="$(manifest_tsv | cut -f1)"
+  known="$(manifest_tsv "$slug" | cut -f1)"
   while read -r name; do
     [[ -z "$name" ]] && continue
     grep -qxF "$name" <<<"$known" && continue
@@ -112,6 +127,7 @@ for slug in "$@"; do
 
     echo "  - prune   $name"
     pruned=$((pruned + 1))
+    [[ "$MODE" == plan ]] && continue
     gh api -X DELETE "repos/$slug/labels/$name" >/dev/null
   done < <(jq -r '.[].name' <<<"$live")
 done
