@@ -100,6 +100,37 @@ test("indexes draft releases returned by the paginated releases endpoint", () =>
   assert.equal(releases.get("@scope/b@2.0.0").draft, false);
 });
 
+test("tolerates one release repeated across an offset page boundary", () => {
+  // A draft becoming visible between the two page requests shifts the boundary
+  // entry down, so the same release id is returned on both pages.
+  const boundary = {
+    id: 7,
+    tag_name: "@scope/a@1.2.3",
+    draft: false,
+    prerelease: false,
+    assets: [{ id: 8, name: "a-1.2.3.tgz" }],
+  };
+
+  const releases = indexReleases([
+    [boundary],
+    [
+      { ...boundary },
+      {
+        id: 9,
+        tag_name: "@scope/b@2.0.0",
+        draft: false,
+        prerelease: false,
+        assets: [{ id: 10, name: "b-2.0.0.tgz" }],
+      },
+    ],
+  ]);
+
+  assert.equal(releases.size, 2);
+  assert.equal(releases.get("@scope/a@1.2.3").id, 7);
+  assert.equal(releases.get("@scope/b@2.0.0").id, 9);
+});
+
+
 test("accepts recovery artifacts only from the same workflow and release source", () => {
   const currentRun = { path: ".github/workflows/publish.yml" };
   const artifactRun = {
@@ -132,15 +163,19 @@ test("accepts recovery artifacts only from the same workflow and release source"
 });
 
 test("rejects duplicate drafts for the same package tag", () => {
+  // Two DISTINCT drafts, which is what makes the tag ambiguous. The same draft
+  // seen twice is a paging artifact and is covered above.
   const draft = {
-    id: 1,
     tag_name: "@scope/a@1.2.3",
     draft: true,
     prerelease: false,
     assets: [{ id: 2, name: "a-1.2.3.tgz" }],
   };
 
-  assert.throws(() => indexReleases([[draft], [draft]]), /duplicate releases/);
+  assert.throws(
+    () => indexReleases([[{ ...draft, id: 1 }], [{ ...draft, id: 3 }]]),
+    /duplicate releases/,
+  );
 });
 
 test("rejects missing, duplicate, unexpected, and version-mismatched tarballs", () => {
