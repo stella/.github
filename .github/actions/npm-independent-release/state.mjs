@@ -42,6 +42,23 @@ export const validateArtifactRun = ({
   return artifactRun;
 };
 
+/**
+ * Two releases sharing a tag is genuinely ambiguous: GitHub allows any number
+ * of drafts on one tag, and publishing an arbitrary one of them is not a choice
+ * this action may make.
+ *
+ * Seeing the same release twice is not that. The releases endpoint is offset
+ * paginated, and `prepare` creates drafts immediately before re-reading the
+ * list, so a draft becoming visible between two page requests shifts every
+ * later entry down and returns whichever release sat on the page boundary on
+ * both pages. That is the same replication lag `waitForStagedState` already
+ * retries through, so failing on it converts a transient read into a failed
+ * release. Distinguishing the two cases by id keeps the ambiguity fatal and
+ * lets the retry absorb the shift.
+ *
+ * The opposite shift, an entry skipped rather than repeated, needs no handling
+ * here: a missing draft leaves its entry pending and the same retry re-reads.
+ */
 export const indexReleases = (pages) => {
   const releases = new Map();
   for (const page of pages) {
@@ -50,9 +67,11 @@ export const indexReleases = (pages) => {
       if (typeof release.tag_name !== "string" || !release.tag_name) {
         fail("GitHub release is missing its tag name.");
       }
-      if (releases.has(release.tag_name)) {
+      const seen = releases.get(release.tag_name);
+      if (seen && seen.id !== release.id) {
         fail(`GitHub returned duplicate releases for '${release.tag_name}'.`);
       }
+      if (seen) continue;
       releases.set(release.tag_name, {
         id: release.id,
         draft: release.draft,
