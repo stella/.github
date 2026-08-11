@@ -13,10 +13,10 @@ const indexOf = (text) => {
   return index;
 };
 
-test("version PR mutations use latest-run branch concurrency", () => {
+test("version PR mutations finish under branch concurrency", () => {
   assert.match(
     workflow,
-    /concurrency:\n {6}group: changeset-release-pr-\$\{\{ github\.ref \}\}\n {6}cancel-in-progress: true/,
+    /concurrency:\n {6}group: changeset-release-pr-\$\{\{ github\.ref \}\}\n {6}cancel-in-progress: false/,
   );
 });
 
