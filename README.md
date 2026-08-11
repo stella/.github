@@ -252,12 +252,12 @@ jobs:
 ```
 
 The caller must provide `changeset`, `changeset:version`, and a `.changeset/config.json`.
-The shared workflow serializes each target branch with latest-run concurrency and
-skips write-capable steps when its trigger commit is no longer the branch head. A
-current no-op run closes any stale version PR and deletes its generated branch, so
-interrupted runs converge without a duplicate release PR. Callers may use matching
-workflow-level concurrency to cancel obsolete setup work before the reusable job
-starts.
+The shared workflow serializes each target branch without interrupting an active
+release mutation, and skips write-capable steps when its trigger commit is no longer
+the branch head. A current no-op run closes any stale version PR and deletes its
+generated branch, so queued runs converge without a duplicate release PR. Callers
+should use matching workflow-level concurrency without cancellation; newer pushes
+replace obsolete pending runs while the active mutation finishes.
 
 For hybrid repositories, `changeset:version` must synchronize the selected package
 version into every npm, Cargo manifest, Python, and central `VERSION` surface. With
