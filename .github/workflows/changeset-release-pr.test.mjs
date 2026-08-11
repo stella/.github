@@ -13,6 +13,13 @@ const indexOf = (text) => {
   return index;
 };
 
+test("version PR mutations use latest-run branch concurrency", () => {
+  assert.match(
+    workflow,
+    /concurrency:\n {6}group: changeset-release-pr-\$\{\{ github\.ref \}\}\n {6}cancel-in-progress: true/,
+  );
+});
+
 test("Rust Wasm preparation is explicit and disabled by default", () => {
   const input = workflow.match(
     / {6}prepare-rust-wasm:\n[\s\S]+?(?= {4}secrets:)/,
