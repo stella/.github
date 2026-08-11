@@ -252,6 +252,12 @@ jobs:
 ```
 
 The caller must provide `changeset`, `changeset:version`, and a `.changeset/config.json`.
+Configure the caller's push workflow with one concurrency group per target branch and
+`cancel-in-progress: true`. The shared workflow skips write-capable steps when its
+trigger commit is no longer the branch head. A current no-op run closes any stale
+version PR and deletes its generated branch, so interrupted runs converge without a
+duplicate release PR.
+
 For hybrid repositories, `changeset:version` must synchronize the selected package
 version into every npm, Cargo manifest, Python, and central `VERSION` surface. With
 `sync-cargo-inherited-lock` enabled, the shared workflow validates the incoming

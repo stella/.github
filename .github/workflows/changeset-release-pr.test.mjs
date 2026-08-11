@@ -50,3 +50,45 @@ test("tool installation precedes the write-capable release credential", () => {
   const token = indexOf("name: Mint version PR token");
   assert.ok(preparation < token);
 });
+
+test("stale source revisions cannot mint credentials or mutate release PRs", () => {
+  const freshness = indexOf("name: Check release source is current");
+  const token = indexOf("name: Mint version PR token");
+  const release = indexOf("name: Create or update version packages PR");
+
+  assert.ok(freshness < token);
+  assert.ok(freshness < release);
+  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(
+    workflow,
+    /git\/ref\/heads\/\$GITHUB_REF_NAME[\s\S]+?if \[\[ "\$current_sha" == "\$GITHUB_SHA" \]\]/,
+  );
+  assert.match(
+    workflow,
+    /if: steps\.source\.outputs\.current == 'true'\n {8}name: Mint version PR token/,
+  );
+  assert.match(
+    workflow,
+    /if: steps\.source\.outputs\.current == 'true'\n {8}name: Create or update version packages PR/,
+  );
+});
+
+test("a current no-op run removes the stale release PR and branch", () => {
+  const cleanup = workflow.match(
+    / {6}- if: >-\n {10}steps\.source\.outputs\.current == 'true'[\s\S]+?(?=\n {6}- |\n\S|$)/,
+  )?.[0];
+
+  assert.ok(cleanup, "missing stale release cleanup step");
+  assert.match(
+    cleanup,
+    /steps\.changesets\.outputs\.pullRequestNumber == ''/,
+  );
+  assert.match(cleanup, /name: Remove stale version packages PR/);
+  assert.match(cleanup, /current_sha="\$\(\n {12}gh api/);
+  assert.match(cleanup, /if \[\[ "\$current_sha" != "\$GITHUB_SHA" \]\]/);
+  assert.match(cleanup, /-f base="\$BASE_BRANCH"/);
+  assert.match(cleanup, /-f head="\$owner:\$RELEASE_BRANCH"/);
+  assert.match(cleanup, /-f per_page=1/);
+  assert.match(cleanup, /-f state=closed/);
+  assert.match(cleanup, /git\/refs\/heads\/\$RELEASE_BRANCH/);
+});
