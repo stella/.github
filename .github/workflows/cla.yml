@@ -41,6 +41,10 @@ jobs:
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This archived action declares Node 20, so GitHub now forces it onto
+          # Node 24. Use the runner trust store for intermittent proxied TLS
+          # chains; certificate verification remains enabled.
+          NODE_OPTIONS: "--use-system-ca"
           PERSONAL_ACCESS_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           path-to-signatures: "signatures/cla.json"
