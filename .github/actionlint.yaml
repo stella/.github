@@ -7,3 +7,6 @@ paths:
     ignore:
       # SC2129: "Consider using { cmd1; cmd2; } >> file" - purely stylistic
       - 'shellcheck reported issue in this script: SC2129:.+'
+      # GitHub-hosted runners expose these called-workflow identity fields;
+      # actionlint 1.7.12 has not added them to its job context model yet.
+      - 'property "workflow_(?:repository|sha)" is not defined in object type'

@@ -68,14 +68,14 @@ jobs:
         shell: bash
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      # This immutable commit contains the implementation used by the v1.7.1
-      # workflow contract. Keeping the implementation pin explicit means a
-      # caller always runs the reviewed action code paired with this workflow.
+      # The job identity points at the called reusable workflow, unlike the
+      # top-level github context, which describes the caller. Check out the
+      # exact called-workflow commit so its action implementation cannot drift.
       - name: Checkout release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          repository: stella/.github
-          ref: e18d2d4b86cef9f29985b4fd68426ea43df16f1c
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .release-tooling
           persist-credentials: false
 
