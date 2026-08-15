@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  buildCreateReleaseArgs,
+  buildPublishReleaseArgs,
   listTarballs,
   resolveSourceSha,
   waitForStagedState,
@@ -12,6 +14,13 @@ import {
 
 const githubSha = "1".repeat(40);
 const sourceSha = "2".repeat(40);
+
+const assertLatestIsDisabled = (args) => {
+  assert.deepEqual(
+    args.filter((argument) => argument.startsWith("--latest")),
+    ["--latest=false"],
+  );
+};
 
 test("defaults release provenance to GITHUB_SHA", () => {
   assert.equal(resolveSourceSha({ githubSha }), githubSha);
@@ -26,6 +35,29 @@ test("rejects refs and abbreviated SHAs at the action boundary", () => {
     () => resolveSourceSha({ githubSha, sourceSha: "v1.2.3" }),
     /full lowercase commit SHA/,
   );
+});
+
+test("creates package drafts without claiming GitHub latest", () => {
+  const args = buildCreateReleaseArgs({
+    asset: "package.tgz",
+    notesPath: "/tmp/release-notes.md",
+    packageVersion: "1.2.3",
+    repository: "stella/example",
+    tag: "@stll/example@1.2.3",
+  });
+
+  assertLatestIsDisabled(args);
+  assert.ok(args.includes("--draft"));
+});
+
+test("publishes package drafts without claiming GitHub latest", () => {
+  const args = buildPublishReleaseArgs({
+    repository: "stella/example",
+    tag: "@stll/example@1.2.3",
+  });
+
+  assertLatestIsDisabled(args);
+  assert.ok(args.includes("--draft=false"));
 });
 
 test("discovers a single artifact extracted into the download directory", () => {

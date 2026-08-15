@@ -277,6 +277,42 @@ const notesFor = (entry) => {
   return releaseNotes({ pkg: entry.pkg, section, status: entry.status });
 };
 
+export const buildCreateReleaseArgs = ({
+  asset,
+  notesPath,
+  packageVersion,
+  repository,
+  tag,
+}) => {
+  const args = [
+    "release",
+    "create",
+    tag,
+    asset,
+    "--repo",
+    repository,
+    "--draft",
+    "--latest=false",
+    "--title",
+    tag,
+    "--notes-file",
+    notesPath,
+    "--verify-tag",
+  ];
+  if (packageVersion.includes("-")) args.push("--prerelease");
+  return args;
+};
+
+export const buildPublishReleaseArgs = ({ repository, tag }) => [
+  "release",
+  "edit",
+  tag,
+  "--repo",
+  repository,
+  "--draft=false",
+  "--latest=false",
+];
+
 const createDraft = ({
   asset,
   entry,
@@ -292,22 +328,16 @@ const createDraft = ({
   );
   mkdirSync(temporaryDirectory, { recursive: true });
   writeFileSync(notesPath, notes);
-  const args = [
-    "release",
-    "create",
-    entry.tag,
-    asset,
-    "--repo",
-    repository,
-    "--draft",
-    "--title",
-    entry.tag,
-    "--notes-file",
-    notesPath,
-    "--verify-tag",
-  ];
-  if (entry.pkg.version.includes("-")) args.push("--prerelease");
-  run("gh", args);
+  run(
+    "gh",
+    buildCreateReleaseArgs({
+      asset,
+      notesPath,
+      packageVersion: entry.pkg.version,
+      repository,
+      tag: entry.tag,
+    }),
+  );
 };
 
 const load = () => {
@@ -456,14 +486,13 @@ export const finalize = () => {
   }
   for (const entry of state.plan.entries) {
     if (entry.status === "publish-draft") {
-      run("gh", [
-        "release",
-        "edit",
-        entry.tag,
-        "--repo",
-        state.repository,
-        "--draft=false",
-      ]);
+      run(
+        "gh",
+        buildPublishReleaseArgs({
+          repository: state.repository,
+          tag: entry.tag,
+        }),
+      );
     }
   }
 
