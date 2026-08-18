@@ -324,7 +324,9 @@ partial runs resume; registry-only versions are repaired with the registry artif
 and release notes that do not claim a local rebuild was the originally uploaded file.
 Manual recovery can pass both `source-ref` and `artifact-run-id`; the shared workflow
 accepts the earlier artifacts only when that run used the resolved source commit and
-the same caller workflow path.
+the same caller workflow path. Pass `environment` when `RELEASE_APP_PRIVATE_KEY` is an
+environment secret; the release job then runs in that environment, so its deployment
+policy decides which refs can mint the token.
 
 Each package must have an adjacent `CHANGELOG.md` section headed `## <version>`.
 Uploaded artifacts may include checksum files, but each must contain exactly one

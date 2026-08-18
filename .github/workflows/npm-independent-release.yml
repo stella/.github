@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: ""
+      environment:
+        description: Optional caller environment holding the release App credentials; empty runs the job without one.
+        required: false
+        type: string
+        default: ""
     outputs:
       changed:
         description: Whether the run created or completed release state.
@@ -46,6 +51,10 @@ jobs:
     name: Publish packages
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Lets a caller keep RELEASE_APP_PRIVATE_KEY as an environment secret whose
+    # deployment policy limits the refs that can mint the token; an empty
+    # name runs without an environment.
+    environment: ${{ inputs.environment }}
     permissions:
       actions: read # Download exact artifacts from a verified recovery run.
       contents: write # Create immutable package tags and GitHub releases.
