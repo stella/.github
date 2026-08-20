@@ -194,8 +194,13 @@ jobs:
   update:
     uses: stella/.github/.github/workflows/ai-shared-update.yml@<commit-sha>
     with:
+      runs-on: '["self-hosted","linux","x64"]'
       validation-workflow: ci.yml
 ```
+
+`runs-on` accepts a JSON runner label array and defaults to
+`["ubuntu-latest"]` when omitted. Only select self-hosted runners trusted with
+the workflow's declared permissions and secrets.
 
 The caller must enable GitHub Actions to create pull requests when relying on the
 repository `GITHUB_TOKEN`. Alternatively, pass `auth_token`, or `app_id` plus
@@ -247,9 +252,14 @@ jobs:
     uses: stella/.github/.github/workflows/changeset-release-pr.yml@<commit-sha>
     with:
       prepare-rust-wasm: true
+      runs-on: '["self-hosted","linux","x64"]'
       sync-cargo-inherited-lock: true
     secrets: inherit
 ```
+
+`runs-on` accepts a JSON runner label array and defaults to
+`["ubuntu-latest"]` when omitted. Only select self-hosted runners trusted with
+the workflow's declared permissions and secrets.
 
 The caller must provide `changeset`, `changeset:version`, and a `.changeset/config.json`.
 The shared workflow serializes each target branch without interrupting an active

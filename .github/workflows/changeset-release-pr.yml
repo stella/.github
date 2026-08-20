@@ -3,6 +3,11 @@ name: Changeset release PR
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: "Runner labels as a JSON array"
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
       bun-version-file:
         description: package.json containing the Bun version used by the repository.
         required: false
@@ -56,7 +61,7 @@ permissions:
 jobs:
   version:
     name: Maintain version packages PR
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     concurrency:
       group: changeset-release-pr-${{ github.ref }}
