@@ -403,7 +403,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.validate.outputs.changed == 'true' && inputs.publish-to-npm
-        uses: stella/.github/.github/actions/npm-publish-hardened@905280fd96d464a343fd3bf6be20af9ef3f399fb
+        uses: stella/.github/.github/actions/npm-publish-hardened@48aacae31829ce15216a6b766b03a92fd2e84da3
         with:
           tarballs: ${{ steps.validate.outputs.tarballs }}
           tag: ${{ steps.validate.outputs.dist_tag }}
@@ -470,7 +470,7 @@ jobs:
       inputs.update-changelog
       && inputs.publish-to-npm
       && needs.finalize.outputs.changed == 'true'
-    uses: stella/.github/.github/workflows/changelog-update.yml@905280fd96d464a343fd3bf6be20af9ef3f399fb
+    uses: stella/.github/.github/workflows/changelog-update.yml@48aacae31829ce15216a6b766b03a92fd2e84da3
     with:
       tag: ${{ needs.finalize.outputs.tag }}
     permissions:

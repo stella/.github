@@ -70,6 +70,26 @@ test("GitHub App tokens use the supported client-id input", () => {
   assert.doesNotMatch(workflow, /^\s+app-id:/m);
 });
 
+test("changesets/action uses the v2 interface", () => {
+  const changesets = workflow.match(
+    / {6}- if: steps\.source\.outputs\.current == 'true'\n {8}name: Create or update version packages PR[\s\S]+?(?=\n {6}- |\n\S|$)/,
+  )?.[0];
+
+  assert.ok(changesets, "missing changesets/action step");
+  assert.match(changesets, /uses: changesets\/action@[0-9a-f]{40} # v2\.1\.0/);
+  assert.match(
+    changesets,
+    /github-token: \$\{\{ steps\.app-token\.outputs\.token \}\}/,
+  );
+  assert.match(
+    changesets,
+    /version-script: bash \$\{\{ steps\.version-command\.outputs\.path \}\}/,
+  );
+  assert.match(changesets, /pr-title: \$\{\{ inputs\.title \}\}/);
+  assert.match(changesets, /commit-message: \$\{\{ inputs\.commit \}\}/);
+  assert.doesNotMatch(changesets, /GITHUB_TOKEN:/);
+});
+
 test("stale source revisions cannot mint credentials or mutate release PRs", () => {
   const freshness = indexOf("name: Check release source is current");
   const token = indexOf("name: Mint version PR token");
@@ -98,10 +118,7 @@ test("a current no-op run removes the stale release PR and branch", () => {
   )?.[0];
 
   assert.ok(cleanup, "missing stale release cleanup step");
-  assert.match(
-    cleanup,
-    /steps\.changesets\.outputs\.pullRequestNumber == ''/,
-  );
+  assert.match(cleanup, /steps\.changesets\.outputs\.pr-number == ''/);
   assert.match(cleanup, /name: Remove stale version packages PR/);
   assert.match(cleanup, /current_sha="\$\(\n {12}gh api/);
   assert.match(cleanup, /if \[\[ "\$current_sha" != "\$GITHUB_SHA" \]\]/);
