@@ -76,7 +76,7 @@ test("changesets/action uses the v2 interface", () => {
   )?.[0];
 
   assert.ok(changesets, "missing changesets/action step");
-  assert.match(changesets, /uses: changesets\/action@[0-9a-f]{40} # v2\.1\.0/);
+  assert.match(changesets, /uses: changesets\/action@[0-9a-f]{40} # v2\.1\.1/);
   assert.match(
     changesets,
     /github-token: \$\{\{ steps\.app-token\.outputs\.token \}\}/,
