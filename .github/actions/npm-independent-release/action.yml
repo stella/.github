@@ -20,6 +20,10 @@ inputs:
     description: npm dist-tag used for newly published versions.
     required: false
     default: latest
+  github-latest-policy:
+    description: GitHub Latest policy; preserve or newest-published-stable.
+    required: false
+    default: preserve
   github-token:
     description: Token with contents write permission for tags and releases.
     required: true
@@ -63,6 +67,7 @@ runs:
         ARTIFACT_DIRECTORY: release-artifacts
         DIST_TAG: ${{ inputs.dist-tag }}
         GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_LATEST_POLICY: ${{ inputs.github-latest-policy }}
         PACKAGE_FILES: ${{ inputs.package-files }}
         SOURCE_SHA: ${{ inputs.source-sha }}
       run: node "$GITHUB_ACTION_PATH/prepare.mjs"
@@ -79,6 +84,7 @@ runs:
       env:
         ARTIFACT_DIRECTORY: release-artifacts
         GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_LATEST_POLICY: ${{ inputs.github-latest-policy }}
         PACKAGE_FILES: ${{ inputs.package-files }}
         SOURCE_SHA: ${{ inputs.source-sha }}
       run: node "$GITHUB_ACTION_PATH/finalize.mjs"

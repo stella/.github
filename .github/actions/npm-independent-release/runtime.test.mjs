@@ -6,9 +6,12 @@ import test from "node:test";
 
 import {
   buildCreateReleaseArgs,
+  buildMarkLatestArgs,
   buildPublishReleaseArgs,
   listTarballs,
   resolveSourceSha,
+  selectLatestReleaseEntry,
+  validateGithubLatestPolicy,
   waitForStagedState,
 } from "./runtime.mjs";
 
@@ -58,6 +61,94 @@ test("publishes package drafts without claiming GitHub latest", () => {
 
   assertLatestIsDisabled(args);
   assert.ok(args.includes("--draft=false"));
+});
+
+test("validates GitHub Latest policy at the action boundary", () => {
+  assert.equal(validateGithubLatestPolicy("preserve"), "preserve");
+  assert.equal(
+    validateGithubLatestPolicy("newest-published-stable"),
+    "newest-published-stable",
+  );
+  assert.throws(
+    () => validateGithubLatestPolicy("latest"),
+    /Invalid GitHub Latest policy/,
+  );
+});
+
+test("preserves the repository Latest pointer by default", () => {
+  assert.equal(
+    selectLatestReleaseEntry({
+      entries: [],
+      head: sourceSha,
+      policy: "preserve",
+    }),
+    null,
+  );
+});
+
+test("selects the last stable release created from the release commit", () => {
+  const entries = [
+    {
+      pkg: { version: "1.0.0" },
+      tag: "@stll/old@1.0.0",
+      tagTarget: githubSha,
+    },
+    {
+      pkg: { version: "2.0.0-beta.1" },
+      tag: "@stll/prerelease@2.0.0-beta.1",
+      tagTarget: sourceSha,
+    },
+    {
+      pkg: { version: "3.0.0" },
+      tag: "@stll/first@3.0.0",
+      tagTarget: sourceSha,
+    },
+    {
+      pkg: { version: "4.0.0" },
+      tag: "@stll/latest@4.0.0",
+      tagTarget: sourceSha,
+    },
+  ];
+
+  assert.equal(
+    selectLatestReleaseEntry({
+      entries,
+      head: sourceSha,
+      policy: "newest-published-stable",
+    })?.tag,
+    "@stll/latest@4.0.0",
+  );
+  assert.deepEqual(
+    buildMarkLatestArgs({
+      repository: "stella/example",
+      tag: "@stll/latest@4.0.0",
+    }),
+    [
+      "release",
+      "edit",
+      "@stll/latest@4.0.0",
+      "--repo",
+      "stella/example",
+      "--latest=true",
+    ],
+  );
+});
+
+test("does not promote prereleases from the release commit", () => {
+  assert.equal(
+    selectLatestReleaseEntry({
+      entries: [
+        {
+          pkg: { version: "2.0.0-beta.1" },
+          tag: "@stll/prerelease@2.0.0-beta.1",
+          tagTarget: sourceSha,
+        },
+      ],
+      head: sourceSha,
+      policy: "newest-published-stable",
+    }),
+    null,
+  );
 });
 
 test("discovers a single artifact extracted into the download directory", () => {
