@@ -3,6 +3,11 @@ name: AI Shared Update
 on:
   workflow_call:
     inputs:
+      runs-on:
+        description: "Runner labels as a JSON array"
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
       ref:
         description: "Branch or tag in stella/ai-shared to adopt"
         required: false
@@ -56,7 +61,7 @@ permissions:
 
 jobs:
   update:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     env:
       HAS_AUTH_TOKEN: ${{ secrets.auth_token != '' }}
