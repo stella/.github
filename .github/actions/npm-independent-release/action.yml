@@ -21,9 +21,13 @@ inputs:
     required: false
     default: latest
   github-latest-policy:
-    description: GitHub Latest policy; preserve or newest-published-stable.
+    description: GitHub Latest policy; preserve, newest-published-stable, or canonical-package.
     required: false
     default: preserve
+  github-latest-package:
+    description: Canonical npm package promoted by the canonical-package policy.
+    required: false
+    default: ""
   github-token:
     description: Token with contents write permission for tags and releases.
     required: true
@@ -67,6 +71,7 @@ runs:
         ARTIFACT_DIRECTORY: release-artifacts
         DIST_TAG: ${{ inputs.dist-tag }}
         GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_LATEST_PACKAGE: ${{ inputs.github-latest-package }}
         GITHUB_LATEST_POLICY: ${{ inputs.github-latest-policy }}
         PACKAGE_FILES: ${{ inputs.package-files }}
         SOURCE_SHA: ${{ inputs.source-sha }}
@@ -84,6 +89,7 @@ runs:
       env:
         ARTIFACT_DIRECTORY: release-artifacts
         GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_LATEST_PACKAGE: ${{ inputs.github-latest-package }}
         GITHUB_LATEST_POLICY: ${{ inputs.github-latest-policy }}
         PACKAGE_FILES: ${{ inputs.package-files }}
         SOURCE_SHA: ${{ inputs.source-sha }}

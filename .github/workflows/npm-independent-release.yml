@@ -23,10 +23,15 @@ on:
         type: string
         default: latest
       github-latest-policy:
-        description: GitHub Latest policy; preserve or newest-published-stable.
+        description: GitHub Latest policy; preserve, newest-published-stable, or canonical-package.
         required: false
         type: string
         default: preserve
+      github-latest-package:
+        description: Canonical npm package promoted by the canonical-package policy.
+        required: false
+        type: string
+        default: ""
       source-ref:
         description: Optional caller commit or ref whose manifests and changelogs match the artifacts.
         required: false
@@ -122,6 +127,7 @@ jobs:
           artifact-run-id: ${{ inputs.artifact-run-id }}
           artifact-token: ${{ github.token }}
           dist-tag: ${{ inputs.dist-tag }}
+          github-latest-package: ${{ inputs.github-latest-package }}
           github-latest-policy: ${{ inputs.github-latest-policy }}
           github-token: ${{ steps.release-token.outputs.token || github.token }}
           source-sha: ${{ steps.source.outputs.sha }}
