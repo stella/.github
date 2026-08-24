@@ -11,6 +11,7 @@ import {
   listTarballs,
   resolveSourceSha,
   selectLatestReleaseEntry,
+  validateGithubLatestConfiguration,
   validateGithubLatestPolicy,
   waitForStagedState,
 } from "./runtime.mjs";
@@ -66,12 +67,41 @@ test("publishes package drafts without claiming GitHub latest", () => {
 test("validates GitHub Latest policy at the action boundary", () => {
   assert.equal(validateGithubLatestPolicy("preserve"), "preserve");
   assert.equal(
+    validateGithubLatestPolicy("canonical-package"),
+    "canonical-package",
+  );
+  assert.equal(
     validateGithubLatestPolicy("newest-published-stable"),
     "newest-published-stable",
   );
   assert.throws(
     () => validateGithubLatestPolicy("latest"),
     /Invalid GitHub Latest policy/,
+  );
+});
+
+test("requires an explicit package only for the canonical policy", () => {
+  assert.doesNotThrow(() =>
+    validateGithubLatestConfiguration({
+      packageName: "@stll/core",
+      policy: "canonical-package",
+    }),
+  );
+  assert.throws(
+    () =>
+      validateGithubLatestConfiguration({
+        packageName: "",
+        policy: "canonical-package",
+      }),
+    /GITHUB_LATEST_PACKAGE is required/,
+  );
+  assert.throws(
+    () =>
+      validateGithubLatestConfiguration({
+        packageName: "@stll/core",
+        policy: "preserve",
+      }),
+    /requires the canonical-package/,
   );
 });
 
@@ -131,6 +161,84 @@ test("selects the last stable release created from the release commit", () => {
       "stella/example",
       "--latest=true",
     ],
+  );
+});
+
+test("selects the canonical stable package independently of entry order", () => {
+  const entries = [
+    {
+      pkg: { name: "@stll/core", version: "4.0.0" },
+      status: "complete",
+      tag: "@stll/core@4.0.0",
+      tagTarget: githubSha,
+    },
+    {
+      pkg: { name: "@stll/vue", version: "5.0.0" },
+      status: "complete",
+      tag: "@stll/vue@5.0.0",
+      tagTarget: sourceSha,
+    },
+  ];
+
+  for (const orderedEntries of [entries, entries.toReversed()]) {
+    assert.equal(
+      selectLatestReleaseEntry({
+        entries: orderedEntries,
+        head: sourceSha,
+        packageName: "@stll/core",
+        policy: "canonical-package",
+      })?.tag,
+      "@stll/core@4.0.0",
+    );
+  }
+});
+
+test("fails closed when the canonical release is missing or incomplete", () => {
+  assert.throws(
+    () =>
+      selectLatestReleaseEntry({
+        entries: [],
+        head: sourceSha,
+        packageName: "@stll/core",
+        policy: "canonical-package",
+      }),
+    /matched 0 release entries/,
+  );
+  assert.throws(
+    () =>
+      selectLatestReleaseEntry({
+        entries: [
+          {
+            pkg: { name: "@stll/core", version: "4.0.0" },
+            status: "publish-draft",
+            tag: "@stll/core@4.0.0",
+            tagTarget: sourceSha,
+          },
+        ],
+        head: sourceSha,
+        packageName: "@stll/core",
+        policy: "canonical-package",
+      }),
+    /is not complete/,
+  );
+});
+
+test("preserves Latest when the canonical package is a prerelease", () => {
+  assert.equal(
+    selectLatestReleaseEntry({
+      entries: [
+        {
+          pkg: { name: "@stll/core", version: "4.0.0-beta.1" },
+          status: "complete",
+          tag: "@stll/core@4.0.0-beta.1",
+          tagTarget: sourceSha,
+        },
+      ],
+      head: sourceSha,
+      packageName: "@stll/core",
+      policy: "canonical-package",
+    }),
+    null,
   );
 });
 

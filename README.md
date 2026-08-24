@@ -308,7 +308,8 @@ jobs:
     uses: stella/.github/.github/workflows/npm-independent-release.yml@<commit-sha>
     with:
       artifact-pattern: npm-tarball-*
-      github-latest-policy: newest-published-stable
+      github-latest-package: "@scope/core"
+      github-latest-policy: canonical-package
       package-files: |
         packages/core/package.json
         packages/react/package.json
@@ -324,10 +325,12 @@ the draft releases public. Existing complete versions are immutable no-ops. Safe
 partial runs resume; registry-only versions are repaired with the registry artifact
 and release notes that do not claim a local rebuild was the originally uploaded file.
 Package releases preserve the repository's existing GitHub Latest pointer by default.
-Package-only repositories can set `github-latest-policy` to
-`newest-published-stable`; after the transaction is complete, the last stable package
-release created from that release commit becomes Latest. Prereleases are never
-eligible.
+Repositories with one canonical package can set `github-latest-policy` to
+`canonical-package` and name it with `github-latest-package`; after the transaction is
+complete, that package's stable release becomes Latest regardless of dependency or
+publication order. Package-only repositories can instead use
+`newest-published-stable` to promote the last stable package release created from the
+release commit. Prereleases are never eligible.
 Manual recovery can pass both `source-ref` and `artifact-run-id`; the shared workflow
 accepts the earlier artifacts only when that run used the resolved source commit and
 the same caller workflow path. Pass `environment` when `RELEASE_APP_PRIVATE_KEY` is an

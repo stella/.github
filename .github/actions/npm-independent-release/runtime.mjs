@@ -30,6 +30,7 @@ const STAGING_RECHECK_DELAYS_MILLISECONDS = [
   1_000, 2_000, 4_000, 8_000, 15_000,
 ];
 const GITHUB_LATEST_POLICIES = new Set([
+  "canonical-package",
   "preserve",
   "newest-published-stable",
 ]);
@@ -333,9 +334,39 @@ export const validateGithubLatestPolicy = (policy) => {
   return policy;
 };
 
-export const selectLatestReleaseEntry = ({ entries, head, policy }) => {
+export const validateGithubLatestConfiguration = ({ packageName, policy }) => {
   validateGithubLatestPolicy(policy);
+  if (policy === "canonical-package" && !packageName) {
+    fail("GITHUB_LATEST_PACKAGE is required for the canonical-package policy.");
+  }
+  if (policy !== "canonical-package" && packageName) {
+    fail(
+      "GITHUB_LATEST_PACKAGE requires the canonical-package GitHub Latest policy.",
+    );
+  }
+};
+
+export const selectLatestReleaseEntry = ({
+  entries,
+  head,
+  packageName,
+  policy,
+}) => {
+  validateGithubLatestConfiguration({ packageName, policy });
   if (policy === "preserve") return null;
+  if (policy === "canonical-package") {
+    const matches = entries.filter((entry) => entry.pkg.name === packageName);
+    if (matches.length !== 1) {
+      fail(
+        `Canonical GitHub Latest package '${packageName}' matched ${matches.length} release entries.`,
+      );
+    }
+    const [entry] = matches;
+    if (entry.status !== "complete") {
+      fail(`Canonical GitHub Latest release ${entry.tag} is not complete.`);
+    }
+    return entry.pkg.version.includes("-") ? null : entry;
+  }
   return (
     entries
       .filter(
@@ -444,7 +475,10 @@ export const waitForStagedState = async ({
 
 export const prepare = async () => {
   validateDistTag(process.env.DIST_TAG);
-  validateGithubLatestPolicy(process.env.GITHUB_LATEST_POLICY);
+  validateGithubLatestConfiguration({
+    packageName: process.env.GITHUB_LATEST_PACKAGE,
+    policy: process.env.GITHUB_LATEST_POLICY,
+  });
   const state = load();
   const temporaryDirectory = join(
     process.env.RUNNER_TEMP,
@@ -497,9 +531,12 @@ export const prepare = async () => {
 };
 
 export const finalize = () => {
-  const latestPolicy = validateGithubLatestPolicy(
-    process.env.GITHUB_LATEST_POLICY,
-  );
+  const latestPackage = process.env.GITHUB_LATEST_PACKAGE;
+  const latestPolicy = process.env.GITHUB_LATEST_POLICY;
+  validateGithubLatestConfiguration({
+    packageName: latestPackage,
+    policy: latestPolicy,
+  });
   const packages = readPackages(lines(process.env.PACKAGE_FILES));
   for (const pkg of packages) {
     let visible = false;
@@ -541,6 +578,7 @@ export const finalize = () => {
   const latestEntry = selectLatestReleaseEntry({
     entries: completed.plan.entries,
     head: completed.head,
+    packageName: latestPackage,
     policy: latestPolicy,
   });
   if (latestEntry) {
