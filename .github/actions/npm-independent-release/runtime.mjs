@@ -29,6 +29,10 @@ const MAX_BUFFER = 512 * 1024 * 1024;
 const STAGING_RECHECK_DELAYS_MILLISECONDS = [
   1_000, 2_000, 4_000, 8_000, 15_000,
 ];
+const GITHUB_LATEST_POLICIES = new Set([
+  "preserve",
+  "newest-published-stable",
+]);
 
 const fail = (message) => {
   throw new Error(message);
@@ -313,6 +317,35 @@ export const buildPublishReleaseArgs = ({ repository, tag }) => [
   "--latest=false",
 ];
 
+export const buildMarkLatestArgs = ({ repository, tag }) => [
+  "release",
+  "edit",
+  tag,
+  "--repo",
+  repository,
+  "--latest=true",
+];
+
+export const validateGithubLatestPolicy = (policy) => {
+  if (!GITHUB_LATEST_POLICIES.has(policy)) {
+    fail(`Invalid GitHub Latest policy '${policy}'.`);
+  }
+  return policy;
+};
+
+export const selectLatestReleaseEntry = ({ entries, head, policy }) => {
+  validateGithubLatestPolicy(policy);
+  if (policy === "preserve") return null;
+  return (
+    entries
+      .filter(
+        (entry) =>
+          entry.tagTarget === head && !entry.pkg.version.includes("-"),
+      )
+      .at(-1) ?? null
+  );
+};
+
 const createDraft = ({
   asset,
   entry,
@@ -411,6 +444,7 @@ export const waitForStagedState = async ({
 
 export const prepare = async () => {
   validateDistTag(process.env.DIST_TAG);
+  validateGithubLatestPolicy(process.env.GITHUB_LATEST_POLICY);
   const state = load();
   const temporaryDirectory = join(
     process.env.RUNNER_TEMP,
@@ -463,6 +497,9 @@ export const prepare = async () => {
 };
 
 export const finalize = () => {
+  const latestPolicy = validateGithubLatestPolicy(
+    process.env.GITHUB_LATEST_POLICY,
+  );
   const packages = readPackages(lines(process.env.PACKAGE_FILES));
   for (const pkg of packages) {
     let visible = false;
@@ -500,5 +537,19 @@ export const finalize = () => {
   for (const entry of completed.plan.entries) {
     if (entry.status !== "complete")
       fail(`${entry.tag} did not reach complete state.`);
+  }
+  const latestEntry = selectLatestReleaseEntry({
+    entries: completed.plan.entries,
+    head: completed.head,
+    policy: latestPolicy,
+  });
+  if (latestEntry) {
+    run(
+      "gh",
+      buildMarkLatestArgs({
+        repository: completed.repository,
+        tag: latestEntry.tag,
+      }),
+    );
   }
 };

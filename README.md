@@ -308,6 +308,7 @@ jobs:
     uses: stella/.github/.github/workflows/npm-independent-release.yml@<commit-sha>
     with:
       artifact-pattern: npm-tarball-*
+      github-latest-policy: newest-published-stable
       package-files: |
         packages/core/package.json
         packages/react/package.json
@@ -322,6 +323,11 @@ missing from npm, verifies the release asset against npm `dist.integrity`, then 
 the draft releases public. Existing complete versions are immutable no-ops. Safe
 partial runs resume; registry-only versions are repaired with the registry artifact
 and release notes that do not claim a local rebuild was the originally uploaded file.
+Package releases preserve the repository's existing GitHub Latest pointer by default.
+Package-only repositories can set `github-latest-policy` to
+`newest-published-stable`; after the transaction is complete, the last stable package
+release created from that release commit becomes Latest. Prereleases are never
+eligible.
 Manual recovery can pass both `source-ref` and `artifact-run-id`; the shared workflow
 accepts the earlier artifacts only when that run used the resolved source commit and
 the same caller workflow path. Pass `environment` when `RELEASE_APP_PRIVATE_KEY` is an
