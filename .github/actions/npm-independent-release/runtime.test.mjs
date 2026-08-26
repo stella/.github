@@ -13,6 +13,7 @@ import {
   selectLatestReleaseEntry,
   validateGithubLatestConfiguration,
   validateGithubLatestPolicy,
+  waitForNpmPackages,
   waitForStagedState,
 } from "./runtime.mjs";
 
@@ -350,4 +351,44 @@ test("keeps an unresolved staged release after bounded retries", async () => {
   assert.equal(result.plan.entries[0].status, "repair-release");
   assert.equal(reads, 3);
   assert.deepEqual(waits, [10, 20]);
+});
+
+test("waits through two minutes of npm registry propagation", async () => {
+  const packages = [
+    { name: "@stll/core", version: "1.0.0" },
+    { name: "@stll/vue", version: "1.0.0" },
+  ];
+  let elapsed = 0;
+  const reads = new Map();
+
+  const missing = await waitForNpmPackages({
+    packages,
+    readNpmState: (name) => {
+      reads.set(name, (reads.get(name) ?? 0) + 1);
+      return { exists: name === "@stll/core" || elapsed >= 120_000 };
+    },
+    wait: (delay) => {
+      elapsed += delay;
+    },
+  });
+
+  assert.deepEqual(missing, []);
+  assert.ok(elapsed >= 120_000);
+  assert.equal(reads.get("@stll/core"), 1);
+});
+
+test("reports only versions still missing after the visibility window", async () => {
+  const packages = [
+    { name: "@stll/core", version: "1.0.0" },
+    { name: "@stll/vue", version: "1.0.0" },
+  ];
+
+  const missing = await waitForNpmPackages({
+    packages,
+    readNpmState: (name) => ({ exists: name === "@stll/core" }),
+    recheckDelays: [10, 20],
+    wait: () => {},
+  });
+
+  assert.deepEqual(missing, [{ name: "@stll/vue", version: "1.0.0" }]);
 });
