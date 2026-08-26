@@ -10,6 +10,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 |----------|-------------|
 | `pr-lint.yml` | PR linting: conventional commits, labels, auto-assign |
 | `base-checks.yml` | Composite workflow calling pr-lint |
+| `dependabot-bun-dedupe.yml` | Dedupe Bun lockfiles on trusted Dependabot pull requests |
 | `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
 | `ai-shared-update.yml` | Update the pinned `stella/ai-shared` submodule, regenerate consumers, and open a PR |
 | `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
@@ -38,6 +39,38 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 ---
 
 ## Usage
+
+### Dependabot Bun Dedupe
+
+Keep the pull request trigger and the required `autofix.ci` workflow name in the
+calling repository. Install the autofix.ci GitHub App for the caller, then pin the
+shared workflow to a reviewed commit:
+
+```yaml
+# .github/workflows/autofix.yml
+name: autofix.ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - bun.lock
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependabot-bun-dedupe:
+    uses: stella/.github/.github/workflows/dependabot-bun-dedupe.yml@<commit-sha>
+```
+
+The shared workflow accepts only same-repository Dependabot branches under
+`dependabot/bun/`. It runs Bun's lockfile-only dedupe and rejects changes outside
+`bun.lock` before passing the patch to autofix.ci.
 
 ### Base Checks (Recommended)
 
