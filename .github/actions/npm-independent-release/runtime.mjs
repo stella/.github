@@ -453,6 +453,9 @@ const pendingStagingEntries = (state) =>
       entry.status === "repair-release",
   );
 
+const sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 export const waitForStagedState = async ({
   loadState = load,
   recheckDelays = STAGING_RECHECK_DELAYS_MILLISECONDS,
