@@ -11,6 +11,7 @@ import {
 import { basename, join } from "node:path";
 import process from "node:process";
 
+import { waitForNpmPackages } from "../npm-visibility/wait.mjs";
 import {
   artifactReleaseName,
   changelogSection,
@@ -28,11 +29,6 @@ import {
 const MAX_BUFFER = 512 * 1024 * 1024;
 const STAGING_RECHECK_DELAYS_MILLISECONDS = [
   1_000, 2_000, 4_000, 8_000, 15_000,
-];
-// npm can acknowledge a publish before every registry edge exposes the new
-// version. Keep one shared five-minute visibility budget for the release set.
-const NPM_VISIBILITY_RECHECK_DELAYS_MILLISECONDS = [
-  5_000, 10_000, 15_000, 30_000, 60_000, 60_000, 60_000, 60_000,
 ];
 const GITHUB_LATEST_POLICIES = new Set([
   "canonical-package",
@@ -478,28 +474,6 @@ export const waitForStagedState = async ({
   return state;
 };
 
-export const waitForNpmPackages = async ({
-  packages,
-  readNpmState = npmState,
-  recheckDelays = NPM_VISIBILITY_RECHECK_DELAYS_MILLISECONDS,
-  wait = sleep,
-}) => {
-  let missing = packages.filter(
-    (pkg) => !readNpmState(pkg.name, pkg.version).exists,
-  );
-  for (const delay of recheckDelays) {
-    if (missing.length === 0) return missing;
-    console.log(
-      `::notice::Waiting ${delay}ms for npm to expose published versions: ${missing.map((pkg) => `${pkg.name}@${pkg.version}`).join(", ")}`,
-    );
-    await wait(delay);
-    missing = missing.filter(
-      (pkg) => !readNpmState(pkg.name, pkg.version).exists,
-    );
-  }
-  return missing;
-};
-
 export const prepare = async () => {
   validateDistTag(process.env.DIST_TAG);
   validateGithubLatestConfiguration({
@@ -565,7 +539,10 @@ export const finalize = async () => {
     policy: latestPolicy,
   });
   const packages = readPackages(lines(process.env.PACKAGE_FILES));
-  const missingPackages = await waitForNpmPackages({ packages });
+  const missingPackages = await waitForNpmPackages({
+    packages,
+    readNpmState: npmState,
+  });
   for (const pkg of missingPackages) {
     fail(`npm is still missing ${pkg.name}@${pkg.version}.`);
   }
