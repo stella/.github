@@ -213,6 +213,31 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
   });
 
+  test("accepts approved GitHub-hosted runtime matrices", () => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest, macos-15, windows-latest]\n    steps:",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test("accepts approved GitHub-hosted include matrices", () => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      "    runs-on: ${{ matrix.runner }}\n    strategy:\n      matrix:\n        include:\n          - runner: ubuntu-24.04-arm\n          - runner: macos-15-intel\n          - runner: windows-2025\n    steps:",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test.each([
+    "    runs-on: self-hosted\n",
+    "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest, self-hosted]\n",
+    "    runs-on: ${{ matrix.runner }}\n    strategy:\n      matrix:\n        include:\n          - runner: ubuntu-24.04\n          - runner: self-hosted\n",
+  ])("rejects non-hosted runtime runners", (runner) => {
+    const workflow = base.replace("    runs-on: ubuntu-latest\n", runner);
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
   test.each([
     [
       "node-version: 22.21.1",

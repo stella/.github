@@ -11,6 +11,15 @@ const BUN_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"
 const NODE_SETUP_INPUTS = new Set(["node-version", "registry-url"]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
+const HOSTED_RUNTIME_RUNNERS = new Set([
+  "ubuntu-latest",
+  "ubuntu-24.04",
+  "ubuntu-24.04-arm",
+  "macos-15",
+  "macos-15-intel",
+  "windows-latest",
+  "windows-2025",
+]);
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -91,6 +100,69 @@ const walkUses = (value: unknown, path = "workflow") => {
       assertPinnedUses(entry, `${path}.uses`);
     }
     walkUses(entry, `${path}.${key}`);
+  }
+};
+
+const validateRuntimeRunner = (job: JsonObject, path: string) => {
+  const runnerValue = job["runs-on"];
+  if (typeof runnerValue !== "string" || runnerValue.trim().length === 0) {
+    fail(`${path}.runs-on must be a runner label or approved matrix expression`);
+  }
+  const runner = runnerValue.trim();
+  if (HOSTED_RUNTIME_RUNNERS.has(runner)) {
+    return;
+  }
+  if (
+    runner !== "${{ matrix.os }}" &&
+    runner !== "${{ matrix.runner }}" &&
+    runner !== "${{ matrix.settings.os }}"
+  ) {
+    fail(`${path}.runs-on must select an approved GitHub-hosted runner`);
+  }
+  const strategy = object(job.strategy, `${path}.strategy`);
+  const matrix = object(strategy.matrix, `${path}.strategy.matrix`);
+  if (runner === "${{ matrix.os }}") {
+    if (
+      !Array.isArray(matrix.os) ||
+      matrix.os.length === 0 ||
+      matrix.os.some((value) => typeof value !== "string" || !HOSTED_RUNTIME_RUNNERS.has(value))
+    ) {
+      fail(`${path}.strategy.matrix.os must contain only approved GitHub-hosted runners`);
+    }
+    return;
+  }
+  if (runner === "${{ matrix.runner }}") {
+    const candidates = Array.isArray(matrix.runner)
+      ? matrix.runner
+      : Array.isArray(matrix.include)
+        ? matrix.include
+            .map((value, index) =>
+              object(value, `${path}.strategy.matrix.include[${index}]`),
+            )
+            .map(({ runner: value }) => value)
+        : [];
+    if (
+      candidates.length === 0 ||
+      candidates.some(
+        (value) => typeof value !== "string" || !HOSTED_RUNTIME_RUNNERS.has(value),
+      )
+    ) {
+      fail(`${path}.strategy.matrix.runner must contain only approved GitHub-hosted runners`);
+    }
+    return;
+  }
+  if (runner === "${{ matrix.settings.os }}") {
+    if (
+      !Array.isArray(matrix.settings) ||
+      matrix.settings.length === 0 ||
+      matrix.settings.some((value, index) => {
+        const settings = object(value, `${path}.strategy.matrix.settings[${index}]`);
+        return typeof settings.os !== "string" || !HOSTED_RUNTIME_RUNNERS.has(settings.os);
+      })
+    ) {
+      fail(`${path}.strategy.matrix.settings must contain only approved GitHub-hosted runners`);
+    }
+    return;
   }
 };
 
@@ -175,6 +247,7 @@ const validateRuntimeSetups = (
       );
     })
   ) {
+    validateRuntimeRunner(entry, path);
     if ("container" in entry) {
       fail(`${path}.container must not wrap runtime setup`);
     }
