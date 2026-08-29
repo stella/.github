@@ -96,6 +96,31 @@ const validateRuntimeSetups = (
   path = "workflow",
 ) => {
   if (Array.isArray(value)) {
+    value.forEach((rawEntry, index) => {
+      if (rawEntry === null || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+        return;
+      }
+      const entry = rawEntry as JsonObject;
+      if (
+        typeof entry.uses !== "string" ||
+        !entry.uses.toLowerCase().startsWith("oven-sh/setup-bun@")
+      ) {
+        return;
+      }
+      const inputs = entry.with === undefined ? {} : object(entry.with, `${path}[${index}].with`);
+      if (!("bun-version-file" in inputs)) {
+        return;
+      }
+      for (const [precedingIndex, rawPreceding] of value.slice(0, index).entries()) {
+        const preceding = object(rawPreceding, `${path}[${precedingIndex}]`);
+        const action = typeof preceding.uses === "string" ? preceding.uses.toLowerCase() : "";
+        if (!action.startsWith("actions/checkout@")) {
+          fail(
+            `${path}[${index}].with.bun-version-file must be consumed before mutable steps`,
+          );
+        }
+      }
+    });
     value.forEach((entry, index) =>
       validateRuntimeSetups(entry, readRepositoryFile, `${path}[${index}]`),
     );

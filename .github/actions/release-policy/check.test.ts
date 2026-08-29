@@ -16,12 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@${"2".repeat(40)}
-      - uses: actions/setup-node@${"3".repeat(40)}
-        with:
-          node-version: 22.21.1
       - uses: oven-sh/setup-bun@${"4".repeat(40)}
         with:
           bun-version: 1.4.0
+      - uses: actions/setup-node@${"3".repeat(40)}
+        with:
+          node-version: 22.21.1
       - run: npm pack
   publish-pypi:
     runs-on: ubuntu-latest
@@ -89,6 +89,21 @@ describe("release policy", () => {
 
   test("rejects Bun manifests that escape the repository", () => {
     const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: ../package.json");
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, () =>
+        JSON.stringify({ packageManager: "bun@1.4.0" }),
+      ),
+    ).toThrow();
+  });
+
+  test.each([
+    "      - run: node scripts/rewrite-package.mjs\n",
+    `      - uses: ./mutable-local-action\n`,
+    `      - uses: owner/mutable-composite@${"5".repeat(40)}\n`,
+  ])("rejects a Bun version file after a mutable step", (step) => {
+    const workflow = base
+      .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+      .replace(`      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n`, `${step}      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n`);
     expect(() =>
       validateReleaseWorkflow(workflow, ref, () =>
         JSON.stringify({ packageManager: "bun@1.4.0" }),
