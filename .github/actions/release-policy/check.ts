@@ -86,13 +86,14 @@ const validateRuntimeSetups = (value: unknown, path = "workflow") => {
   const entry = value as JsonObject;
   if (typeof entry.uses === "string") {
     const inputs = entry.with === undefined ? {} : object(entry.with, `${path}.with`);
-    if (entry.uses.startsWith("actions/setup-node@")) {
+    const action = entry.uses.toLowerCase();
+    if (action.startsWith("actions/setup-node@")) {
       const version = staticString(inputs["node-version"], `${path}.with.node-version`);
       if (!EXACT_RUNTIME_VERSION.test(version)) {
         fail(`${path}.with.node-version must be an exact Node.js release`);
       }
     }
-    if (entry.uses.startsWith("oven-sh/setup-bun@")) {
+    if (action.startsWith("oven-sh/setup-bun@")) {
       const version = staticString(inputs["bun-version"], `${path}.with.bun-version`);
       if (!EXACT_RUNTIME_VERSION.test(version)) {
         fail(`${path}.with.bun-version must be an exact Bun release`);
