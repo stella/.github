@@ -120,7 +120,7 @@ const rejectFailureBypassConditions = (value: unknown, path = "workflow") => {
     if (
       key === "if" &&
       typeof entry === "string" &&
-      /\b(?:always|failure|cancelled)\s*\(/i.test(entry)
+      /\b(?:always|failure|cancelled|success)\s*\(/i.test(entry)
     ) {
       fail(`${path}.if must remain success-gated`);
     }

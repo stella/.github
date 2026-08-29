@@ -285,7 +285,7 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(base.replace(expected, replacement), ref)).toThrow();
   });
 
-  test.each(["always()", "failure()", "!cancelled()"])(
+  test.each(["always()", "failure()", "!cancelled()", "success()", "!success()"])(
     "rejects failure-bypassing condition %s",
     (condition) => {
       const workflow = base.replace(
