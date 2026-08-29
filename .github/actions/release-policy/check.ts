@@ -161,6 +161,12 @@ const validateRuntimeSetups = (
   if (typeof entry.uses === "string") {
     const inputs = entry.with === undefined ? {} : object(entry.with, `${path}.with`);
     const action = entry.uses.toLowerCase();
+    if (
+      (action.startsWith("actions/setup-node@") || action.startsWith("oven-sh/setup-bun@")) &&
+      ("if" in entry || "continue-on-error" in entry || "env" in entry)
+    ) {
+      fail(`${path} must be an unconditional, fail-closed runtime setup`);
+    }
     if (action.startsWith("actions/setup-node@")) {
       const version = staticString(inputs["node-version"], `${path}.with.node-version`);
       if (!EXACT_RUNTIME_VERSION.test(version)) {

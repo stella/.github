@@ -170,6 +170,21 @@ describe("release policy", () => {
     ).toThrow();
   });
 
+  test.each([
+    [`actions/setup-node@${"3".repeat(40)}`, "        if: false\n"],
+    [`actions/setup-node@${"3".repeat(40)}`, "        continue-on-error: true\n"],
+    [`actions/setup-node@${"3".repeat(40)}`, "        env:\n          INPUT_NODE-VERSION: latest\n"],
+    [`oven-sh/setup-bun@${"4".repeat(40)}`, "        if: false\n"],
+    [`oven-sh/setup-bun@${"4".repeat(40)}`, "        continue-on-error: true\n"],
+    [`oven-sh/setup-bun@${"4".repeat(40)}`, "        env:\n          INPUT_BUN-VERSION: latest\n"],
+  ])("rejects conditional or error-tolerant runtime setup %s", (action, metadata) => {
+    const workflow = base.replace(
+      `      - uses: ${action}\n`,
+      `      - uses: ${action}\n${metadata}`,
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
   test("rejects symlinked Bun manifests", () => {
     const root = mkdtempSync(join(tmpdir(), "release-policy-"));
     const external = join(tmpdir(), `release-policy-external-${process.pid}.json`);
