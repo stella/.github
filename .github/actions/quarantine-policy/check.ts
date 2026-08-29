@@ -8,8 +8,8 @@ const NOTICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EXPIRY_MARKER = "quarantine-expires:";
 const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
 const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-const WORKSPACE_PROTOCOL = "workspace:";
 const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
+const REGISTRY_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
 type BlockRange = { end: number; start: number };
 
@@ -117,7 +117,11 @@ const readRegistryFirstPartyPackages = (lockfile: string): Set<string> =>
       (match) => {
         const name = match.groups?.name;
         const source = match.groups?.source;
-        if (name === undefined || source === undefined || source.startsWith(WORKSPACE_PROTOCOL)) {
+        if (
+          name === undefined ||
+          source === undefined ||
+          !REGISTRY_VERSION.test(source)
+        ) {
           return [];
         }
         return [name];

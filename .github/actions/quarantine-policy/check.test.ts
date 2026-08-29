@@ -76,6 +76,18 @@ describe("quarantine policy", () => {
     expect(result.errors.join("\n")).toContain("@stll/native");
   });
 
+  test("ignores non-registry first-party dependency protocols", () => {
+    const localSources = ["workspace:packages/foo", "file:../foo", "link:../foo", "git+https://example.com/foo.git"];
+    for (const source of localSources) {
+      const result = checkQuarantinePolicy({
+        bunfig: bunfig(""),
+        lockfile: `"@stll/local": ["@stll/local@${source}", "", {}, ""]`,
+        now: NOW,
+      });
+      expect(result.errors).toEqual([]);
+    }
+  });
+
   test("binds both caller workflows to the exact shared revision", () => {
     const expectedRef = "a".repeat(40);
     const caller = (uses: string) => `jobs:\n  enforce:\n    uses: ${uses}\n`;
