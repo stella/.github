@@ -97,13 +97,18 @@ describe("release policy", () => {
   });
 
   test.each([
+    "",
+    `      - uses: actions/checkout@${"2".repeat(40)}\n      - uses: actions/checkout@${"2".repeat(40)}\n`,
     "      - run: node scripts/rewrite-package.mjs\n",
     `      - uses: ./mutable-local-action\n`,
     `      - uses: owner/mutable-composite@${"5".repeat(40)}\n`,
-  ])("rejects a Bun version file after a mutable step", (step) => {
+  ])("rejects a Bun version file without one immediately preceding checkout", (step) => {
     const workflow = base
       .replace("bun-version: 1.4.0", "bun-version-file: package.json")
-      .replace(`      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n`, `${step}      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n`);
+      .replace(
+        `      - uses: actions/checkout@${"2".repeat(40)}\n`,
+        step,
+      );
     expect(() =>
       validateReleaseWorkflow(workflow, ref, () =>
         JSON.stringify({ packageManager: "bun@1.4.0" }),

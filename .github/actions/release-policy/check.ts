@@ -111,14 +111,11 @@ const validateRuntimeSetups = (
       if (!("bun-version-file" in inputs)) {
         return;
       }
-      for (const [precedingIndex, rawPreceding] of value.slice(0, index).entries()) {
-        const preceding = object(rawPreceding, `${path}[${precedingIndex}]`);
-        const action = typeof preceding.uses === "string" ? preceding.uses.toLowerCase() : "";
-        if (!action.startsWith("actions/checkout@")) {
-          fail(
-            `${path}[${index}].with.bun-version-file must be consumed before mutable steps`,
-          );
-        }
+      const preceding = index === 1 ? object(value[0], `${path}[0]`) : {};
+      const precedingAction =
+        typeof preceding.uses === "string" ? preceding.uses.toLowerCase() : "";
+      if (!precedingAction.startsWith("actions/checkout@")) {
+        fail(`${path}[${index}].with.bun-version-file must immediately follow checkout`);
       }
     });
     value.forEach((entry, index) =>
