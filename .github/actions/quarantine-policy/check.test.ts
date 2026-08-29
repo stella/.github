@@ -84,6 +84,22 @@ describe("quarantine policy", () => {
     expect(result.errors.join("\n")).toContain("minimumReleaseAge = 432000");
   });
 
+  test("rejects registry configuration that can bypass npm publication age", () => {
+    const alternateRegistry = checkQuarantinePolicy({
+      bunfig: `${bunfig("")}registry = "https://registry.example.com"\n`,
+      lockfile: "",
+      now: NOW,
+    });
+    expect(alternateRegistry.errors.join("\n")).toContain("canonical npm registry");
+    const npmrc = checkQuarantinePolicy({
+      bunfig: bunfig(""),
+      lockfile: "",
+      npmrcPresent: true,
+      now: NOW,
+    });
+    expect(npmrc.errors.join("\n")).toContain("does not allow a repository .npmrc");
+  });
+
   test("warns briefly, then rejects an expired temporary exclude", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-29T11:00:00.000Z',
@@ -311,11 +327,33 @@ describe("quarantine policy", () => {
     const workflow = Bun.YAML.parse(
       readFileSync(".github/workflows/quarantine-prune.yml", "utf8"),
     );
+    expect(workflow.concurrency).toEqual({
+      "cancel-in-progress": false,
+      group: "quarantine-prune-${{ github.repository }}",
+    });
     expect(workflow.jobs.prepare.if).toBe(
       "github.repository_owner == 'stella' && github.event_name == 'schedule'",
     );
     expect(workflow.jobs.propose.if).toBe(
       "github.event_name == 'schedule' && needs.prepare.outputs.changed == 'true'",
     );
+  });
+
+  test("checks newly locked versions against the trusted merge base", () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(".github/workflows/quarantine-policy.yml", "utf8"),
+    );
+    const checkout = workflow.jobs.enforce.steps.find(
+      (step: { name?: string }) => step.name === "Checkout caller",
+    );
+    expect(checkout?.with).toEqual({
+      "fetch-depth": 2,
+      "persist-credentials": false,
+    });
+    const lockAge = workflow.jobs.enforce.steps.find(
+      (step: { name?: string }) => step.name === "Enforce newly locked package ages",
+    );
+    expect(lockAge?.run).toContain("git show HEAD^1:bun.lock");
+    expect(lockAge?.run).toContain("check-lock-age.ts");
   });
 });
