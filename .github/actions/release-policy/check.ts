@@ -535,6 +535,16 @@ const validateAttestation = (job: JsonObject, label: string) => {
   if (!Array.isArray(steps) || steps.length === 0) {
     fail(`${label} must contain attestation steps`);
   }
+  const actionUses = steps.map((rawStep, index) =>
+    object(rawStep, `${label}.steps[${index}]`).uses,
+  );
+  if (
+    actionUses[0] !== DOWNLOAD_ARTIFACT_USE ||
+    actionUses.filter((uses) => uses === DOWNLOAD_ARTIFACT_USE).length !== 1 ||
+    !actionUses.slice(1).every((uses) => uses === ATTEST_USE)
+  ) {
+    fail(`${label} must download release-artifacts once before every attestation`);
+  }
   for (const [index, rawStep] of steps.entries()) {
     const step = object(rawStep, `${label}.steps[${index}]`);
     rejectUnexpectedKeys(step, ACTION_STEP_KEYS, `${label}.steps[${index}]`);
@@ -560,9 +570,21 @@ const validateAttestation = (job: JsonObject, label: string) => {
       `${label}.steps[${index}].with`,
     );
     requireKeys(inputs, new Set(["subject-path"]), `${label}.steps[${index}].with`);
-    nonEmptyString(inputs["subject-path"], `${label}.steps[${index}].with.subject-path`);
+    const subjectPath = staticString(
+      inputs["subject-path"],
+      `${label}.steps[${index}].with.subject-path`,
+    );
+    if (!subjectPath.startsWith("release-artifacts/") || subjectPath.includes("..")) {
+      fail(`${label}.steps[${index}].with.subject-path must stay under release-artifacts`);
+    }
     if ("sbom-path" in inputs) {
-      nonEmptyString(inputs["sbom-path"], `${label}.steps[${index}].with.sbom-path`);
+      const sbomPath = staticString(
+        inputs["sbom-path"],
+        `${label}.steps[${index}].with.sbom-path`,
+      );
+      if (!sbomPath.startsWith("release-artifacts/") || sbomPath.includes("..")) {
+        fail(`${label}.steps[${index}].with.sbom-path must stay under release-artifacts`);
+      }
     }
   }
 };
