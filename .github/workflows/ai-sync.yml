@@ -21,6 +21,8 @@ jobs:
         with:
           bun-version: "1.4.0"
       - name: Test shared actions and workflows
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           find .github -type f -name '*.test.mjs' -print0 | sort -z | xargs -0 node --test
           bun test ./.github/actions/release-policy/check.test.ts
