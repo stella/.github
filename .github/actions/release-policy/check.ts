@@ -154,10 +154,10 @@ const validateTriggers = (value: unknown) => {
     }
     if (
       !Array.isArray(paths) ||
-      !paths.includes("VERSION") ||
+      paths.length === 0 ||
       paths.some((path) => typeof path !== "string" || path.length === 0 || path.includes("${{"))
     ) {
-      fail("workflow.on.push.paths must be explicit repository paths and include VERSION");
+      fail("workflow.on.push.paths must contain explicit repository paths");
     }
   }
 };
@@ -207,6 +207,27 @@ const validateNpmArtifactPublisher = (job: JsonObject, ref: string, label: strin
   );
   if ("secrets" in job) {
     fail(`${label} must not receive secrets`);
+  }
+};
+
+const validateIndependentNpmPublisher = (job: JsonObject, ref: string, label: string) => {
+  rejectUnexpectedKeys(job, REUSABLE_JOB_KEYS, label);
+  if (job.uses !== expectedSharedUse("workflows/npm-independent-release.yml", ref)) {
+    fail(`${label} must call the immutable shared independent npm publisher`);
+  }
+  exactPermissions(
+    job.permissions,
+    { actions: "read", contents: "write", "id-token": "write" },
+    `${label}.permissions`,
+  );
+  const secrets = object(job.secrets ?? {}, `${label}.secrets`);
+  for (const [name, expression] of Object.entries(secrets)) {
+    if (
+      (name !== "RELEASE_APP_ID" && name !== "RELEASE_APP_PRIVATE_KEY") ||
+      expression !== `\${{ secrets.${name} }}`
+    ) {
+      fail(`${label}.secrets contains an unsupported mapping for ${name}`);
+    }
   }
 };
 
@@ -285,6 +306,8 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
     if (typeof job.uses === "string") {
       if (job.uses.includes("npm-version-finalize.yml")) {
         validateFinalizer(job, expectedRef, label);
+      } else if (job.uses.includes("npm-independent-release.yml")) {
+        validateIndependentNpmPublisher(job, expectedRef, label);
       } else if (job.uses.includes("npm-artifact-publish.yml")) {
         validateNpmArtifactPublisher(job, expectedRef, label);
       } else if (job.uses.includes("crates-io-publish.yml")) {

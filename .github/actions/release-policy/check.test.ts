@@ -47,10 +47,18 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
   });
 
+  test("accepts the shared independently versioned npm publisher", () => {
+    const workflow = base.replace(
+      /  finalize:[\s\S]*$/,
+      `  release:\n    uses: stella/.github/.github/workflows/npm-independent-release.yml@${ref}\n    permissions:\n      actions: read\n      contents: write\n      id-token: write\n`,
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
   test.each([
     ["workflow OIDC", base.replace("contents: read\njobs:", "contents: read\n  id-token: write\njobs:")],
     ["public comment trigger", base.replace("  workflow_dispatch:", "  workflow_dispatch:\n  issue_comment:")],
-    ["release push without VERSION", base.replace("  workflow_dispatch:\n", "  push:\n    branches: [main]\n    paths: [src/**]\n  workflow_dispatch:\n")],
+    ["release push without paths", base.replace("  workflow_dispatch:\n", "  push:\n    branches: [main]\n    paths: []\n  workflow_dispatch:\n")],
     ["workflow environment", base.replace("permissions:", "env:\n  BASH_ENV: artifact/payload\npermissions:")],
     ["workflow defaults", base.replace("permissions:", "defaults:\n  run:\n    shell: ./payload\npermissions:")],
     ["mutable action", base.replace("actions/checkout@" + "2".repeat(40), "actions/checkout@main")],
