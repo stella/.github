@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { YAML } from "bun";
 
 type JsonObject = Record<string, unknown>;
+type ReadRepositoryFile = (path: string) => string;
 
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
@@ -74,9 +75,15 @@ const walkUses = (value: unknown, path = "workflow") => {
   }
 };
 
-const validateRuntimeSetups = (value: unknown, path = "workflow") => {
+const validateRuntimeSetups = (
+  value: unknown,
+  readRepositoryFile: ReadRepositoryFile,
+  path = "workflow",
+) => {
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => validateRuntimeSetups(entry, `${path}[${index}]`));
+    value.forEach((entry, index) =>
+      validateRuntimeSetups(entry, readRepositoryFile, `${path}[${index}]`),
+    );
     return;
   }
   if (value === null || typeof value !== "object") {
@@ -94,15 +101,47 @@ const validateRuntimeSetups = (value: unknown, path = "workflow") => {
       }
     }
     if (action.startsWith("oven-sh/setup-bun@")) {
-      const version = staticString(inputs["bun-version"], `${path}.with.bun-version`);
-      if (!EXACT_RUNTIME_VERSION.test(version)) {
-        fail(`${path}.with.bun-version must be an exact Bun release`);
+      const hasVersion = "bun-version" in inputs;
+      const hasVersionFile = "bun-version-file" in inputs;
+      if (hasVersion === hasVersionFile) {
+        fail(`${path}.with must set exactly one Bun version source`);
+      }
+      if (hasVersion) {
+        const version = staticString(inputs["bun-version"], `${path}.with.bun-version`);
+        if (!EXACT_RUNTIME_VERSION.test(version)) {
+          fail(`${path}.with.bun-version must be an exact Bun release`);
+        }
+      } else {
+        const versionFile = staticString(
+          inputs["bun-version-file"],
+          `${path}.with.bun-version-file`,
+        );
+        validateRepositoryPath(versionFile, `${path}.with.bun-version-file`);
+        if (!versionFile.endsWith("package.json")) {
+          fail(`${path}.with.bun-version-file must identify a package.json`);
+        }
+        let manifest: JsonObject;
+        try {
+          manifest = object(
+            JSON.parse(readRepositoryFile(versionFile)),
+            `${path}.with.bun-version-file manifest`,
+          );
+        } catch {
+          fail(`${path}.with.bun-version-file must be readable JSON`);
+        }
+        const packageManager = staticString(
+          manifest.packageManager,
+          `${path}.with.bun-version-file packageManager`,
+        );
+        if (!/^bun@[0-9]+\.[0-9]+\.[0-9]+$/.test(packageManager)) {
+          fail(`${path}.with.bun-version-file packageManager must pin an exact Bun release`);
+        }
       }
     }
   }
 
   for (const [key, child] of Object.entries(entry)) {
-    validateRuntimeSetups(child, `${path}.${key}`);
+    validateRuntimeSetups(child, readRepositoryFile, `${path}.${key}`);
   }
 };
 
@@ -630,7 +669,11 @@ const validateAttestation = (job: JsonObject, label: string) => {
   }
 };
 
-export const validateReleaseWorkflow = (source: string, expectedRef: string) => {
+export const validateReleaseWorkflow = (
+  source: string,
+  expectedRef: string,
+  readRepositoryFile: ReadRepositoryFile = (path) => readFileSync(path, "utf8"),
+) => {
   if (!SHA.test(expectedRef)) {
     fail("expected shared ref must be an immutable 40-character commit SHA");
   }
@@ -643,7 +686,7 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
   }
   exactPermissions(workflow.permissions, { contents: "read" }, "workflow.permissions");
   walkUses(workflow);
-  validateRuntimeSetups(workflow);
+  validateRuntimeSetups(workflow, readRepositoryFile);
   for (const [key, value] of Object.entries(workflow)) {
     if (key !== "jobs") {
       walkSecretReferences(value, `workflow.${key}`);

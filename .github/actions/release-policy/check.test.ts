@@ -58,6 +58,26 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
   });
 
+  test("accepts an exact Bun packageManager as the version source", () => {
+    const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, (path) => {
+        expect(path).toBe("package.json");
+        return JSON.stringify({ packageManager: "bun@1.4.0" });
+      }),
+    ).not.toThrow();
+  });
+
+  test.each(["bun@latest", "bun@^1.4.0", "bun@1.4"])(
+    "rejects non-exact packageManager %s",
+    (packageManager) => {
+      const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () => JSON.stringify({ packageManager })),
+      ).toThrow();
+    },
+  );
+
   test("accepts the shared independently versioned npm publisher", () => {
     const workflow = base.replace(
       /  finalize:[\s\S]*$/,
@@ -170,6 +190,8 @@ jobs:
     ["floating Bun runtime", base.replace("bun-version: 1.4.0", "bun-version: latest")],
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
+    ["dual Bun version sources", base.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
+    ["escaping Bun version file", base.replace("bun-version: 1.4.0", "bun-version-file: ../package.json")],
     ["publisher command", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi", "    steps:\n      - run: npm install\n      - uses: stella/.github/.github/actions/pypi")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)\n    permissions:\n      id-token: write", "    if: true\n    permissions:\n      id-token: write")],
