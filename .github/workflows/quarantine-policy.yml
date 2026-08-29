@@ -25,7 +25,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           path: .quarantine-base
-          sparse-checkout: bun.lock
+          sparse-checkout: |
+            bun.lock
+            bunfig.toml
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Checkout immutable policy
@@ -47,3 +49,4 @@ jobs:
         run: >-
           bun .quarantine-policy/.github/actions/quarantine-policy/check-lock-age.ts
           .quarantine-base/bun.lock
+          .quarantine-base/bunfig.toml

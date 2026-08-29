@@ -69,9 +69,11 @@ export const readLockedRegistryVersions = (
 };
 
 export const readNewLockedRegistryVersions = ({
+  baseExcludes = [],
   baseLockfile,
   lockfile,
 }: {
+  baseExcludes?: string[];
   baseLockfile?: string;
   lockfile: string;
 }): LockedRegistryVersion[] => {
@@ -80,8 +82,12 @@ export const readNewLockedRegistryVersions = ({
       registryKey,
     ),
   );
+  const excludedAtBase = new Set(baseExcludes);
   return readLockedRegistryVersions(lockfile).filter(
-    (candidate) => !base.has(registryKey(candidate)),
+    (candidate) =>
+      !base.has(registryKey(candidate)) ||
+      excludedAtBase.has(candidate.name) ||
+      excludedAtBase.has(registryKey(candidate)),
   );
 };
 
@@ -128,12 +134,14 @@ const readPublishTime = (
 };
 
 export const checkNewLockedRegistryReleaseAges = async ({
+  baseBunfig,
   baseLockfile,
   bunfig,
   loadMetadata = loadRegistryMetadata,
   lockfile,
   now = new Date(),
 }: {
+  baseBunfig?: string;
   baseLockfile?: string;
   bunfig: string;
   loadMetadata?: LoadPackageMetadata;
@@ -141,7 +149,11 @@ export const checkNewLockedRegistryReleaseAges = async ({
   now?: Date;
 }): Promise<{ checked: number; errors: string[] }> => {
   const excludes = new Set(readParsedExcludes(bunfig));
-  const candidates = readNewLockedRegistryVersions({ baseLockfile, lockfile })
+  const candidates = readNewLockedRegistryVersions({
+    baseExcludes: baseBunfig === undefined ? [] : readParsedExcludes(baseBunfig),
+    baseLockfile,
+    lockfile,
+  })
     .filter(
       ({ name, version }) =>
         !excludes.has(name) && !excludes.has(`${name}@${version}`),
@@ -198,10 +210,14 @@ export const checkNewLockedRegistryReleaseAges = async ({
 
 const run = async () => {
   const baseLockfilePath = process.argv[2];
-  if (baseLockfilePath === undefined) {
-    throw new Error("the trusted base bun.lock path is required");
+  const baseBunfigPath = process.argv[3];
+  if (baseLockfilePath === undefined || baseBunfigPath === undefined) {
+    throw new Error("the trusted base bun.lock and bunfig.toml paths are required");
   }
   const result = await checkNewLockedRegistryReleaseAges({
+    baseBunfig: existsSync(baseBunfigPath)
+      ? readFileSync(baseBunfigPath, "utf8")
+      : undefined,
     baseLockfile: existsSync(baseLockfilePath)
       ? readFileSync(baseLockfilePath, "utf8")
       : undefined,

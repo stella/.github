@@ -95,6 +95,30 @@ describe("locked package release age", () => {
     expect(result).toEqual({ checked: 1, errors: [] });
   });
 
+  test("rechecks an unchanged version when its base exception is removed", async () => {
+    const unchanged = lockfile("fresh@1.0.0", "still-allowed@1.0.0");
+    const result = await checkNewLockedRegistryReleaseAges({
+      baseBunfig: bunfig(`  "fresh", # quarantine-expires: 2026-08-28T00:00:00.000Z
+  "still-allowed", # quarantine-expires: 2026-08-30T00:00:00.000Z`),
+      baseLockfile: unchanged,
+      bunfig: bunfig(
+        `  "still-allowed", # quarantine-expires: 2026-08-30T00:00:00.000Z`,
+      ),
+      loadMetadata: async (name) => ({
+        time: { "1.0.0": "2026-08-28T12:00:00.000Z" },
+        name,
+      }),
+      lockfile: unchanged,
+      now: NOW,
+    });
+    expect(result).toEqual({
+      checked: 1,
+      errors: [
+        "fresh@1.0.0: locked version was published at 2026-08-28T12:00:00.000Z and is younger than 432000 seconds",
+      ],
+    });
+  });
+
   test("fails closed on missing or unavailable registry timestamps", async () => {
     const result = await checkNewLockedRegistryReleaseAges({
       baseLockfile: lockfile(),
