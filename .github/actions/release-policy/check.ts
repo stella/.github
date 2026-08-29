@@ -574,7 +574,11 @@ const validateAttestation = (job: JsonObject, label: string) => {
       inputs["subject-path"],
       `${label}.steps[${index}].with.subject-path`,
     );
-    if (!subjectPath.startsWith("release-artifacts/") || subjectPath.includes("..")) {
+    if (
+      !subjectPath.startsWith("release-artifacts/") ||
+      subjectPath.includes("..") ||
+      /[\r\n]/.test(subjectPath)
+    ) {
       fail(`${label}.steps[${index}].with.subject-path must stay under release-artifacts`);
     }
     if ("sbom-path" in inputs) {
@@ -582,7 +586,11 @@ const validateAttestation = (job: JsonObject, label: string) => {
         inputs["sbom-path"],
         `${label}.steps[${index}].with.sbom-path`,
       );
-      if (!sbomPath.startsWith("release-artifacts/") || sbomPath.includes("..")) {
+      if (
+        !sbomPath.startsWith("release-artifacts/") ||
+        sbomPath.includes("..") ||
+        /[\r\n]/.test(sbomPath)
+      ) {
         fail(`${label}.steps[${index}].with.sbom-path must stay under release-artifacts`);
       }
     }

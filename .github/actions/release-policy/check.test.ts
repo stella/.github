@@ -115,6 +115,15 @@ jobs:
     expect(() =>
       validateReleaseWorkflow(
         workflow.replace(
+          "          subject-path: release-artifacts/*.tgz",
+          "          subject-path: |\n            release-artifacts/*.tgz\n            /etc/hosts",
+        ),
+        ref,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateReleaseWorkflow(
+        workflow.replace(
           "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
           "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6\n        with:\n          subject-path: release-artifacts/*.tgz\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         ),
