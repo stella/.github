@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { validateReleaseWorkflow } from "./check";
+import { readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
 
 const ref = "1".repeat(40);
 const base = `name: Release
@@ -68,7 +71,13 @@ describe("release policy", () => {
     ).not.toThrow();
   });
 
-  test.each(["bun@latest", "bun@^1.4.0", "bun@1.4"])(
+  test.each([
+    "bun@latest",
+    "bun@^1.4.0",
+    "bun@1.4",
+    "bun@1.4.0-canary",
+    "prefix-bun@1.4.0",
+  ])(
     "rejects non-exact packageManager %s",
     (packageManager) => {
       const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
@@ -77,6 +86,28 @@ describe("release policy", () => {
       ).toThrow();
     },
   );
+
+  test("rejects Bun manifests that escape the repository", () => {
+    const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: ../package.json");
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, () =>
+        JSON.stringify({ packageManager: "bun@1.4.0" }),
+      ),
+    ).toThrow();
+  });
+
+  test("rejects symlinked Bun manifests", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-policy-"));
+    const external = join(tmpdir(), `release-policy-external-${process.pid}.json`);
+    writeFileSync(external, JSON.stringify({ packageManager: "bun@1.4.0" }));
+    symlinkSync(external, join(root, "package.json"));
+    try {
+      expect(() => readRepositoryFileWithin("package.json", root)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(external, { force: true });
+    }
+  });
 
   test("accepts the shared independently versioned npm publisher", () => {
     const workflow = base.replace(
@@ -191,7 +222,6 @@ jobs:
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
     ["dual Bun version sources", base.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
-    ["escaping Bun version file", base.replace("bun-version: 1.4.0", "bun-version-file: ../package.json")],
     ["publisher command", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi", "    steps:\n      - run: npm install\n      - uses: stella/.github/.github/actions/pypi")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)\n    permissions:\n      id-token: write", "    if: true\n    permissions:\n      id-token: write")],

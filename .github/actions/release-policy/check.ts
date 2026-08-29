@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { YAML } from "bun";
 
 type JsonObject = Record<string, unknown>;
@@ -18,6 +19,20 @@ const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
 
 const fail = (message: string): never => {
   throw new Error(message);
+};
+
+export const readRepositoryFileWithin = (path: string, repositoryRoot = process.cwd()) => {
+  const root = realpathSync(repositoryRoot);
+  const candidate = resolve(root, path);
+  if (lstatSync(candidate).isSymbolicLink()) {
+    fail(`${path} must not be a symbolic link`);
+  }
+  const realCandidate = realpathSync(candidate);
+  const relativePath = relative(root, realCandidate);
+  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    fail(`${path} must resolve inside the repository`);
+  }
+  return readFileSync(realCandidate, "utf8");
 };
 
 const object = (value: unknown, label: string): JsonObject => {
@@ -672,7 +687,7 @@ const validateAttestation = (job: JsonObject, label: string) => {
 export const validateReleaseWorkflow = (
   source: string,
   expectedRef: string,
-  readRepositoryFile: ReadRepositoryFile = (path) => readFileSync(path, "utf8"),
+  readRepositoryFile: ReadRepositoryFile = readRepositoryFileWithin,
 ) => {
   if (!SHA.test(expectedRef)) {
     fail("expected shared ref must be an immutable 40-character commit SHA");
