@@ -134,8 +134,10 @@ const validateRuntimeSetups = (
       }
       const checkoutInputs =
         preceding.with === undefined ? {} : object(preceding.with, `${path}[0].with`);
-      if ("if" in preceding || "continue-on-error" in preceding) {
-        fail(`${path}[0] must be an unconditional, fail-closed checkout`);
+      if ("if" in preceding || "continue-on-error" in preceding || "env" in preceding) {
+        fail(
+          `${path}[0] must be an unconditional, fail-closed checkout without environment overrides`,
+        );
       }
       for (const key of Object.keys(checkoutInputs)) {
         if (!BUN_SOURCE_CHECKOUT_INPUTS.has(key)) {

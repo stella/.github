@@ -135,8 +135,12 @@ describe("release policy", () => {
     },
   );
 
-  test.each(["        if: false\n", "        continue-on-error: true\n"])(
-    "rejects conditional or error-tolerant checkout metadata",
+  test.each([
+    "        if: false\n",
+    "        continue-on-error: true\n",
+    "        env:\n          INPUT_REPOSITORY: untrusted/example\n",
+  ])(
+    "rejects checkout metadata that can weaken source binding",
     (metadata) => {
       const workflow = base
         .replace("bun-version: 1.4.0", "bun-version-file: package.json")
