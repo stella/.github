@@ -103,6 +103,32 @@ const walkUses = (value: unknown, path = "workflow") => {
   }
 };
 
+const containsStatusFunction = (condition: string) => {
+  let quote: "'" | '"' | null = null;
+  let unquoted = "";
+  for (let index = 0; index < condition.length; index += 1) {
+    const character = condition[index];
+    if (quote !== null) {
+      if (character === quote) {
+        if (quote === "'" && condition[index + 1] === "'") {
+          index += 1;
+          continue;
+        }
+        quote = null;
+      }
+      unquoted += " ";
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      unquoted += " ";
+      continue;
+    }
+    unquoted += character;
+  }
+  return /\b(?:always|failure|cancelled|success)\s*\(/i.test(unquoted);
+};
+
 const rejectFailureBypassConditions = (value: unknown, path = "workflow") => {
   if (Array.isArray(value)) {
     value.forEach((entry, index) =>
@@ -120,7 +146,7 @@ const rejectFailureBypassConditions = (value: unknown, path = "workflow") => {
     if (
       key === "if" &&
       typeof entry === "string" &&
-      /\b(?:always|failure|cancelled|success)\s*\(/i.test(entry)
+      containsStatusFunction(entry)
     ) {
       fail(`${path}.if must remain success-gated`);
     }

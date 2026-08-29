@@ -296,6 +296,25 @@ describe("release policy", () => {
     },
   );
 
+  test.each(["inputs.mode == 'success()'", "inputs.mode == \"always()\""])(
+    "accepts quoted status-like text in condition %s",
+    (condition) => {
+      const workflow = base.replace(
+        "      - run: npm pack",
+        `      - if: >-\n          ${condition}\n        run: npm pack`,
+      );
+      expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+    },
+  );
+
+  test("rejects a real status check after quoted status-like text", () => {
+    const workflow = base.replace(
+      "      - run: npm pack",
+      "      - if: >-\n          inputs.mode == 'success()' || !success()\n        run: npm pack",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
   test("rejects continue-on-error anywhere in the release graph", () => {
     const workflow = base.replace(
       "      - run: npm pack",
