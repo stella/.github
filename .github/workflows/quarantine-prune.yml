@@ -16,7 +16,7 @@ env:
 jobs:
   prepare:
     name: Prepare expired exception removal
-    if: github.repository_owner == 'stella'
+    if: github.repository_owner == 'stella' && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -67,7 +67,7 @@ jobs:
   propose:
     name: Propose expired exception removal
     needs: prepare
-    if: needs.prepare.outputs.changed == 'true'
+    if: github.event_name == 'schedule' && needs.prepare.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import {
   checkQuarantinePolicy,
@@ -304,5 +305,17 @@ describe("quarantine policy", () => {
         }).join("\n"),
       ).toContain(expectedError);
     }
+  });
+
+  test("gates reusable pruning and App credentials on the runtime schedule event", () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(".github/workflows/quarantine-prune.yml", "utf8"),
+    );
+    expect(workflow.jobs.prepare.if).toBe(
+      "github.repository_owner == 'stella' && github.event_name == 'schedule'",
+    );
+    expect(workflow.jobs.propose.if).toBe(
+      "github.event_name == 'schedule' && needs.prepare.outputs.changed == 'true'",
+    );
   });
 });
