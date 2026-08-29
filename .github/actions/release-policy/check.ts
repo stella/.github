@@ -10,6 +10,7 @@ const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const BUN_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
 const NODE_SETUP_INPUTS = new Set(["node-version", "registry-url"]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
+const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -160,6 +161,30 @@ const validateRuntimeSetups = (
   }
 
   const entry = value as JsonObject;
+  if (
+    Array.isArray(entry.steps) &&
+    entry.steps.some((rawStep) => {
+      if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+        return false;
+      }
+      const action = (rawStep as JsonObject).uses;
+      return (
+        typeof action === "string" &&
+        (action.toLowerCase().startsWith("actions/setup-node@") ||
+          action.toLowerCase().startsWith("oven-sh/setup-bun@"))
+      );
+    })
+  ) {
+    if ("container" in entry) {
+      fail(`${path}.container must not wrap runtime setup`);
+    }
+    const jobEnvironment = entry.env === undefined ? {} : object(entry.env, `${path}.env`);
+    for (const key of Object.keys(jobEnvironment)) {
+      if (!RUNTIME_JOB_ENV.has(key)) {
+        fail(`${path}.env.${key} must not alter runtime setup`);
+      }
+    }
+  }
   if (typeof entry.uses === "string") {
     const inputs = entry.with === undefined ? {} : object(entry.with, `${path}.with`);
     const action = entry.uses.toLowerCase();

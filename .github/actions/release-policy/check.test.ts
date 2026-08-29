@@ -193,6 +193,26 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
   });
 
+  test("accepts a non-network Cargo job environment", () => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      "    runs-on: ubuntu-latest\n    env:\n      CARGO_INCREMENTAL: 0\n    steps:",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test.each([
+    "    env:\n      HTTPS_PROXY: https://untrusted.example\n",
+    "    env:\n      NODE_EXTRA_CA_CERTS: untrusted.pem\n",
+    "    container: untrusted/runtime-proxy:latest\n",
+  ])("rejects inherited runtime source overrides", (jobMetadata) => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      `    runs-on: ubuntu-latest\n${jobMetadata}    steps:`,
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
   test.each([
     [
       "node-version: 22.21.1",
