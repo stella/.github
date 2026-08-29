@@ -7,6 +7,7 @@ type ReadRepositoryFile = (path: string) => string;
 
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const BUN_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -111,11 +112,35 @@ const validateRuntimeSetups = (
       if (!("bun-version-file" in inputs)) {
         return;
       }
+      const checkoutIndexes = value.flatMap((rawStep, stepIndex) => {
+        if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+          return [];
+        }
+        const step = rawStep as JsonObject;
+        const action = typeof step.uses === "string" ? step.uses.toLowerCase() : "";
+        return action.startsWith("actions/checkout@") ? [stepIndex] : [];
+      });
       const preceding = index === 1 ? object(value[0], `${path}[0]`) : {};
       const precedingAction =
         typeof preceding.uses === "string" ? preceding.uses.toLowerCase() : "";
-      if (!precedingAction.startsWith("actions/checkout@")) {
-        fail(`${path}[${index}].with.bun-version-file must immediately follow checkout`);
+      if (
+        !precedingAction.startsWith("actions/checkout@") ||
+        checkoutIndexes.length !== 1 ||
+        checkoutIndexes[0] !== 0
+      ) {
+        fail(
+          `${path}[${index}].with.bun-version-file must immediately follow the workflow's sole checkout`,
+        );
+      }
+      const checkoutInputs =
+        preceding.with === undefined ? {} : object(preceding.with, `${path}[0].with`);
+      for (const key of Object.keys(checkoutInputs)) {
+        if (!BUN_SOURCE_CHECKOUT_INPUTS.has(key)) {
+          fail(`${path}[0].with.${key} must not change the Bun manifest source`);
+        }
+      }
+      if (checkoutInputs["persist-credentials"] !== false) {
+        fail(`${path}[0].with.persist-credentials must be false`);
       }
     });
     value.forEach((entry, index) =>

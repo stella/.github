@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@${"2".repeat(40)}
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@${"4".repeat(40)}
         with:
           bun-version: 1.4.0
@@ -98,7 +100,7 @@ describe("release policy", () => {
 
   test.each([
     "",
-    `      - uses: actions/checkout@${"2".repeat(40)}\n      - uses: actions/checkout@${"2".repeat(40)}\n`,
+    `      - uses: actions/checkout@${"2".repeat(40)}\n        with:\n          persist-credentials: false\n      - uses: actions/checkout@${"2".repeat(40)}\n`,
     "      - run: node scripts/rewrite-package.mjs\n",
     `      - uses: ./mutable-local-action\n`,
     `      - uses: owner/mutable-composite@${"5".repeat(40)}\n`,
@@ -106,8 +108,39 @@ describe("release policy", () => {
     const workflow = base
       .replace("bun-version: 1.4.0", "bun-version-file: package.json")
       .replace(
-        `      - uses: actions/checkout@${"2".repeat(40)}\n`,
+        `      - uses: actions/checkout@${"2".repeat(40)}\n        with:\n          persist-credentials: false\n`,
         step,
+      );
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, () =>
+        JSON.stringify({ packageManager: "bun@1.4.0" }),
+      ),
+    ).toThrow();
+  });
+
+  test.each(["repository", "ref", "path", "github-server-url"])(
+    "rejects checkout input %s before a Bun version file",
+    (input) => {
+      const workflow = base
+        .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+        .replace(
+          "          persist-credentials: false",
+          `          persist-credentials: false\n          ${input}: untrusted`,
+        );
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () =>
+          JSON.stringify({ packageManager: "bun@1.4.0" }),
+        ),
+      ).toThrow();
+    },
+  );
+
+  test("rejects a checkout after package.json selects Bun", () => {
+    const workflow = base
+      .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+      .replace(
+        `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+        `      - uses: actions/checkout@${"2".repeat(40)}\n      - uses: actions/setup-node@${"3".repeat(40)}\n`,
       );
     expect(() =>
       validateReleaseWorkflow(workflow, ref, () =>
