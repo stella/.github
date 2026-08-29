@@ -1,0 +1,131 @@
+name: Package quarantine prune
+
+on:
+  workflow_call:
+    secrets:
+      RELEASE_APP_ID:
+        required: true
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+
+permissions: {}
+
+env:
+  PRUNE_BRANCH: chore/prune-quarantine-excludes
+
+jobs:
+  prepare:
+    name: Prepare expired exception removal
+    if: github.repository_owner == 'stella'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.prune.outputs.changed }}
+      source-sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Checkout caller default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Checkout immutable policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .quarantine-policy
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - name: Prune expired exceptions
+        id: prune
+        run: |
+          set -euo pipefail
+          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts --prune
+          if git diff --quiet -- bunfig.toml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts
+          git diff --binary -- bunfig.toml > "$RUNNER_TEMP/bunfig.patch"
+      - name: Upload exact removal patch
+        if: steps.prune.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quarantine-prune-${{ github.run_id }}
+          path: ${{ runner.temp }}/bunfig.patch
+          if-no-files-found: error
+
+  propose:
+    name: Propose expired exception removal
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.source-sha }}
+      - name: Checkout immutable policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .quarantine-policy
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: quarantine-prune-${{ github.run_id }}
+          path: ${{ runner.temp }}/quarantine-prune
+      - name: Validate exact removal
+        run: |
+          set -euo pipefail
+          git apply --check "$RUNNER_TEMP/quarantine-prune/bunfig.patch"
+          git apply "$RUNNER_TEMP/quarantine-prune/bunfig.patch"
+          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts
+          test "$(git diff --name-only)" = "bunfig.toml"
+          git diff --check
+      - name: Mint narrow release app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Open or update removal PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          bot_id="$(gh api "users/${APP_SLUG}[bot]" --jq '.id')"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git checkout -b "$PRUNE_BRANCH"
+          git add bunfig.toml
+          git commit -m "chore(deps): remove expired quarantine excludes"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force "$remote" "HEAD:refs/heads/${PRUNE_BRANCH}"
+          if [[ -n "$(gh pr list --head "$PRUNE_BRANCH" --state open --json number --jq '.[0].number // ""')" ]]; then
+            exit 0
+          fi
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$PRUNE_BRANCH" \
+            --title "chore(deps): remove expired quarantine excludes" \
+            --body "Expired temporary exceptions are removed once Bun's normal five-day release-age gate admits the pinned versions."
