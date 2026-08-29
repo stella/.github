@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { createUploadArtifacts } from "./create-crate-upload.mjs";
+import {
+  createPublishMetadata,
+  createUploadArtifacts,
+  validatePublishTarget,
+} from "./create-crate-upload.mjs";
 
 test("binds registry metadata and exact crate bytes into one upload payload", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "crate-upload-"));
@@ -73,4 +77,42 @@ test("binds registry metadata and exact crate bytes into one upload payload", (t
   assert.equal(releaseManifest.crateFile, "example-core-1.2.3.crate");
   assert.equal(releaseManifest.crateSha256.length, 64);
   assert.equal(releaseManifest.uploadSha256.length, 64);
+});
+
+test("permits only unrestricted or crates.io-enabled Cargo packages", () => {
+  assert.doesNotThrow(() => validatePublishTarget(null));
+  assert.doesNotThrow(() => validatePublishTarget(["crates-io"]));
+  assert.throws(() => validatePublishTarget([]), /does not permit publishing/);
+  assert.throws(() => validatePublishTarget(["private"]), /does not permit publishing/);
+});
+
+test("rebases inherited metadata files into the packaged crate root", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "crate-metadata-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const packageRoot = join(directory, "crates", "core");
+  const readme = join(directory, "README.md");
+  const license = join(directory, "LICENSE");
+  writeFileSync(readme, "# Example\n");
+  writeFileSync(license, "MIT\n");
+  const metadata = createPublishMetadata({
+    name: "example-core",
+    version: "1.2.3",
+    manifest_path: join(packageRoot, "Cargo.toml"),
+    dependencies: [],
+    features: {},
+    authors: [],
+    description: null,
+    documentation: null,
+    homepage: null,
+    readme: "../../README.md",
+    keywords: [],
+    categories: [],
+    license: null,
+    license_file: "../../LICENSE",
+    repository: null,
+    links: null,
+    rust_version: "1.85",
+  });
+  assert.equal(metadata.readme_file, "README.md");
+  assert.equal(metadata.license_file, "LICENSE");
 });

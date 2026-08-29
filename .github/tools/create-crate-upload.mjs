@@ -1,13 +1,43 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
-const relativeManifestPath = (packageRoot, path) =>
-  path === null ? null : relative(packageRoot, resolve(packageRoot, path));
+const relativeManifestPath = (packageRoot, path) => {
+  if (path === null) {
+    return null;
+  }
+  const resolved = resolve(packageRoot, path);
+  const packageRelative = relative(packageRoot, resolved);
+  if (packageRelative === ".." || packageRelative.startsWith(`..${sep}`)) {
+    return basename(resolved);
+  }
+  return packageRelative;
+};
+
+export const validatePublishTarget = (publish) => {
+  if (publish === null || (Array.isArray(publish) && publish.includes("crates-io"))) {
+    return;
+  }
+  throw new Error("Cargo manifest does not permit publishing to crates.io");
+};
+
+const validatePackagedMetadataPaths = (pkg, cratePath, publishMetadata) => {
+  const archiveEntries = new Set(
+    execFileSync("tar", ["-tzf", cratePath], { encoding: "utf8" })
+      .split(/\r?\n/)
+      .filter(Boolean),
+  );
+  const archiveRoot = `${pkg.name}-${pkg.version}`;
+  for (const path of [publishMetadata.readme_file, publishMetadata.license_file]) {
+    if (path !== null && !archiveEntries.has(`${archiveRoot}/${path}`)) {
+      throw new Error(`packaged crate does not contain declared metadata file ${path}`);
+    }
+  }
+};
 
 export const createPublishMetadata = (pkg) => {
   const packageRoot = dirname(pkg.manifest_path);
@@ -92,6 +122,7 @@ const main = () => {
   if (!pkg) {
     throw new Error(`cargo metadata did not contain ${packageName}`);
   }
+  validatePublishTarget(pkg.publish);
 
   const expectedVersion = readFileSync(versionFile, "utf8").trim();
   if (pkg.version !== expectedVersion) {
@@ -100,6 +131,7 @@ const main = () => {
 
   const crateFile = `${pkg.name}-${pkg.version}.crate`;
   const cratePath = resolve(metadata.target_directory, "package", crateFile);
+  validatePackagedMetadataPaths(pkg, cratePath, createPublishMetadata(pkg));
   createUploadArtifacts({
     pkg,
     cratePath,

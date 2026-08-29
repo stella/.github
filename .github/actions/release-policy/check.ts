@@ -70,23 +70,33 @@ const walkUses = (value: unknown, path = "workflow") => {
   }
 };
 
-const walkSecretReferences = (value: unknown, path = "workflow") => {
+const walkSecretReferences = (
+  value: unknown,
+  path = "workflow",
+  allowedPaths = new Set<string>(),
+) => {
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => walkSecretReferences(entry, `${path}[${index}]`));
+    value.forEach((entry, index) =>
+      walkSecretReferences(entry, `${path}[${index}]`, allowedPaths),
+    );
     return;
   }
   if (value !== null && typeof value === "object") {
     for (const [key, entry] of Object.entries(value)) {
-      walkSecretReferences(entry, `${path}.${key}`);
+      walkSecretReferences(entry, `${path}.${key}`, allowedPaths);
     }
     return;
   }
   if (typeof value !== "string" || !/\$\{\{[\s\S]*\bsecrets\b/i.test(value)) {
     return;
   }
-  const match = path.match(/^workflow\.jobs\.[^.]+\.secrets\.([A-Z0-9_]+)$/);
-  const expected = match?.[1];
-  if (!expected || !RELEASE_SECRETS.has(expected) || value !== `\${{ secrets.${expected} }}`) {
+  const expected = path.split(".").at(-1);
+  if (
+    !expected ||
+    !allowedPaths.has(path) ||
+    !RELEASE_SECRETS.has(expected) ||
+    value !== `\${{ secrets.${expected} }}`
+  ) {
     fail(`${path} contains a secret reference outside an approved finalizer mapping`);
   }
 };
@@ -270,7 +280,11 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
   }
   exactPermissions(workflow.permissions, { contents: "read" }, "workflow.permissions");
   walkUses(workflow);
-  walkSecretReferences(workflow);
+  for (const [key, value] of Object.entries(workflow)) {
+    if (key !== "jobs") {
+      walkSecretReferences(value, `workflow.${key}`);
+    }
+  }
 
   const jobs = object(workflow.jobs, "workflow.jobs");
   for (const [jobName, rawJob] of Object.entries(jobs)) {
@@ -282,14 +296,22 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
     const permissions = permissionMap(job.permissions, `${label}.permissions`);
     const inheritedWrite = Object.keys(permissions).length === 0 && hasWritePermission(workflowPermissions);
     if (!hasWritePermission(permissions) && !inheritedWrite) {
+      walkSecretReferences(job, label);
       continue;
     }
 
     if (typeof job.uses === "string") {
+      const allowedSecretPaths = new Set<string>();
       if (job.uses.includes("npm-version-finalize.yml")) {
         validateFinalizer(job, expectedRef, label);
+        for (const name of Object.keys(object(job.secrets ?? {}, `${label}.secrets`))) {
+          allowedSecretPaths.add(`${label}.secrets.${name}`);
+        }
       } else if (job.uses.includes("npm-independent-release.yml")) {
         validateIndependentNpmPublisher(job, expectedRef, label);
+        for (const name of Object.keys(object(job.secrets ?? {}, `${label}.secrets`))) {
+          allowedSecretPaths.add(`${label}.secrets.${name}`);
+        }
       } else if (job.uses.includes("npm-artifact-publish.yml")) {
         validateNpmArtifactPublisher(job, expectedRef, label);
       } else if (job.uses.includes("crates-io-publish.yml")) {
@@ -297,6 +319,7 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
       } else {
         fail(`${label} calls an unsupported privileged reusable workflow`);
       }
+      walkSecretReferences(job, label, allowedSecretPaths);
       continue;
     }
 
@@ -311,6 +334,7 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
     } else {
       fail(`${label} has write permission but is not an approved publisher or attestor`);
     }
+    walkSecretReferences(job, label);
   }
 };
 
