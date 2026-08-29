@@ -27,6 +27,9 @@ def local_digests(directory: Path) -> dict[str, str]:
 def compare_registry_files(
     expected: dict[str, str], registry: dict[str, str], *, allow_missing: bool
 ) -> bool:
+    unexpected = sorted(set(registry) - set(expected))
+    if unexpected:
+        fail(f"PyPI contains unexpected files for this release: {unexpected}")
     missing: list[str] = []
     for filename, digest in expected.items():
         published = registry.get(filename)

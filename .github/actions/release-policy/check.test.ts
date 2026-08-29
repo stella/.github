@@ -16,6 +16,7 @@ jobs:
       - run: npm pack
   publish-pypi:
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && (true)
     permissions:
       id-token: write
     steps:
@@ -24,14 +25,18 @@ jobs:
           project-name: example
           distribution-name: example
           expected-version: 1.2.3
-          wheel-contract: '{}'
+          wheel-contract: '{"python-wheel-linux":["manylinux_2_17_x86_64"]}'
   finalize:
+    if: github.ref == 'refs/heads/main' && (true)
     uses: stella/.github/.github/workflows/npm-version-finalize.yml@${ref}
+    with:
+      package-files: package.json
     permissions:
       contents: write
       id-token: write
     secrets:
       RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 `;
 
 describe("release policy", () => {
@@ -50,9 +55,72 @@ describe("release policy", () => {
   test("accepts the shared independently versioned npm publisher", () => {
     const workflow = base.replace(
       /  finalize:[\s\S]*$/,
-      `  release:\n    uses: stella/.github/.github/workflows/npm-independent-release.yml@${ref}\n    permissions:\n      actions: read\n      contents: write\n      id-token: write\n`,
+      `  release:\n    if: github.ref == 'refs/heads/main' && (true)\n    uses: stella/.github/.github/workflows/npm-independent-release.yml@${ref}\n    with:\n      package-files: package.json\n    permissions:\n      actions: read\n      contents: write\n      id-token: write\n`,
     );
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test("accepts exact crate publishing and local artifact attestation contracts", () => {
+    const workflow = `name: Release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  attest:
+    if: github.ref == 'refs/heads/main' && (true)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: release-artifacts/*.tgz
+  publish-crate:
+    if: github.ref == 'refs/heads/main' && (true)
+    uses: stella/.github/.github/workflows/crates-io-publish.yml@${ref}
+    with:
+      crate-name: example-core
+      manifest-path: crates/core/Cargo.toml
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+`;
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+    expect(() =>
+      validateReleaseWorkflow(
+        workflow.replace(
+          "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+          `actions/attest@${"4".repeat(40)}`,
+        ),
+        ref,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateReleaseWorkflow(
+        workflow.replace(
+          "          path: release-artifacts",
+          "          path: release-artifacts\n          run-id: 123",
+        ),
+        ref,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateReleaseWorkflow(
+        workflow.replace(
+          "      manifest-path: crates/core/Cargo.toml",
+          "      manifest-path: ../Cargo.toml",
+        ),
+        ref,
+      ),
+    ).toThrow();
   });
 
   test.each([
@@ -65,6 +133,13 @@ describe("release policy", () => {
     ["mutable action", base.replace("actions/checkout@" + "2".repeat(40), "actions/checkout@main")],
     ["publisher command", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi", "    steps:\n      - run: npm install\n      - uses: stella/.github/.github/actions/pypi")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
+    ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)\n    permissions:\n      id-token: write", "    if: true\n    permissions:\n      id-token: write")],
+    ["publisher guard bypass", base.replace("github.ref == 'refs/heads/main' && (true)", "github.ref == 'refs/heads/main' && (true) || true")],
+    ["conditional PyPI step", base.replace("      - uses: stella/.github/.github/actions/pypi", "      - if: false\n        uses: stella/.github/.github/actions/pypi")],
+    ["unexpected PyPI input", base.replace("          wheel-contract:", "          attacker-input: value\n          wheel-contract:")],
+    ["empty wheel contract", base.replace("'{\"python-wheel-linux\":[\"manylinux_2_17_x86_64\"]}'", "'{}'")],
+    ["finalizer package path escape", base.replace("package-files: package.json", "package-files: ../package.json")],
+    ["unpaired release secret", base.replace("      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n", "")],
     ["secret inheritance", base.replace("    secrets:\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "    secrets: inherit")],
     ["unexpected secret", base.replace("RELEASE_APP_ID }}", "NPM_TOKEN }}")],
     ["approved secret in a build", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          TOKEN: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}")],

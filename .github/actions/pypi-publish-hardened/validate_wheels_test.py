@@ -114,6 +114,40 @@ class WheelValidatorTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("multiple artifacts resolve", result.stderr)
 
+    def test_rejects_metadata_from_another_dist_info_directory(self) -> None:
+        artifacts, output = self.make_fixture()
+        wheel_path = next((artifacts / "python-wheel-macos").glob("*.whl"))
+        with zipfile.ZipFile(wheel_path, "a") as wheel:
+            wheel.writestr(
+                "other-1.2.3.dist-info/METADATA",
+                "Metadata-Version: 2.4\nName: example-core\nVersion: 1.2.3\n",
+            )
+        result = self.run_validator("1.2.3", artifacts, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("metadata outside", result.stderr)
+
+    def test_rejects_duplicate_wheel_tags(self) -> None:
+        artifacts, output = self.make_fixture()
+        wheel_path = next((artifacts / "python-wheel-macos").glob("*.whl"))
+        replacement = wheel_path.with_suffix(".replacement")
+        wheel_metadata = "example_core-1.2.3.dist-info/WHEEL"
+        with zipfile.ZipFile(wheel_path) as source, zipfile.ZipFile(
+            replacement, "w"
+        ) as target:
+            for info in source.infolist():
+                contents = source.read(info)
+                if info.filename == wheel_metadata:
+                    contents = (
+                        "Wheel-Version: 1.0\n"
+                        "Tag: cp311-abi3-macosx_11_0_arm64\n"
+                        "Tag: cp311-abi3-macosx_11_0_arm64\n"
+                    ).encode()
+                target.writestr(info, contents)
+        replacement.replace(wheel_path)
+        result = self.run_validator("1.2.3", artifacts, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("has tags", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

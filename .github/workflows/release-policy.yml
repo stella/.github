@@ -1,6 +1,8 @@
 name: Release policy
 
 on:
+  pull_request:
+  merge_group:
   workflow_call:
     inputs:
       workflow:
@@ -14,6 +16,7 @@ permissions: {}
 jobs:
   enforce:
     name: Enforce release boundaries
+    if: github.repository != 'stella/.github' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,7 +38,11 @@ jobs:
       - name: Enforce release boundaries
         env:
           EXPECTED_SHARED_REF: ${{ job.workflow_sha }}
-          RELEASE_WORKFLOW: ${{ inputs.workflow }}
+          RELEASE_WORKFLOW: >-
+            ${{ inputs.workflow
+                || (github.repository == 'stella/tooling'
+                    && '.github/workflows/publish.yml'
+                    || '.github/workflows/release.yml') }}
         run: >-
           bun .release-policy/.github/actions/release-policy/check.ts
           "${RELEASE_WORKFLOW}"

@@ -38,12 +38,21 @@ def validate_wheel(
 
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
-        metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
-        wheel_names = [name for name in names if name.endswith(".dist-info/WHEEL")]
-        if len(metadata_names) != 1 or len(wheel_names) != 1:
-            fail(f"{wheel.name} must contain exactly one METADATA and one WHEEL")
-        metadata_info = archive.getinfo(metadata_names[0])
-        wheel_info = archive.getinfo(wheel_names[0])
+        dist_info = f"{expected_filename.split('-cp311-abi3-', 1)[0]}.dist-info"
+        metadata_name = f"{dist_info}/METADATA"
+        wheel_name = f"{dist_info}/WHEEL"
+        if names.count(metadata_name) != 1 or names.count(wheel_name) != 1:
+            fail(
+                f"{wheel.name} must contain exactly one {metadata_name} and one {wheel_name}"
+            )
+        if any(
+            name.endswith(".dist-info/METADATA") and name != metadata_name
+            or name.endswith(".dist-info/WHEEL") and name != wheel_name
+            for name in names
+        ):
+            fail(f"{wheel.name} contains metadata outside {dist_info}")
+        metadata_info = archive.getinfo(metadata_name)
+        wheel_info = archive.getinfo(wheel_name)
         if metadata_info.file_size > MAX_METADATA_BYTES or wheel_info.file_size > MAX_METADATA_BYTES:
             fail(f"metadata in {wheel.name} exceeds {MAX_METADATA_BYTES} bytes")
         metadata = Parser().parsestr(archive.read(metadata_info).decode("utf8"))
@@ -53,9 +62,13 @@ def validate_wheel(
         fail(f"{wheel.name} has project {metadata.get('Name')!r}; expected {expected_project!r}")
     if metadata.get("Version") != expected_version:
         fail(f"{wheel.name} has version {metadata.get('Version')!r}; expected {expected_version!r}")
-    actual_tags = set(wheel_metadata.get_all("Tag", []))
-    if actual_tags != expected_tags:
-        fail(f"{wheel.name} has tags {sorted(actual_tags)}; expected {sorted(expected_tags)}")
+    actual_tag_list = wheel_metadata.get_all("Tag", [])
+    actual_tags = set(actual_tag_list)
+    if len(actual_tag_list) != len(expected_tags) or actual_tags != expected_tags:
+        fail(
+            f"{wheel.name} has tags {sorted(actual_tag_list)}; "
+            f"expected {sorted(expected_tags)}"
+        )
 
 
 def main() -> None:

@@ -13,6 +13,8 @@ test("crate packaging is isolated from publishing credentials", () => {
   assert.doesNotMatch(publishJob, /cargo (?:install|package|publish)/);
   assert.doesNotMatch(publishJob, /bun install|npm install/);
   assert.doesNotMatch(publishJob, /repository: \$\{\{ github\.repository \}\}/);
+  assert.match(packageJob, /name: crate-release-\$\{\{ inputs\.crate-name \}\}/);
+  assert.match(packageJob, /path: core-crate\/\*\.crate/);
 });
 
 test("crate publishing performs one immutable PUT and verifies exact bytes", () => {

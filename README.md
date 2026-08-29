@@ -434,6 +434,11 @@ mutable action references, inherited secrets, and repository-controlled code in 
 OIDC or write-capable job. Approved publishers must use the same immutable shared
 commit as the policy.
 
+For tamper-resistant enforcement, configure this workflow as a ruleset workflow
+sourced from `stella/.github`; the local caller is fast feedback, not the trust
+anchor. The shared workflow supports `pull_request` and `merge_group` for that
+purpose and selects `publish.yml` for `stella/tooling`, otherwise `release.yml`.
+
 PyPI is the one registry-specific exception to reusable publishing workflows. Its
 trusted publisher remains bound to the caller's `release.yml`; the privileged job
 contains one pinned `pypi-publish-hardened` composite step. The action downloads and

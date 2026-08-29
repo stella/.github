@@ -25,9 +25,10 @@ test("wheel validation binds artifact, filename, metadata, and tag identities", 
   for (const invariant of [
     "actual_artifacts != expected_artifacts",
     "len(entries) != 1 or len(wheels) != 1",
-    "exactly one METADATA and one WHEEL",
+    "names.count(metadata_name) != 1 or names.count(wheel_name) != 1",
+    "contains metadata outside",
     "metadata_info.file_size > MAX_METADATA_BYTES",
-    "actual_tags != expected_tags",
+    "len(actual_tag_list) != len(expected_tags) or actual_tags != expected_tags",
     "not path.is_symlink()",
     "artifact.is_symlink()",
   ]) {

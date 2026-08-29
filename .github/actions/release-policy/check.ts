@@ -10,6 +10,9 @@ const RELEASE_SECRETS = new Set([
   "RELEASE_APP_ID",
   "RELEASE_APP_PRIVATE_KEY",
 ]);
+const DOWNLOAD_ARTIFACT_USE =
+  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -112,6 +115,117 @@ const rejectUnexpectedKeys = (value: JsonObject, allowed: Set<string>, label: st
   }
 };
 
+const requireKeys = (value: JsonObject, required: Set<string>, label: string) => {
+  for (const key of required) {
+    if (!(key in value)) {
+      fail(`${label} is missing required key ${key}`);
+    }
+  }
+};
+
+const nonEmptyString = (value: unknown, label: string) => {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    fail(`${label} must be a non-empty string`);
+  }
+  return value;
+};
+
+const staticString = (value: unknown, label: string) => {
+  const result = nonEmptyString(value, label);
+  if (result.includes("${{")) {
+    fail(`${label} must be static`);
+  }
+  return result;
+};
+
+const validateRepositoryPath = (value: unknown, label: string) => {
+  const path = staticString(value, label);
+  if (path.startsWith("/") || path.split("/").includes("..")) {
+    fail(`${label} must be repository-relative and must not escape the repository`);
+  }
+};
+
+const validatePackageFiles = (value: unknown, label: string) => {
+  const paths = nonEmptyString(value, label)
+    .split(/\r?\n/)
+    .map((path) => path.trim())
+    .filter(Boolean);
+  if (paths.length === 0 || new Set(paths).size !== paths.length) {
+    fail(`${label} must contain unique repository-relative package manifests`);
+  }
+  paths.forEach((path, index) => {
+    validateRepositoryPath(path, `${label}[${index}]`);
+    if (!path.endsWith("package.json")) {
+      fail(`${label}[${index}] must be a package.json path`);
+    }
+  });
+};
+
+const validateArtifactPattern = (value: unknown, label: string) => {
+  const pattern = staticString(value, label);
+  if (pattern.includes("/") || pattern.includes("..")) {
+    fail(`${label} must be an artifact-name pattern, not a path`);
+  }
+};
+
+const validateMainOnlyCondition = (value: unknown, label: string) => {
+  const condition = nonEmptyString(value, label).trim();
+  const prefix = "github.ref == 'refs/heads/main' && (";
+  if (!condition.startsWith(prefix) || !condition.endsWith(")")) {
+    fail(`${label} must wrap the complete publisher condition in a main-ref guard`);
+  }
+
+  let depth = 1;
+  let quote: "'" | '"' | null = null;
+  for (let index = prefix.length; index < condition.length; index += 1) {
+    const character = condition[index];
+    if (quote !== null) {
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth === 0 && index !== condition.length - 1) {
+        fail(`${label} must keep the main-ref guard outside the complete condition`);
+      }
+      if (depth < 0) {
+        fail(`${label} contains unbalanced parentheses`);
+      }
+    }
+  }
+  if (depth !== 0 || quote !== null) {
+    fail(`${label} contains an unbalanced guarded condition`);
+  }
+};
+
+const validateOptionalBoolean = (value: unknown, label: string) => {
+  if (typeof value === "boolean") {
+    return;
+  }
+  const expression = nonEmptyString(value, label);
+  if (!/^\$\{\{[\s\S]+\}\}$/.test(expression)) {
+    fail(`${label} must be a boolean or one GitHub expression`);
+  }
+};
+
+const validateSecretPairs = (secrets: JsonObject, label: string) => {
+  for (const prefix of ["RELEASE_APP", "CHANGELOG_APP"]) {
+    const hasId = `${prefix}_ID` in secrets;
+    const hasKey = `${prefix}_PRIVATE_KEY` in secrets;
+    if (hasId !== hasKey) {
+      fail(`${label} must map both ${prefix} credential fields or neither`);
+    }
+  }
+};
+
 const REUSABLE_JOB_KEYS = new Set(["name", "needs", "if", "uses", "with", "permissions", "secrets"]);
 const STEP_JOB_KEYS = new Set([
   "name",
@@ -164,12 +278,38 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
     { contents: "write", "id-token": "write" },
     `${label}.permissions`,
   );
+  const inputs = object(job.with, `${label}.with`);
+  rejectUnexpectedKeys(
+    inputs,
+    new Set([
+      "version-file",
+      "package-files",
+      "artifact-pattern",
+      "publish-to-npm",
+      "update-changelog",
+    ]),
+    `${label}.with`,
+  );
+  requireKeys(inputs, new Set(["package-files"]), `${label}.with`);
+  validatePackageFiles(inputs["package-files"], `${label}.with.package-files`);
+  if ("version-file" in inputs) {
+    validateRepositoryPath(inputs["version-file"], `${label}.with.version-file`);
+  }
+  if ("artifact-pattern" in inputs) {
+    validateArtifactPattern(inputs["artifact-pattern"], `${label}.with.artifact-pattern`);
+  }
+  for (const key of ["publish-to-npm", "update-changelog"]) {
+    if (key in inputs) {
+      validateOptionalBoolean(inputs[key], `${label}.with.${key}`);
+    }
+  }
   const secrets = object(job.secrets ?? {}, `${label}.secrets`);
   for (const [name, expression] of Object.entries(secrets)) {
     if (!RELEASE_SECRETS.has(name) || expression !== `\${{ secrets.${name} }}`) {
       fail(`${label}.secrets contains an unsupported mapping for ${name}`);
     }
   }
+  validateSecretPairs(secrets, `${label}.secrets`);
 };
 
 const validateCratesPublisher = (job: JsonObject, ref: string, label: string) => {
@@ -185,6 +325,30 @@ const validateCratesPublisher = (job: JsonObject, ref: string, label: string) =>
   if ("secrets" in job) {
     fail(`${label} must not receive secrets`);
   }
+  const inputs = object(job.with, `${label}.with`);
+  rejectUnexpectedKeys(
+    inputs,
+    new Set(["crate-name", "manifest-path", "version-file", "rust-toolchain", "environment"]),
+    `${label}.with`,
+  );
+  requireKeys(inputs, new Set(["crate-name", "manifest-path"]), `${label}.with`);
+  const crateName = staticString(inputs["crate-name"], `${label}.with.crate-name`);
+  if (!/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(crateName)) {
+    fail(`${label}.with.crate-name is not a valid static crate name`);
+  }
+  validateRepositoryPath(inputs["manifest-path"], `${label}.with.manifest-path`);
+  if ("version-file" in inputs) {
+    validateRepositoryPath(inputs["version-file"], `${label}.with.version-file`);
+  }
+  if ("rust-toolchain" in inputs) {
+    const toolchain = staticString(inputs["rust-toolchain"], `${label}.with.rust-toolchain`);
+    if (!/^(?:stable|[0-9]+\.[0-9]+(?:\.[0-9]+)?)$/.test(toolchain)) {
+      fail(`${label}.with.rust-toolchain must be stable or a numeric Rust release`);
+    }
+  }
+  if ("environment" in inputs && inputs.environment !== "crates-io") {
+    fail(`${label}.with.environment must be crates-io`);
+  }
 };
 
 const validateNpmArtifactPublisher = (job: JsonObject, ref: string, label: string) => {
@@ -199,6 +363,26 @@ const validateNpmArtifactPublisher = (job: JsonObject, ref: string, label: strin
   );
   if ("secrets" in job) {
     fail(`${label} must not receive secrets`);
+  }
+  const inputs = object(job.with, `${label}.with`);
+  rejectUnexpectedKeys(
+    inputs,
+    new Set(["artifact-name", "package-name", "version", "dist-tag"]),
+    `${label}.with`,
+  );
+  requireKeys(
+    inputs,
+    new Set(["artifact-name", "package-name", "version"]),
+    `${label}.with`,
+  );
+  validateArtifactPattern(inputs["artifact-name"], `${label}.with.artifact-name`);
+  const packageName = staticString(inputs["package-name"], `${label}.with.package-name`);
+  if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(packageName)) {
+    fail(`${label}.with.package-name is not a valid static npm package name`);
+  }
+  nonEmptyString(inputs.version, `${label}.with.version`);
+  if ("dist-tag" in inputs) {
+    nonEmptyString(inputs["dist-tag"], `${label}.with.dist-tag`);
   }
 };
 
@@ -221,6 +405,37 @@ const validateIndependentNpmPublisher = (job: JsonObject, ref: string, label: st
       fail(`${label}.secrets contains an unsupported mapping for ${name}`);
     }
   }
+  validateSecretPairs(secrets, `${label}.secrets`);
+  const inputs = object(job.with, `${label}.with`);
+  rejectUnexpectedKeys(
+    inputs,
+    new Set([
+      "package-files",
+      "artifact-pattern",
+      "artifact-run-id",
+      "dist-tag",
+      "github-latest-policy",
+      "github-latest-package",
+      "source-ref",
+    ]),
+    `${label}.with`,
+  );
+  requireKeys(inputs, new Set(["package-files"]), `${label}.with`);
+  validatePackageFiles(inputs["package-files"], `${label}.with.package-files`);
+  if ("artifact-pattern" in inputs) {
+    validateArtifactPattern(inputs["artifact-pattern"], `${label}.with.artifact-pattern`);
+  }
+  for (const key of [
+    "artifact-run-id",
+    "dist-tag",
+    "github-latest-policy",
+    "github-latest-package",
+    "source-ref",
+  ]) {
+    if (key in inputs) {
+      nonEmptyString(inputs[key], `${label}.with.${key}`);
+    }
+  }
 };
 
 const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
@@ -235,8 +450,77 @@ const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
   if (step.uses !== expectedSharedUse("actions/pypi-publish-hardened", ref)) {
     fail(`${label} must use the immutable shared PyPI publisher`);
   }
-  if ("run" in step || "env" in step) {
-    fail(`${label} must not run repository-controlled code or set publisher environment values`);
+  if ("if" in step || "id" in step) {
+    fail(`${label}.steps[0] must not be conditional or expose action outputs`);
+  }
+  const inputs = object(step.with, `${label}.steps[0].with`);
+  rejectUnexpectedKeys(
+    inputs,
+    new Set([
+      "artifact-pattern",
+      "expected-version",
+      "project-name",
+      "distribution-name",
+      "wheel-contract",
+      "skip-existing",
+    ]),
+    `${label}.steps[0].with`,
+  );
+  requireKeys(
+    inputs,
+    new Set(["expected-version", "project-name", "distribution-name", "wheel-contract"]),
+    `${label}.steps[0].with`,
+  );
+  nonEmptyString(inputs["expected-version"], `${label}.steps[0].with.expected-version`);
+  const projectName = staticString(
+    inputs["project-name"],
+    `${label}.steps[0].with.project-name`,
+  );
+  const distributionName = staticString(
+    inputs["distribution-name"],
+    `${label}.steps[0].with.distribution-name`,
+  );
+  if (!/^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$/.test(projectName)) {
+    fail(`${label}.steps[0].with.project-name is not a valid static Python project name`);
+  }
+  if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(distributionName)) {
+    fail(`${label}.steps[0].with.distribution-name must be wheel-normalized`);
+  }
+  if ("artifact-pattern" in inputs) {
+    validateArtifactPattern(
+      inputs["artifact-pattern"],
+      `${label}.steps[0].with.artifact-pattern`,
+    );
+  }
+  if (
+    "skip-existing" in inputs &&
+    inputs["skip-existing"] !== "true" &&
+    inputs["skip-existing"] !== true
+  ) {
+    fail(`${label}.steps[0].with.skip-existing must remain true`);
+  }
+  let contract: unknown;
+  try {
+    contract = JSON.parse(staticString(inputs["wheel-contract"], `${label}.steps[0].with.wheel-contract`));
+  } catch {
+    fail(`${label}.steps[0].with.wheel-contract must be valid static JSON`);
+  }
+  const contractMap = object(contract, `${label}.steps[0].with.wheel-contract`);
+  if (Object.keys(contractMap).length === 0) {
+    fail(`${label}.steps[0].with.wheel-contract must not be empty`);
+  }
+  for (const [artifactName, platformTags] of Object.entries(contractMap)) {
+    validateArtifactPattern(artifactName, `${label}.steps[0].with.wheel-contract artifact`);
+    if (
+      !Array.isArray(platformTags) ||
+      platformTags.length === 0 ||
+      new Set(platformTags).size !== platformTags.length ||
+      platformTags.some(
+        (tag) => typeof tag !== "string" || !/^[A-Za-z0-9]+(?:[_.][A-Za-z0-9]+)*$/.test(tag),
+      )
+    ) {
+      fail(`${label}.steps[0].with.wheel-contract.${artifactName} has invalid platform tags`);
+    }
   }
 };
 
@@ -254,15 +538,31 @@ const validateAttestation = (job: JsonObject, label: string) => {
   for (const [index, rawStep] of steps.entries()) {
     const step = object(rawStep, `${label}.steps[${index}]`);
     rejectUnexpectedKeys(step, ACTION_STEP_KEYS, `${label}.steps[${index}]`);
-    if ("run" in step || "env" in step) {
-      fail(`${label} must not run repository-controlled code or set environment values`);
-    }
     const uses = step.uses;
-    if (
-      typeof uses !== "string" ||
-      (!uses.startsWith("actions/download-artifact@") && !uses.startsWith("actions/attest@"))
-    ) {
+    if (uses !== DOWNLOAD_ARTIFACT_USE && uses !== ATTEST_USE) {
       fail(`${label} may only download and attest prepared artifacts`);
+    }
+    const inputs = object(step.with, `${label}.steps[${index}].with`);
+    if (uses === DOWNLOAD_ARTIFACT_USE) {
+      if ("if" in step || "id" in step) {
+        fail(`${label}.steps[${index}] must always download the local release artifact`);
+      }
+      rejectUnexpectedKeys(inputs, new Set(["name", "path"]), `${label}.steps[${index}].with`);
+      requireKeys(inputs, new Set(["name", "path"]), `${label}.steps[${index}].with`);
+      if (inputs.name !== "release-artifacts" || inputs.path !== "release-artifacts") {
+        fail(`${label}.steps[${index}] must download release-artifacts locally`);
+      }
+      continue;
+    }
+    rejectUnexpectedKeys(
+      inputs,
+      new Set(["subject-path", "sbom-path"]),
+      `${label}.steps[${index}].with`,
+    );
+    requireKeys(inputs, new Set(["subject-path"]), `${label}.steps[${index}].with`);
+    nonEmptyString(inputs["subject-path"], `${label}.steps[${index}].with.subject-path`);
+    if ("sbom-path" in inputs) {
+      nonEmptyString(inputs["sbom-path"], `${label}.steps[${index}].with.sbom-path`);
     }
   }
 };
@@ -299,6 +599,8 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
       walkSecretReferences(job, label);
       continue;
     }
+
+    validateMainOnlyCondition(job.if, `${label}.if`);
 
     if (typeof job.uses === "string") {
       const allowedSecretPaths = new Set<string>();

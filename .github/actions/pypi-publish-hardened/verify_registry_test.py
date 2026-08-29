@@ -41,6 +41,14 @@ class RegistryVerificationTest(unittest.TestCase):
                 {"one.whl": "a" * 64}, {"one.whl": "b" * 64}, allow_missing=True
             )
 
+    def test_rejects_unexpected_registry_files(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "unexpected files"):
+            MODULE.compare_registry_files(
+                {"one.whl": "a" * 64},
+                {"one.whl": "a" * 64, "unexpected.whl": "b" * 64},
+                allow_missing=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
