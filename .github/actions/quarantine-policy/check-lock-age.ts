@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   exactTimestamp,
   NPM_REGISTRY,
@@ -72,10 +72,14 @@ export const readNewLockedRegistryVersions = ({
   baseLockfile,
   lockfile,
 }: {
-  baseLockfile: string;
+  baseLockfile?: string;
   lockfile: string;
 }): LockedRegistryVersion[] => {
-  const base = new Set(readLockedRegistryVersions(baseLockfile).map(registryKey));
+  const base = new Set(
+    (baseLockfile === undefined ? [] : readLockedRegistryVersions(baseLockfile)).map(
+      registryKey,
+    ),
+  );
   return readLockedRegistryVersions(lockfile).filter(
     (candidate) => !base.has(registryKey(candidate)),
   );
@@ -130,7 +134,7 @@ export const checkNewLockedRegistryReleaseAges = async ({
   lockfile,
   now = new Date(),
 }: {
-  baseLockfile: string;
+  baseLockfile?: string;
   bunfig: string;
   loadMetadata?: LoadPackageMetadata;
   lockfile: string;
@@ -198,7 +202,9 @@ const run = async () => {
     throw new Error("the trusted base bun.lock path is required");
   }
   const result = await checkNewLockedRegistryReleaseAges({
-    baseLockfile: readFileSync(baseLockfilePath, "utf8"),
+    baseLockfile: existsSync(baseLockfilePath)
+      ? readFileSync(baseLockfilePath, "utf8")
+      : undefined,
     bunfig: readFileSync(BUNFIG, "utf8"),
     lockfile: readFileSync(LOCKFILE, "utf8"),
   });

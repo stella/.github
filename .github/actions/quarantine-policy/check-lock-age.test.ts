@@ -83,6 +83,18 @@ describe("locked package release age", () => {
     ]);
   });
 
+  test("checks every version when the trusted base has no lockfile", async () => {
+    const result = await checkNewLockedRegistryReleaseAges({
+      bunfig: bunfig(""),
+      loadMetadata: async () => ({
+        time: { "1.0.0": "2026-08-20T12:00:00.000Z" },
+      }),
+      lockfile: lockfile("first@1.0.0"),
+      now: NOW,
+    });
+    expect(result).toEqual({ checked: 1, errors: [] });
+  });
+
   test("fails closed on missing or unavailable registry timestamps", async () => {
     const result = await checkNewLockedRegistryReleaseAges({
       baseLockfile: lockfile(),
