@@ -232,6 +232,7 @@ describe("release policy", () => {
     "    env:\n      NODE_EXTRA_CA_CERTS: untrusted.pem\n",
     "    container: untrusted/runtime-proxy:latest\n",
     "    services:\n      mutator:\n        image: untrusted/workspace-mutator:latest\n",
+    "    continue-on-error: true\n",
   ])("rejects inherited runtime source overrides", (jobMetadata) => {
     const workflow = base.replace(
       "    runs-on: ubuntu-latest\n    steps:",
@@ -294,6 +295,14 @@ describe("release policy", () => {
       expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
     },
   );
+
+  test("rejects continue-on-error anywhere in the release graph", () => {
+    const workflow = base.replace(
+      "      - run: npm pack",
+      "      - continue-on-error: true\n        run: npm pack",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
 
   test("rejects symlinked Bun manifests", () => {
     const root = mkdtempSync(join(tmpdir(), "release-policy-"));

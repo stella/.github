@@ -114,6 +114,9 @@ const rejectFailureBypassConditions = (value: unknown, path = "workflow") => {
     return;
   }
   for (const [key, entry] of Object.entries(value)) {
+    if (key === "continue-on-error") {
+      fail(`${path}.continue-on-error must not mask release failure`);
+    }
     if (
       key === "if" &&
       typeof entry === "string" &&
@@ -292,8 +295,8 @@ const validateRuntimeSetups = (
     })
   ) {
     validateRuntimeRunner(entry, path);
-    if ("container" in entry || "services" in entry) {
-      fail(`${path} must not run containers or services before runtime setup`);
+    if ("container" in entry || "services" in entry || "continue-on-error" in entry) {
+      fail(`${path} must not weaken fail-closed runtime setup`);
     }
     const jobEnvironment = entry.env === undefined ? {} : object(entry.env, `${path}.env`);
     for (const key of Object.keys(jobEnvironment)) {
