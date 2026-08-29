@@ -89,14 +89,16 @@ describe("locked package release age", () => {
       bunfig: bunfig(""),
       loadMetadata: async (name) => {
         if (name === "missing") return { time: {} };
+        if (name === "malformed") return { time: { "1.0.0": "0" } };
         throw new Error("registry unavailable");
       },
-      lockfile: lockfile("missing@1.0.0", "unavailable@1.0.0"),
+      lockfile: lockfile("malformed@1.0.0", "missing@1.0.0", "unavailable@1.0.0"),
       now: NOW,
     });
     expect(result).toEqual({
-      checked: 2,
+      checked: 3,
       errors: [
+        "malformed@1.0.0: npm registry returned an invalid publication time",
         "missing@1.0.0: npm registry metadata has no publication time",
         "unavailable: registry metadata lookup failed: registry unavailable",
       ],

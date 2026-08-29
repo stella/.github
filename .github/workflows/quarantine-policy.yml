@@ -19,7 +19,14 @@ jobs:
       - name: Checkout caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          persist-credentials: false
+      - name: Checkout trusted target base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          path: .quarantine-base
+          sparse-checkout: bun.lock
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Checkout immutable policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,8 +44,6 @@ jobs:
           "${{ job.workflow_sha }}"
           "${{ github.repository }}"
       - name: Enforce newly locked package ages
-        run: |
-          set -euo pipefail
-          git show HEAD^1:bun.lock > "$RUNNER_TEMP/base-bun.lock"
-          bun .quarantine-policy/.github/actions/quarantine-policy/check-lock-age.ts \
-            "$RUNNER_TEMP/base-bun.lock"
+        run: >-
+          bun .quarantine-policy/.github/actions/quarantine-policy/check-lock-age.ts
+          .quarantine-base/bun.lock

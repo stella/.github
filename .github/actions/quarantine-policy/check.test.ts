@@ -344,16 +344,19 @@ describe("quarantine policy", () => {
       readFileSync(".github/workflows/quarantine-policy.yml", "utf8"),
     );
     const checkout = workflow.jobs.enforce.steps.find(
-      (step: { name?: string }) => step.name === "Checkout caller",
+      (step: { name?: string }) => step.name === "Checkout trusted target base",
     );
     expect(checkout?.with).toEqual({
-      "fetch-depth": 2,
+      path: ".quarantine-base",
       "persist-credentials": false,
+      ref: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+      "sparse-checkout": "bun.lock",
+      "sparse-checkout-cone-mode": false,
     });
     const lockAge = workflow.jobs.enforce.steps.find(
       (step: { name?: string }) => step.name === "Enforce newly locked package ages",
     );
-    expect(lockAge?.run).toContain("git show HEAD^1:bun.lock");
     expect(lockAge?.run).toContain("check-lock-age.ts");
+    expect(lockAge?.run).toContain(".quarantine-base/bun.lock");
   });
 });

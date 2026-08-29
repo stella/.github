@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import {
+  exactTimestamp,
   NPM_REGISTRY,
   readParsedExcludes,
   REQUIRED_RELEASE_AGE_SECONDS,
@@ -173,11 +174,11 @@ export const checkNewLockedRegistryReleaseAges = async ({
           errors.push(`${name}@${version}: npm registry metadata has no publication time`);
           continue;
         }
-        const publishedAtMs = Date.parse(publishedAt);
-        if (Number.isNaN(publishedAtMs)) {
+        if (!exactTimestamp(publishedAt)) {
           errors.push(`${name}@${version}: npm registry returned an invalid publication time`);
           continue;
         }
+        const publishedAtMs = Date.parse(publishedAt);
         if (publishedAtMs > cutoff) {
           errors.push(
             `${name}@${version}: locked version was published at ${publishedAt} and is younger than ${REQUIRED_RELEASE_AGE_SECONDS} seconds`,

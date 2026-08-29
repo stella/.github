@@ -8,7 +8,7 @@ export const NPM_REGISTRY = "https://registry.npmjs.org";
 const NOTICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EXPIRY_MARKER = "quarantine-expires:";
 const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
-const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+export const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
 const REGISTRY_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const HOURLY_CRON = /^(?:[0-9]|[1-5][0-9]) \* \* \* \*$/u;
@@ -58,7 +58,7 @@ const findExcludeBlock = (bunfig: string): BlockRange | undefined => {
   return undefined;
 };
 
-const exactTimestamp = (value: string): boolean => {
+export const exactTimestamp = (value: string): boolean => {
   const timestamp = Date.parse(value);
   return (
     EXACT_UTC_TIMESTAMP.test(value) &&
