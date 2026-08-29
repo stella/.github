@@ -10,6 +10,7 @@ const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
 const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
 const REGISTRY_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const HOURLY_CRON = /^(?:[0-9]|[1-5][0-9]) \* \* \* \*$/u;
 
 type BlockRange = { end: number; start: number };
 
@@ -253,21 +254,26 @@ export const pruneExpiredExcludes = ({
 
 export const validateCallerWorkflowRefs = ({
   expectedRef,
+  expectedRepository,
   policyWorkflow,
   pruneWorkflow,
 }: {
   expectedRef: string;
+  expectedRepository: string;
   policyWorkflow: string;
   pruneWorkflow: string;
 }): string[] => {
   if (!/^[0-9a-f]{40}$/u.test(expectedRef)) {
     return ["the shared quarantine policy ref must be a full commit SHA"];
   }
+  if (!/^stella\/[a-z0-9._-]+$/u.test(expectedRepository)) {
+    return ["the quarantine caller repository must be an explicit stella repository"];
+  }
   const expected = [
-    ["quarantine-policy.yml", policyWorkflow],
-    ["quarantine-prune.yml", pruneWorkflow],
+    ["quarantine-policy.yml", policyWorkflow, ["merge_group", "pull_request"]],
+    ["quarantine-prune.yml", pruneWorkflow, ["schedule", "workflow_dispatch"]],
   ] as const;
-  return expected.flatMap(([name, workflow]) => {
+  return expected.flatMap(([name, workflow, expectedTriggers]) => {
     const target = `${SHARED_WORKFLOW_PREFIX}${name}@${expectedRef}`;
     let parsed: unknown;
     try {
@@ -275,19 +281,102 @@ export const validateCallerWorkflowRefs = ({
     } catch {
       return [`.github/workflows/${name} must be valid YAML`];
     }
-    if (typeof parsed !== "object" || parsed === null || !("jobs" in parsed)) {
-      return [`.github/workflows/${name} must declare jobs`];
+    if (typeof parsed !== "object" || parsed === null) {
+      return [`.github/workflows/${name} must be a YAML mapping`];
+    }
+    const workflowKeys = Object.keys(parsed).sort();
+    if (workflowKeys.join(",") !== "jobs,name,on,permissions") {
+      return [`.github/workflows/${name} must contain only name, triggers, permissions, and jobs`];
+    }
+    if (!("on" in parsed) || typeof parsed.on !== "object" || parsed.on === null) {
+      return [`.github/workflows/${name} must declare required triggers`];
+    }
+    const triggers = Object.keys(parsed.on).sort();
+    if (triggers.join(",") !== [...expectedTriggers].sort().join(",")) {
+      return [`.github/workflows/${name} must declare only ${expectedTriggers.join(" and ")}`];
+    }
+    if (name === "quarantine-policy.yml") {
+      const invalidTrigger = Object.values(parsed.on).some(
+        (value) =>
+          value !== null &&
+          (typeof value !== "object" || Object.keys(value).length !== 0),
+      );
+      if (invalidTrigger) {
+        return [`.github/workflows/${name} must not filter enforcement triggers`];
+      }
+    } else {
+      const schedule = parsed.on.schedule;
+      const dispatch = parsed.on.workflow_dispatch;
+      if (
+        !Array.isArray(schedule) ||
+        schedule.length !== 1 ||
+        typeof schedule[0] !== "object" ||
+        schedule[0] === null ||
+        !("cron" in schedule[0]) ||
+        typeof schedule[0].cron !== "string" ||
+        Object.keys(schedule[0]).length !== 1 ||
+        !HOURLY_CRON.test(schedule[0].cron) ||
+        (dispatch !== null &&
+          (typeof dispatch !== "object" || Object.keys(dispatch).length !== 0))
+      ) {
+        return [`.github/workflows/${name} must declare one hourly schedule and unfiltered workflow_dispatch`];
+      }
+    }
+    if (!("permissions" in parsed) || typeof parsed.permissions !== "object" || parsed.permissions === null) {
+      return [`.github/workflows/${name} must grant only contents read`];
+    }
+    const workflowPermissions = Object.entries(parsed.permissions);
+    if (
+      workflowPermissions.length !== 1 ||
+      workflowPermissions[0]?.[0] !== "contents" ||
+      workflowPermissions[0]?.[1] !== "read"
+    ) {
+      return [`.github/workflows/${name} must grant only contents read`];
+    }
+    if (!("jobs" in parsed)) {
+      return [`.github/workflows/${name} must declare one caller job`];
     }
     const jobs = parsed.jobs;
-    if (typeof jobs !== "object" || jobs === null) {
-      return [`.github/workflows/${name} must declare jobs`];
+    if (typeof jobs !== "object" || jobs === null || Object.keys(jobs).length !== 1) {
+      return [`.github/workflows/${name} must declare one caller job`];
     }
-    const jobUses = Object.values(jobs).flatMap((job) => {
-      if (typeof job !== "object" || job === null || !("uses" in job)) return [];
-      return typeof job.uses === "string" ? [job.uses] : [];
-    });
-    if (jobUses.length !== 1 || jobUses[0] !== target) {
+    const job = Object.values(jobs).at(0);
+    if (typeof job !== "object" || job === null || !("uses" in job) || job.uses !== target) {
       return [`.github/workflows/${name} must use ${target} exactly once`];
+    }
+    const expectedJobKeys = name === "quarantine-policy.yml"
+      ? ["if", "name", "permissions", "uses"]
+      : ["if", "name", "permissions", "secrets", "uses"];
+    if (Object.keys(job).sort().join(",") !== expectedJobKeys.join(",")) {
+      return [`.github/workflows/${name} must contain only the canonical caller job fields`];
+    }
+    const expectedCondition = `github.repository == '${expectedRepository}'`;
+    if (!("if" in job) || job.if !== expectedCondition) {
+      return [`.github/workflows/${name} must use only the exact repository guard ${expectedCondition}`];
+    }
+    if (!("permissions" in job) || typeof job.permissions !== "object" || job.permissions === null) {
+      return [`.github/workflows/${name} caller job must grant only contents read`];
+    }
+    const jobPermissions = Object.entries(job.permissions);
+    if (
+      jobPermissions.length !== 1 ||
+      jobPermissions[0]?.[0] !== "contents" ||
+      jobPermissions[0]?.[1] !== "read"
+    ) {
+      return [`.github/workflows/${name} caller job must grant only contents read`];
+    }
+    if (name === "quarantine-prune.yml") {
+      if (!("secrets" in job) || typeof job.secrets !== "object" || job.secrets === null) {
+        return [`.github/workflows/${name} must pass only the quarantine App secrets`];
+      }
+      const secrets = Object.entries(job.secrets).sort(([left], [right]) => left.localeCompare(right));
+      const expectedSecrets = [
+        ["RELEASE_APP_ID", "${{ secrets.RELEASE_APP_ID }}"],
+        ["RELEASE_APP_PRIVATE_KEY", "${{ secrets.RELEASE_APP_PRIVATE_KEY }}"],
+      ];
+      if (JSON.stringify(secrets) !== JSON.stringify(expectedSecrets)) {
+        return [`.github/workflows/${name} must pass only the quarantine App secrets`];
+      }
     }
     return [];
   });
@@ -310,9 +399,14 @@ const run = () => {
   });
   const expectedRef = process.argv[2];
   if (expectedRef !== undefined) {
+    const expectedRepository = process.argv[3];
+    if (expectedRepository === undefined) {
+      fail("the caller repository is required with the shared policy ref");
+    }
     result.errors.push(
       ...validateCallerWorkflowRefs({
         expectedRef,
+        expectedRepository,
         policyWorkflow: readFileSync(
           path.join(root, ".github/workflows/quarantine-policy.yml"),
           "utf8",

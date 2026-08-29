@@ -33,3 +33,4 @@ jobs:
         run: >-
           bun .quarantine-policy/.github/actions/quarantine-policy/check.ts
           "${{ job.workflow_sha }}"
+          "${{ github.repository }}"

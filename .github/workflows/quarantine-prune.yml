@@ -52,7 +52,9 @@ jobs:
             exit 0
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
-          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts "${{ job.workflow_sha }}"
+          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts \
+            "${{ job.workflow_sha }}" \
+            "${{ github.repository }}"
           git diff --binary -- bunfig.toml > "$RUNNER_TEMP/bunfig.patch"
       - name: Upload exact removal patch
         if: steps.prune.outputs.changed == 'true'
@@ -95,7 +97,9 @@ jobs:
           set -euo pipefail
           git apply --check "$RUNNER_TEMP/quarantine-prune/bunfig.patch"
           git apply "$RUNNER_TEMP/quarantine-prune/bunfig.patch"
-          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts "${{ job.workflow_sha }}"
+          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts \
+            "${{ job.workflow_sha }}" \
+            "${{ github.repository }}"
           test "$(git diff --name-only)" = "bunfig.toml"
           git diff --check
       - name: Mint narrow release app token
