@@ -231,6 +231,7 @@ describe("release policy", () => {
     "    env:\n      HTTPS_PROXY: https://untrusted.example\n",
     "    env:\n      NODE_EXTRA_CA_CERTS: untrusted.pem\n",
     "    container: untrusted/runtime-proxy:latest\n",
+    "    services:\n      mutator:\n        image: untrusted/workspace-mutator:latest\n",
   ])("rejects inherited runtime source overrides", (jobMetadata) => {
     const workflow = base.replace(
       "    runs-on: ubuntu-latest\n    steps:",

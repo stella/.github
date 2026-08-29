@@ -270,8 +270,8 @@ const validateRuntimeSetups = (
     })
   ) {
     validateRuntimeRunner(entry, path);
-    if ("container" in entry) {
-      fail(`${path}.container must not wrap runtime setup`);
+    if ("container" in entry || "services" in entry) {
+      fail(`${path} must not run containers or services before runtime setup`);
     }
     const jobEnvironment = entry.env === undefined ? {} : object(entry.env, `${path}.env`);
     for (const key of Object.keys(jobEnvironment)) {
