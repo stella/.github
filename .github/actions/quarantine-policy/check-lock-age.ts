@@ -133,6 +133,16 @@ const readPublishTime = (
   return typeof entry?.[1] === "string" ? entry[1] : undefined;
 };
 
+const readTrustedBaseExcludes = (baseBunfig: string | undefined): string[] | undefined => {
+  if (baseBunfig === undefined) return undefined;
+  try {
+    return readParsedExcludes(baseBunfig);
+  } catch {
+    // An invalid historical policy cannot establish that its lockfile was screened.
+    return undefined;
+  }
+};
+
 export const checkNewLockedRegistryReleaseAges = async ({
   baseBunfig,
   baseLockfile,
@@ -149,9 +159,10 @@ export const checkNewLockedRegistryReleaseAges = async ({
   now?: Date;
 }): Promise<{ checked: number; errors: string[] }> => {
   const excludes = new Set(readParsedExcludes(bunfig));
+  const baseExcludes = readTrustedBaseExcludes(baseBunfig);
   const candidates = readNewLockedRegistryVersions({
-    baseExcludes: baseBunfig === undefined ? [] : readParsedExcludes(baseBunfig),
-    baseLockfile,
+    baseExcludes: baseExcludes ?? [],
+    baseLockfile: baseExcludes === undefined ? undefined : baseLockfile,
     lockfile,
   })
     .filter(
