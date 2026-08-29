@@ -103,6 +103,28 @@ const walkUses = (value: unknown, path = "workflow") => {
   }
 };
 
+const rejectFailureBypassConditions = (value: unknown, path = "workflow") => {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      rejectFailureBypassConditions(entry, `${path}[${index}]`),
+    );
+    return;
+  }
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      key === "if" &&
+      typeof entry === "string" &&
+      /\b(?:always|failure|cancelled)\s*\(/i.test(entry)
+    ) {
+      fail(`${path}.if must remain success-gated`);
+    }
+    rejectFailureBypassConditions(entry, `${path}.${key}`);
+  }
+};
+
 const validateRuntimeRunner = (job: JsonObject, path: string) => {
   const runnerValue = job["runs-on"];
   if (typeof runnerValue !== "string" || runnerValue.trim().length === 0) {
@@ -898,6 +920,7 @@ export const validateReleaseWorkflow = (
   }
   exactPermissions(workflow.permissions, { contents: "read" }, "workflow.permissions");
   walkUses(workflow);
+  rejectFailureBypassConditions(workflow);
   validateRuntimeSetups(workflow, readRepositoryFile);
   for (const [key, value] of Object.entries(workflow)) {
     if (key !== "jobs") {

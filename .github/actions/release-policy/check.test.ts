@@ -284,6 +284,17 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(base.replace(expected, replacement), ref)).toThrow();
   });
 
+  test.each(["always()", "failure()", "!cancelled()"])(
+    "rejects failure-bypassing condition %s",
+    (condition) => {
+      const workflow = base.replace(
+        "      - run: npm pack",
+        `      - if: >-\n          ${condition}\n        run: npm pack`,
+      );
+      expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+    },
+  );
+
   test("rejects symlinked Bun manifests", () => {
     const root = mkdtempSync(join(tmpdir(), "release-policy-"));
     const external = join(tmpdir(), `release-policy-external-${process.pid}.json`);
