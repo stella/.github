@@ -25,7 +25,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           find .github -type f -name '*.test.mjs' -print0 | sort -z | xargs -0 node --test
-          bun test ./.github/actions/release-policy/check.test.ts
+          bun test ./.github/actions/release-policy/check.test.ts ./.github/actions/quarantine-policy/check.test.ts
           find .github -type f -name '*_test.py' -print0 | sort -z | xargs -0 -n1 python3
 
   sync-ai:
