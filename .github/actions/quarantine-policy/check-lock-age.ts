@@ -146,6 +146,7 @@ const readTrustedBaseExcludes = (baseBunfig: string | undefined): string[] | und
 export const checkNewLockedRegistryReleaseAges = async ({
   baseBunfig,
   baseLockfile,
+  baseNpmrcPresent = false,
   bunfig,
   loadMetadata = loadRegistryMetadata,
   lockfile,
@@ -153,13 +154,14 @@ export const checkNewLockedRegistryReleaseAges = async ({
 }: {
   baseBunfig?: string;
   baseLockfile?: string;
+  baseNpmrcPresent?: boolean;
   bunfig: string;
   loadMetadata?: LoadPackageMetadata;
   lockfile: string;
   now?: Date;
 }): Promise<{ checked: number; errors: string[] }> => {
   const excludes = new Set(readParsedExcludes(bunfig));
-  const baseExcludes = readTrustedBaseExcludes(baseBunfig);
+  const baseExcludes = baseNpmrcPresent ? undefined : readTrustedBaseExcludes(baseBunfig);
   const candidates = readNewLockedRegistryVersions({
     baseExcludes: baseExcludes ?? [],
     baseLockfile: baseExcludes === undefined ? undefined : baseLockfile,
@@ -222,8 +224,13 @@ export const checkNewLockedRegistryReleaseAges = async ({
 const run = async () => {
   const baseLockfilePath = process.argv[2];
   const baseBunfigPath = process.argv[3];
-  if (baseLockfilePath === undefined || baseBunfigPath === undefined) {
-    throw new Error("the trusted base bun.lock and bunfig.toml paths are required");
+  const baseNpmrcPath = process.argv[4];
+  if (
+    baseLockfilePath === undefined ||
+    baseBunfigPath === undefined ||
+    baseNpmrcPath === undefined
+  ) {
+    throw new Error("the trusted base bun.lock, bunfig.toml, and .npmrc paths are required");
   }
   const result = await checkNewLockedRegistryReleaseAges({
     baseBunfig: existsSync(baseBunfigPath)
@@ -232,6 +239,7 @@ const run = async () => {
     baseLockfile: existsSync(baseLockfilePath)
       ? readFileSync(baseLockfilePath, "utf8")
       : undefined,
+    baseNpmrcPresent: existsSync(baseNpmrcPath),
     bunfig: readFileSync(BUNFIG, "utf8"),
     lockfile: readFileSync(LOCKFILE, "utf8"),
   });

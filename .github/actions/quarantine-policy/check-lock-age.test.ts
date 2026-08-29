@@ -110,6 +110,22 @@ describe("locked package release age", () => {
     expect(result).toEqual({ checked: 1, errors: [] });
   });
 
+  test("checks every version when the base has a repository npmrc", async () => {
+    const unchanged = lockfile("alternate-registry@1.0.0");
+    const result = await checkNewLockedRegistryReleaseAges({
+      baseBunfig: bunfig(""),
+      baseLockfile: unchanged,
+      baseNpmrcPresent: true,
+      bunfig: bunfig(""),
+      loadMetadata: async () => ({
+        time: { "1.0.0": "2026-08-20T12:00:00.000Z" },
+      }),
+      lockfile: unchanged,
+      now: NOW,
+    });
+    expect(result).toEqual({ checked: 1, errors: [] });
+  });
+
   test("rechecks an unchanged version when its base exception is removed", async () => {
     const unchanged = lockfile("fresh@1.0.0", "still-allowed@1.0.0");
     const result = await checkNewLockedRegistryReleaseAges({

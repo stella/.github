@@ -350,7 +350,7 @@ describe("quarantine policy", () => {
       path: ".quarantine-base",
       "persist-credentials": false,
       ref: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
-      "sparse-checkout": "bun.lock\nbunfig.toml\n",
+      "sparse-checkout": "bun.lock\nbunfig.toml\n.npmrc\n",
       "sparse-checkout-cone-mode": false,
     });
     const lockAge = workflow.jobs.enforce.steps.find(
@@ -359,5 +359,6 @@ describe("quarantine policy", () => {
     expect(lockAge?.run).toContain("check-lock-age.ts");
     expect(lockAge?.run).toContain(".quarantine-base/bun.lock");
     expect(lockAge?.run).toContain(".quarantine-base/bunfig.toml");
+    expect(lockAge?.run).toContain(".quarantine-base/.npmrc");
   });
 });

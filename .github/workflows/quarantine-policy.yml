@@ -28,6 +28,7 @@ jobs:
           sparse-checkout: |
             bun.lock
             bunfig.toml
+            .npmrc
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Checkout immutable policy
@@ -50,3 +51,4 @@ jobs:
           bun .quarantine-policy/.github/actions/quarantine-policy/check-lock-age.ts
           .quarantine-base/bun.lock
           .quarantine-base/bunfig.toml
+          .quarantine-base/.npmrc
