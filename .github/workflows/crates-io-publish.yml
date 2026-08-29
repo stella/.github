@@ -1,0 +1,124 @@
+name: crates.io publish
+
+on:
+  workflow_call:
+    inputs:
+      crate-name:
+        description: Exact crates.io package name.
+        required: true
+        type: string
+      manifest-path:
+        description: Repo-relative Cargo.toml for the published crate.
+        required: true
+        type: string
+      version-file:
+        description: Repo-relative release version file.
+        required: false
+        type: string
+        default: VERSION
+      rust-toolchain:
+        description: Rust toolchain used to package the crate.
+        required: false
+        type: string
+        default: stable
+      environment:
+        description: GitHub environment registered with crates.io.
+        required: false
+        type: string
+        default: crates-io
+    outputs:
+      crate-sha256:
+        description: SHA-256 of the exact published crate archive.
+        value: ${{ jobs.package.outputs.crate-sha256 }}
+
+permissions: {}
+
+jobs:
+  package:
+    name: Package crate without OIDC
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      crate-sha256: ${{ steps.metadata.outputs.crate-sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      - name: Checkout immutable publisher tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .release-tooling
+          persist-credentials: false
+      - name: Package crate
+        run: cargo package --locked --manifest-path "${{ inputs.manifest-path }}"
+      - name: Build exact crates.io upload artifact
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir core-crate
+          node .release-tooling/.github/tools/create-crate-upload.mjs \
+            "${{ inputs.crate-name }}" \
+            "${{ inputs.manifest-path }}" \
+            "${{ inputs.version-file }}" \
+            core-crate
+          echo "crate-sha256=$(jq -er '.crateSha256' core-crate/release.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crates-io-${{ inputs.crate-name }}
+          path: core-crate
+          if-no-files-found: error
+
+  attest:
+    name: Attest prepared crate
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: crates-io-${{ inputs.crate-name }}
+          path: core-crate
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: core-crate/*.crate
+
+  publish:
+    name: Publish prepared crate
+    needs: [package, attest]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout immutable publisher tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .release-tooling
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: crates-io-${{ inputs.crate-name }}
+          path: core-crate
+      - name: Authenticate to crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish exact crate bytes
+        shell: bash
+        env:
+          CRATE_DIRECTORY: core-crate
+          CRATES_IO_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+          EXPECTED_CRATE_NAME: ${{ inputs.crate-name }}
+        run: bash -eo pipefail .release-tooling/.github/tools/publish-crate.sh

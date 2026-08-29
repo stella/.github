@@ -1,0 +1,39 @@
+name: Release policy
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: Repo-relative release workflow to validate.
+        required: false
+        type: string
+        default: .github/workflows/release.yml
+
+permissions: {}
+
+jobs:
+  enforce:
+    name: Enforce release boundaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout immutable policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .release-policy
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - name: Enforce release boundaries
+        run: >-
+          bun .release-policy/.github/actions/release-policy/check.ts
+          "${{ inputs.workflow }}"
+          "${{ job.workflow_sha }}"

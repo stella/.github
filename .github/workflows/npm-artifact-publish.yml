@@ -1,0 +1,69 @@
+name: npm artifact publish
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Exact artifact containing one pre-packed npm tarball.
+        required: true
+        type: string
+      package-name:
+        description: Exact package name expected inside the tarball.
+        required: true
+        type: string
+      version:
+        description: Exact package version expected inside the tarball.
+        required: true
+        type: string
+      dist-tag:
+        description: npm distribution tag.
+        required: false
+        type: string
+        default: latest
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish prepared npm artifact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - name: Install npm for trusted publishing
+        # zizmor: ignore[adhoc-packages]
+        run: npm install --global --ignore-scripts npm@11.11.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: release-artifact
+      - name: Resolve exact tarball
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' tarballs < <(find release-artifact -type f -name '*.tgz' -print0)
+          if [[ "${#tarballs[@]}" != 1 ]]; then
+            echo "::error::Expected exactly one npm tarball; found ${#tarballs[@]}."
+            exit 1
+          fi
+          echo "tarball=${tarballs[0]}" >> "$GITHUB_OUTPUT"
+      - name: Checkout immutable publisher tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .release-tooling
+          persist-credentials: false
+      - name: Publish exact npm tarball
+        uses: ./.release-tooling/.github/actions/npm-publish-hardened
+        with:
+          tarball: ${{ steps.artifact.outputs.tarball }}
+          expected-name: ${{ inputs.package-name }}
+          expected-version: ${{ inputs.version }}
+          tag: ${{ inputs.dist-tag }}

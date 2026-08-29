@@ -94,6 +94,23 @@ pkg_name_from_tarball() {
   ' "${PKG_JSON_FILE}"
 }
 
+if [[ -n "${EXPECTED_NAME:-}" || -n "${EXPECTED_VERSION:-}" ]]; then
+  if (( ${#PUBLISH_QUEUE[@]} != 1 )) || [[ -z "${EXPECTED_NAME:-}" || -z "${EXPECTED_VERSION:-}" ]]; then
+    printf '::error::expected-name and expected-version must be set together for exactly one tarball.\n'
+    exit 2
+  fi
+  tar -xOf "${PUBLISH_QUEUE[0]}" package/package.json > "${PKG_JSON_FILE}"
+  read -r actual_name actual_version < <(node -e '
+    const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    console.log(`${j.name ?? ""}\t${j.version ?? ""}`);
+  ' "${PKG_JSON_FILE}")
+  if [[ "${actual_name}" != "${EXPECTED_NAME}" || "${actual_version}" != "${EXPECTED_VERSION}" ]]; then
+    printf '::error::Tarball contains %s@%s; expected %s@%s.\n' \
+      "${actual_name}" "${actual_version}" "${EXPECTED_NAME}" "${EXPECTED_VERSION}"
+    exit 2
+  fi
+fi
+
 # Preflight: every package in the queue must already exist on the
 # registry. OIDC trusted publishing cannot create a brand-new package —
 # npm requires a package to exist before a trusted publisher can be
