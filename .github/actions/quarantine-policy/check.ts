@@ -9,6 +9,7 @@ const EXPIRY_MARKER = "quarantine-expires:";
 const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
 const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const WORKSPACE_PROTOCOL = "workspace:";
+const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
 
 type BlockRange = { end: number; start: number };
 
@@ -246,6 +247,34 @@ export const pruneExpiredExcludes = ({
   };
 };
 
+export const validateCallerWorkflowRefs = ({
+  expectedRef,
+  policyWorkflow,
+  pruneWorkflow,
+}: {
+  expectedRef: string;
+  policyWorkflow: string;
+  pruneWorkflow: string;
+}): string[] => {
+  if (!/^[0-9a-f]{40}$/u.test(expectedRef)) {
+    return ["the shared quarantine policy ref must be a full commit SHA"];
+  }
+  const expected = [
+    ["quarantine-policy.yml", policyWorkflow],
+    ["quarantine-prune.yml", pruneWorkflow],
+  ] as const;
+  return expected.flatMap(([name, workflow]) => {
+    const target = `${SHARED_WORKFLOW_PREFIX}${name}@${expectedRef}`;
+    const sharedUses = [
+      ...workflow.matchAll(/stella\/\.github\/\.github\/workflows\/quarantine-(?:policy|prune)\.yml@[^\s]+/gu),
+    ].map(([value]) => value);
+    if (sharedUses.length !== 1 || sharedUses[0] !== target) {
+      return [`.github/workflows/${name} must use ${target} exactly once`];
+    }
+    return [];
+  });
+};
+
 const run = () => {
   const root = process.cwd();
   const bunfigPath = path.join(root, BUNFIG);
@@ -261,6 +290,22 @@ const run = () => {
     bunfig,
     lockfile: readFileSync(path.join(root, LOCKFILE), "utf8"),
   });
+  const expectedRef = process.argv[2];
+  if (expectedRef !== undefined) {
+    result.errors.push(
+      ...validateCallerWorkflowRefs({
+        expectedRef,
+        policyWorkflow: readFileSync(
+          path.join(root, ".github/workflows/quarantine-policy.yml"),
+          "utf8",
+        ),
+        pruneWorkflow: readFileSync(
+          path.join(root, ".github/workflows/quarantine-prune.yml"),
+          "utf8",
+        ),
+      }),
+    );
+  }
   if (result.warnings.length > 0) console.warn(result.warnings.join("\n"));
   if (result.errors.length > 0) fail(result.errors.join("\n\n"));
   console.log(`${BUNFIG}: package quarantine policy validated`);

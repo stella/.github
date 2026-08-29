@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { checkQuarantinePolicy, pruneExpiredExcludes } from "./check";
+import {
+  checkQuarantinePolicy,
+  pruneExpiredExcludes,
+  validateCallerWorkflowRefs,
+} from "./check";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
 const lockfile = '"@stll/native": ["@stll/native@1.0.0", "", {}, "sha512-x"]';
@@ -70,5 +74,23 @@ describe("quarantine policy", () => {
   test("requires every registry-backed first-party package", () => {
     const result = checkQuarantinePolicy({ bunfig: bunfig(""), lockfile, now: NOW });
     expect(result.errors.join("\n")).toContain("@stll/native");
+  });
+
+  test("binds both caller workflows to the exact shared revision", () => {
+    const expectedRef = "a".repeat(40);
+    expect(
+      validateCallerWorkflowRefs({
+        expectedRef,
+        policyWorkflow: `uses: stella/.github/.github/workflows/quarantine-policy.yml@${expectedRef}`,
+        pruneWorkflow: `uses: stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}`,
+      }),
+    ).toEqual([]);
+    expect(
+      validateCallerWorkflowRefs({
+        expectedRef,
+        policyWorkflow: "uses: stella/.github/.github/workflows/quarantine-policy.yml@main",
+        pruneWorkflow: `uses: stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}`,
+      }).join("\n"),
+    ).toContain("must use");
   });
 });

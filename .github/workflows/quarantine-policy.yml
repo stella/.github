@@ -30,4 +30,6 @@ jobs:
         with:
           bun-version: "1.4.0"
       - name: Enforce package quarantine
-        run: bun .quarantine-policy/.github/actions/quarantine-policy/check.ts
+        run: >-
+          bun .quarantine-policy/.github/actions/quarantine-policy/check.ts
+          "${{ job.workflow_sha }}"
