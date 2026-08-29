@@ -39,9 +39,18 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
   });
 
+  test("accepts additional explicit release inputs", () => {
+    const workflow = base.replace(
+      "  workflow_dispatch:\n",
+      "  push:\n    branches: [main]\n    paths: [VERSION, packages/data/package.json]\n  workflow_dispatch:\n",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
   test.each([
     ["workflow OIDC", base.replace("contents: read\njobs:", "contents: read\n  id-token: write\njobs:")],
     ["public comment trigger", base.replace("  workflow_dispatch:", "  workflow_dispatch:\n  issue_comment:")],
+    ["release push without VERSION", base.replace("  workflow_dispatch:\n", "  push:\n    branches: [main]\n    paths: [src/**]\n  workflow_dispatch:\n")],
     ["workflow environment", base.replace("permissions:", "env:\n  BASH_ENV: artifact/payload\npermissions:")],
     ["workflow defaults", base.replace("permissions:", "defaults:\n  run:\n    shell: ./payload\npermissions:")],
     ["mutable action", base.replace("actions/checkout@" + "2".repeat(40), "actions/checkout@main")],

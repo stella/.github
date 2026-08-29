@@ -37,10 +37,9 @@ runs:
         DISTRIBUTION_NAME: ${{ inputs.distribution-name }}
         EXPECTED_VERSION: ${{ inputs.expected-version }}
         PROJECT_NAME: ${{ inputs.project-name }}
+        VALIDATOR_PATH: ${{ github.action_path }}/validate_wheels.py
         WHEEL_CONTRACT: ${{ inputs.wheel-contract }}
-      run: >-
-        python3 "${{ github.action_path }}/validate_wheels.py"
-        wheel-artifacts dist
+      run: python3 "${VALIDATOR_PATH}" wheel-artifacts dist
     - name: Publish wheels to PyPI
       uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
       with:

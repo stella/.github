@@ -56,17 +56,23 @@ jobs:
           path: .release-tooling
           persist-credentials: false
       - name: Package crate
-        run: cargo package --locked --manifest-path "${{ inputs.manifest-path }}"
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+        run: cargo package --locked --manifest-path "${MANIFEST_PATH}"
       - name: Build exact crates.io upload artifact
         id: metadata
         shell: bash
+        env:
+          CRATE_NAME: ${{ inputs.crate-name }}
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+          VERSION_FILE: ${{ inputs.version-file }}
         run: |
           set -euo pipefail
           mkdir core-crate
           node .release-tooling/.github/tools/create-crate-upload.mjs \
-            "${{ inputs.crate-name }}" \
-            "${{ inputs.manifest-path }}" \
-            "${{ inputs.version-file }}" \
+            "${CRATE_NAME}" \
+            "${MANIFEST_PATH}" \
+            "${VERSION_FILE}" \
             core-crate
           echo "crate-sha256=$(jq -er '.crateSha256' core-crate/release.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -81,8 +87,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      attestations: write
-      id-token: write
+      attestations: write # Record the prepared crate attestation.
+      id-token: write # Sign the prepared crate attestation.
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -99,7 +105,7 @@ jobs:
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
-      id-token: write
+      id-token: write # Exchange a short-lived crates.io publishing token.
     steps:
       - name: Checkout immutable publisher tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

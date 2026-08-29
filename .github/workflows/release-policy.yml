@@ -33,7 +33,10 @@ jobs:
         with:
           bun-version: "1.4.0"
       - name: Enforce release boundaries
+        env:
+          EXPECTED_SHARED_REF: ${{ job.workflow_sha }}
+          RELEASE_WORKFLOW: ${{ inputs.workflow }}
         run: >-
           bun .release-policy/.github/actions/release-policy/check.ts
-          "${{ inputs.workflow }}"
-          "${{ job.workflow_sha }}"
+          "${RELEASE_WORKFLOW}"
+          "${EXPECTED_SHARED_REF}"

@@ -100,6 +100,7 @@ if [[ -n "${EXPECTED_NAME:-}" || -n "${EXPECTED_VERSION:-}" ]]; then
     exit 2
   fi
   tar -xOf "${PUBLISH_QUEUE[0]}" package/package.json > "${PKG_JSON_FILE}"
+  # shellcheck disable=SC2016  # JS template literals do not need shell expansion.
   read -r actual_name actual_version < <(node -e '
     const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     console.log(`${j.name ?? ""}\t${j.version ?? ""}`);

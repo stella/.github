@@ -152,8 +152,12 @@ const validateTriggers = (value: unknown) => {
     if (!Array.isArray(branches) || branches.length !== 1 || branches[0] !== "main") {
       fail("workflow.on.push.branches must be exactly [main]");
     }
-    if (!Array.isArray(paths) || paths.length !== 1 || paths[0] !== "VERSION") {
-      fail("workflow.on.push.paths must be exactly [VERSION]");
+    if (
+      !Array.isArray(paths) ||
+      !paths.includes("VERSION") ||
+      paths.some((path) => typeof path !== "string" || path.length === 0 || path.includes("${{"))
+    ) {
+      fail("workflow.on.push.paths must be explicit repository paths and include VERSION");
     }
   }
 };
