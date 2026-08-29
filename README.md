@@ -430,9 +430,9 @@ jobs:
 
 Require `Release policy / Enforce release boundaries` on the default branch. The
 policy rejects public-event release triggers, workflow-level execution controls,
-mutable action references, inherited secrets, and repository-controlled code in an
-OIDC or write-capable job. Approved publishers must use the same immutable shared
-commit as the policy.
+mutable action references, floating Node.js or Bun runtimes, inherited secrets, and
+repository-controlled code in an OIDC or write-capable job. Approved publishers must
+use the same immutable shared commit as the policy.
 
 For tamper-resistant enforcement, configure this workflow as a ruleset workflow
 sourced from `stella/.github`; the local caller is fast feedback, not the trust

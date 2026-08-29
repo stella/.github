@@ -4,6 +4,7 @@ import { YAML } from "bun";
 type JsonObject = Record<string, unknown>;
 
 const SHA = /^[0-9a-f]{40}$/;
+const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -70,6 +71,37 @@ const walkUses = (value: unknown, path = "workflow") => {
       assertPinnedUses(entry, `${path}.uses`);
     }
     walkUses(entry, `${path}.${key}`);
+  }
+};
+
+const validateRuntimeSetups = (value: unknown, path = "workflow") => {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => validateRuntimeSetups(entry, `${path}[${index}]`));
+    return;
+  }
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+
+  const entry = value as JsonObject;
+  if (typeof entry.uses === "string") {
+    const inputs = entry.with === undefined ? {} : object(entry.with, `${path}.with`);
+    if (entry.uses.startsWith("actions/setup-node@")) {
+      const version = staticString(inputs["node-version"], `${path}.with.node-version`);
+      if (!EXACT_RUNTIME_VERSION.test(version)) {
+        fail(`${path}.with.node-version must be an exact Node.js release`);
+      }
+    }
+    if (entry.uses.startsWith("oven-sh/setup-bun@")) {
+      const version = staticString(inputs["bun-version"], `${path}.with.bun-version`);
+      if (!EXACT_RUNTIME_VERSION.test(version)) {
+        fail(`${path}.with.bun-version must be an exact Bun release`);
+      }
+    }
+  }
+
+  for (const [key, child] of Object.entries(entry)) {
+    validateRuntimeSetups(child, `${path}.${key}`);
   }
 };
 
@@ -610,6 +642,7 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
   }
   exactPermissions(workflow.permissions, { contents: "read" }, "workflow.permissions");
   walkUses(workflow);
+  validateRuntimeSetups(workflow);
   for (const [key, value] of Object.entries(workflow)) {
     if (key !== "jobs") {
       walkSecretReferences(value, `workflow.${key}`);
