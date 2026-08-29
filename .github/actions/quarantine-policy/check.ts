@@ -1,13 +1,14 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const BUNFIG = "bunfig.toml";
 const LOCKFILE = "bun.lock";
-const REQUIRED_RELEASE_AGE_SECONDS = 5 * 24 * 60 * 60;
+export const REQUIRED_RELEASE_AGE_SECONDS = 5 * 24 * 60 * 60;
+export const NPM_REGISTRY = "https://registry.npmjs.org";
 const NOTICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EXPIRY_MARKER = "quarantine-expires:";
 const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
-const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+export const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
 const REGISTRY_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const HOURLY_CRON = /^(?:[0-9]|[1-5][0-9]) \* \* \* \*$/u;
@@ -17,6 +18,9 @@ type BlockRange = { end: number; start: number };
 const fail = (message: string): never => {
   throw new Error(message);
 };
+
+export const pathEntryExists = (entryPath: string): boolean =>
+  lstatSync(entryPath, { throwIfNoEntry: false }) !== undefined;
 
 const findExcludeBlock = (bunfig: string): BlockRange | undefined => {
   const declaration = /^[\t ]*minimumReleaseAgeExcludes[\t ]*=/mu.exec(bunfig);
@@ -57,7 +61,7 @@ const findExcludeBlock = (bunfig: string): BlockRange | undefined => {
   return undefined;
 };
 
-const exactTimestamp = (value: string): boolean => {
+export const exactTimestamp = (value: string): boolean => {
   const timestamp = Date.parse(value);
   return (
     EXACT_UTC_TIMESTAMP.test(value) &&
@@ -85,12 +89,21 @@ const parseEntry = (line: string): Entry | undefined => {
   };
 };
 
-const readParsedExcludes = (bunfig: string): string[] => {
+export const readParsedExcludes = (bunfig: string): string[] => {
   const parsed = Bun.TOML.parse(bunfig);
   if (!("install" in parsed) || typeof parsed.install !== "object" || parsed.install === null) {
     fail(`${BUNFIG} must contain an [install] table`);
   }
   const install = parsed.install;
+  if (
+    ("registry" in install && install.registry !== NPM_REGISTRY) ||
+    ("scopes" in install &&
+      (typeof install.scopes !== "object" ||
+        install.scopes === null ||
+        Object.keys(install.scopes).length > 0))
+  ) {
+    fail(`${BUNFIG} quarantine policy requires the canonical npm registry`);
+  }
   if (
     !("minimumReleaseAge" in install) ||
     install.minimumReleaseAge !== REQUIRED_RELEASE_AGE_SECONDS
@@ -138,10 +151,12 @@ export type CheckResult = {
 export const checkQuarantinePolicy = ({
   bunfig,
   lockfile,
+  npmrcPresent = false,
   now = new Date(),
 }: {
   bunfig: string;
   lockfile: string;
+  npmrcPresent?: boolean;
   now?: Date;
 }): CheckResult => {
   const errors: string[] = [];
@@ -151,6 +166,9 @@ export const checkQuarantinePolicy = ({
     excludes = readParsedExcludes(bunfig);
   } catch (error) {
     return { errors: [error instanceof Error ? error.message : String(error)], warnings };
+  }
+  if (npmrcPresent) {
+    errors.push(`${BUNFIG} quarantine policy does not allow a repository .npmrc`);
   }
 
   const range = findExcludeBlock(bunfig);
@@ -393,6 +411,7 @@ const run = () => {
   const result = checkQuarantinePolicy({
     bunfig,
     lockfile: readFileSync(path.join(root, LOCKFILE), "utf8"),
+    npmrcPresent: pathEntryExists(path.join(root, ".npmrc")),
   });
   const expectedRef = process.argv[2];
   if (expectedRef !== undefined) {
