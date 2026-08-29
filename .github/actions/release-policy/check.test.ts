@@ -185,6 +185,31 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
   });
 
+  test("accepts only the canonical npm registry setup", () => {
+    const workflow = base.replace(
+      "          node-version: 22.21.1",
+      "          node-version: 22.21.1\n          registry-url: https://registry.npmjs.org",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test.each([
+    [
+      "node-version: 22.21.1",
+      "node-version: 22.21.1\n          mirror: https://untrusted.example",
+    ],
+    [
+      "node-version: 22.21.1",
+      "node-version: 22.21.1\n          registry-url: https://untrusted.example",
+    ],
+    [
+      "bun-version: 1.4.0",
+      "bun-version: 1.4.0\n          bun-download-url: https://untrusted.example/bun",
+    ],
+  ])("rejects runtime source override inputs", (expected, replacement) => {
+    expect(() => validateReleaseWorkflow(base.replace(expected, replacement), ref)).toThrow();
+  });
+
   test("rejects symlinked Bun manifests", () => {
     const root = mkdtempSync(join(tmpdir(), "release-policy-"));
     const external = join(tmpdir(), `release-policy-external-${process.pid}.json`);

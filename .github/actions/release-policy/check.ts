@@ -8,6 +8,8 @@ type ReadRepositoryFile = (path: string) => string;
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const BUN_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
+const NODE_SETUP_INPUTS = new Set(["node-version", "registry-url"]);
+const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -168,12 +170,29 @@ const validateRuntimeSetups = (
       fail(`${path} must be an unconditional, fail-closed runtime setup`);
     }
     if (action.startsWith("actions/setup-node@")) {
+      for (const key of Object.keys(inputs)) {
+        if (!NODE_SETUP_INPUTS.has(key)) {
+          fail(`${path}.with.${key} is not an approved Node.js setup input`);
+        }
+      }
       const version = staticString(inputs["node-version"], `${path}.with.node-version`);
       if (!EXACT_RUNTIME_VERSION.test(version)) {
         fail(`${path}.with.node-version must be an exact Node.js release`);
       }
+      if (
+        "registry-url" in inputs &&
+        staticString(inputs["registry-url"], `${path}.with.registry-url`) !==
+          "https://registry.npmjs.org"
+      ) {
+        fail(`${path}.with.registry-url must use the canonical npm registry`);
+      }
     }
     if (action.startsWith("oven-sh/setup-bun@")) {
+      for (const key of Object.keys(inputs)) {
+        if (!BUN_SETUP_INPUTS.has(key)) {
+          fail(`${path}.with.${key} is not an approved Bun setup input`);
+        }
+      }
       const hasVersion = "bun-version" in inputs;
       const hasVersionFile = "bun-version-file" in inputs;
       if (hasVersion === hasVersionFile) {
