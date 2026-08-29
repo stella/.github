@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { validateReleaseWorkflow } from "./check";
+import { readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
 
 const ref = "1".repeat(40);
 const base = `name: Release
@@ -13,12 +16,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@${"2".repeat(40)}
-      - uses: actions/setup-node@${"3".repeat(40)}
         with:
-          node-version: 22.21.1
+          persist-credentials: false
       - uses: oven-sh/setup-bun@${"4".repeat(40)}
         with:
           bun-version: 1.4.0
+      - uses: actions/setup-node@${"3".repeat(40)}
+        with:
+          node-version: 22.21.1
       - run: npm pack
   publish-pypi:
     runs-on: ubuntu-latest
@@ -56,6 +61,279 @@ describe("release policy", () => {
       "  push:\n    branches: [main]\n    paths: [VERSION, packages/data/package.json]\n  workflow_dispatch:\n",
     );
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test("accepts an exact Bun packageManager as the version source", () => {
+    const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, (path) => {
+        expect(path).toBe("package.json");
+        return JSON.stringify({ packageManager: "bun@1.4.0" });
+      }),
+    ).not.toThrow();
+  });
+
+  test.each([
+    "bun@latest",
+    "bun@^1.4.0",
+    "bun@1.4",
+    "bun@1.4.0-canary",
+    "prefix-bun@1.4.0",
+  ])(
+    "rejects non-exact packageManager %s",
+    (packageManager) => {
+      const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () => JSON.stringify({ packageManager })),
+      ).toThrow();
+    },
+  );
+
+  test("rejects Bun manifests that escape the repository", () => {
+    const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: ../package.json");
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, () =>
+        JSON.stringify({ packageManager: "bun@1.4.0" }),
+      ),
+    ).toThrow();
+  });
+
+  test.each([
+    "",
+    `      - uses: actions/checkout@${"2".repeat(40)}\n        with:\n          persist-credentials: false\n      - uses: actions/checkout@${"2".repeat(40)}\n`,
+    "      - run: node scripts/rewrite-package.mjs\n",
+    `      - uses: ./mutable-local-action\n`,
+    `      - uses: owner/mutable-composite@${"5".repeat(40)}\n`,
+  ])("rejects a Bun version file without one immediately preceding checkout", (step) => {
+    const workflow = base
+      .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+      .replace(
+        `      - uses: actions/checkout@${"2".repeat(40)}\n        with:\n          persist-credentials: false\n`,
+        step,
+      );
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, () =>
+        JSON.stringify({ packageManager: "bun@1.4.0" }),
+      ),
+    ).toThrow();
+  });
+
+  test.each(["repository", "ref", "path", "github-server-url"])(
+    "rejects checkout input %s before a Bun version file",
+    (input) => {
+      const workflow = base
+        .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+        .replace(
+          "          persist-credentials: false",
+          `          persist-credentials: false\n          ${input}: untrusted`,
+        );
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () =>
+          JSON.stringify({ packageManager: "bun@1.4.0" }),
+        ),
+      ).toThrow();
+    },
+  );
+
+  test.each([
+    "        if: false\n",
+    "        continue-on-error: true\n",
+    "        env:\n          INPUT_REPOSITORY: untrusted/example\n",
+  ])(
+    "rejects checkout metadata that can weaken source binding",
+    (metadata) => {
+      const workflow = base
+        .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+        .replace(
+          `      - uses: actions/checkout@${"2".repeat(40)}\n`,
+          `      - uses: actions/checkout@${"2".repeat(40)}\n${metadata}`,
+        );
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () =>
+          JSON.stringify({ packageManager: "bun@1.4.0" }),
+        ),
+      ).toThrow();
+    },
+  );
+
+  test("rejects a checkout after package.json selects Bun", () => {
+    const workflow = base
+      .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+      .replace(
+        `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+        `      - uses: actions/checkout@${"2".repeat(40)}\n      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+      );
+    expect(() =>
+      validateReleaseWorkflow(workflow, ref, () =>
+        JSON.stringify({ packageManager: "bun@1.4.0" }),
+      ),
+    ).toThrow();
+  });
+
+  test.each([
+    base.replace(
+      `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+      `      - run: node scripts/export-proxy.mjs\n      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+    ),
+    base
+      .replace(
+        `      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n        with:\n          bun-version: 1.4.0\n`,
+        "",
+      )
+      .replace(
+        `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+        `      - run: node scripts/export-proxy.mjs\n      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+      ),
+  ])("rejects a mutable step before runtime setup", (workflow) => {
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test("rejects Node.js setup before Bun setup", () => {
+    const bun = `      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n        with:\n          bun-version: 1.4.0\n`;
+    const node = `      - uses: actions/setup-node@${"3".repeat(40)}\n        with:\n          node-version: 22.21.1\n`;
+    expect(() =>
+      validateReleaseWorkflow(base.replace(`${bun}${node}`, `${node}${bun}`), ref),
+    ).toThrow();
+  });
+
+  test.each([
+    [`actions/setup-node@${"3".repeat(40)}`, "        if: false\n"],
+    [`actions/setup-node@${"3".repeat(40)}`, "        continue-on-error: true\n"],
+    [`actions/setup-node@${"3".repeat(40)}`, "        env:\n          INPUT_NODE-VERSION: latest\n"],
+    [`oven-sh/setup-bun@${"4".repeat(40)}`, "        if: false\n"],
+    [`oven-sh/setup-bun@${"4".repeat(40)}`, "        continue-on-error: true\n"],
+    [`oven-sh/setup-bun@${"4".repeat(40)}`, "        env:\n          INPUT_BUN-VERSION: latest\n"],
+  ])("rejects conditional or error-tolerant runtime setup %s", (action, metadata) => {
+    const workflow = base.replace(
+      `      - uses: ${action}\n`,
+      `      - uses: ${action}\n${metadata}`,
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test("accepts only the canonical npm registry setup", () => {
+    const workflow = base.replace(
+      "          node-version: 22.21.1",
+      "          node-version: 22.21.1\n          registry-url: https://registry.npmjs.org",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test("accepts a non-network Cargo job environment", () => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      "    runs-on: ubuntu-latest\n    env:\n      CARGO_INCREMENTAL: 0\n    steps:",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test.each([
+    "    env:\n      HTTPS_PROXY: https://untrusted.example\n",
+    "    env:\n      NODE_EXTRA_CA_CERTS: untrusted.pem\n",
+    "    container: untrusted/runtime-proxy:latest\n",
+    "    services:\n      mutator:\n        image: untrusted/workspace-mutator:latest\n",
+    "    continue-on-error: true\n",
+  ])("rejects inherited runtime source overrides", (jobMetadata) => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      `    runs-on: ubuntu-latest\n${jobMetadata}    steps:`,
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test("accepts approved GitHub-hosted runtime matrices", () => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest, macos-15, windows-latest]\n    steps:",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test("accepts approved GitHub-hosted include matrices", () => {
+    const workflow = base.replace(
+      "    runs-on: ubuntu-latest\n    steps:",
+      "    runs-on: ${{ matrix.runner }}\n    strategy:\n      matrix:\n        include:\n          - runner: ubuntu-24.04-arm\n          - runner: macos-15-intel\n          - runner: windows-2025\n    steps:",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
+  test.each([
+    "    runs-on: self-hosted\n",
+    "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest, self-hosted]\n",
+    "    runs-on: ${{ matrix.runner }}\n    strategy:\n      matrix:\n        include:\n          - runner: ubuntu-24.04\n          - runner: self-hosted\n",
+    "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest]\n        include:\n          - os: self-hosted\n",
+    "    runs-on: ${{ matrix.settings.os }}\n    strategy:\n      matrix:\n        settings:\n          - os: ubuntu-latest\n        include:\n          - settings:\n              os: self-hosted\n",
+  ])("rejects non-hosted runtime runners", (runner) => {
+    const workflow = base.replace("    runs-on: ubuntu-latest\n", runner);
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test.each([
+    [
+      "node-version: 22.21.1",
+      "node-version: 22.21.1\n          mirror: https://untrusted.example",
+    ],
+    [
+      "node-version: 22.21.1",
+      "node-version: 22.21.1\n          registry-url: https://untrusted.example",
+    ],
+    [
+      "bun-version: 1.4.0",
+      "bun-version: 1.4.0\n          bun-download-url: https://untrusted.example/bun",
+    ],
+  ])("rejects runtime source override inputs", (expected, replacement) => {
+    expect(() => validateReleaseWorkflow(base.replace(expected, replacement), ref)).toThrow();
+  });
+
+  test.each(["always()", "failure()", "!cancelled()", "success()", "!success()"])(
+    "rejects failure-bypassing condition %s",
+    (condition) => {
+      const workflow = base.replace(
+        "      - run: npm pack",
+        `      - if: >-\n          ${condition}\n        run: npm pack`,
+      );
+      expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+    },
+  );
+
+  test.each(["inputs.mode == 'success()'", "inputs.mode == \"always()\""])(
+    "accepts quoted status-like text in condition %s",
+    (condition) => {
+      const workflow = base.replace(
+        "      - run: npm pack",
+        `      - if: >-\n          ${condition}\n        run: npm pack`,
+      );
+      expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+    },
+  );
+
+  test("rejects a real status check after quoted status-like text", () => {
+    const workflow = base.replace(
+      "      - run: npm pack",
+      "      - if: >-\n          inputs.mode == 'success()' || !success()\n        run: npm pack",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test("rejects continue-on-error anywhere in the release graph", () => {
+    const workflow = base.replace(
+      "      - run: npm pack",
+      "      - continue-on-error: true\n        run: npm pack",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test("rejects symlinked Bun manifests", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-policy-"));
+    const external = join(tmpdir(), `release-policy-external-${process.pid}.json`);
+    writeFileSync(external, JSON.stringify({ packageManager: "bun@1.4.0" }));
+    symlinkSync(external, join(root, "package.json"));
+    try {
+      expect(() => readRepositoryFileWithin("package.json", root)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(external, { force: true });
+    }
   });
 
   test("accepts the shared independently versioned npm publisher", () => {
@@ -170,6 +448,7 @@ jobs:
     ["floating Bun runtime", base.replace("bun-version: 1.4.0", "bun-version: latest")],
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
+    ["dual Bun version sources", base.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
     ["publisher command", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi", "    steps:\n      - run: npm install\n      - uses: stella/.github/.github/actions/pypi")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)\n    permissions:\n      id-token: write", "    if: true\n    permissions:\n      id-token: write")],

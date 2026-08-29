@@ -1,10 +1,25 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { YAML } from "bun";
 
 type JsonObject = Record<string, unknown>;
+type ReadRepositoryFile = (path: string) => string;
 
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
+const NODE_SETUP_INPUTS = new Set(["node-version", "registry-url"]);
+const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
+const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
+const HOSTED_RUNTIME_RUNNERS = new Set([
+  "ubuntu-latest",
+  "ubuntu-24.04",
+  "ubuntu-24.04-arm",
+  "macos-15",
+  "macos-15-intel",
+  "windows-latest",
+  "windows-2025",
+]);
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -17,6 +32,20 @@ const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
 
 const fail = (message: string): never => {
   throw new Error(message);
+};
+
+export const readRepositoryFileWithin = (path: string, repositoryRoot = process.cwd()) => {
+  const root = realpathSync(repositoryRoot);
+  const candidate = resolve(root, path);
+  if (lstatSync(candidate).isSymbolicLink()) {
+    fail(`${path} must not be a symbolic link`);
+  }
+  const realCandidate = realpathSync(candidate);
+  const relativePath = relative(root, realCandidate);
+  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    fail(`${path} must resolve inside the repository`);
+  }
+  return readFileSync(realCandidate, "utf8");
 };
 
 const object = (value: unknown, label: string): JsonObject => {
@@ -74,9 +103,202 @@ const walkUses = (value: unknown, path = "workflow") => {
   }
 };
 
-const validateRuntimeSetups = (value: unknown, path = "workflow") => {
+const containsStatusFunction = (condition: string) => {
+  let quote: "'" | '"' | null = null;
+  let unquoted = "";
+  for (let index = 0; index < condition.length; index += 1) {
+    const character = condition[index];
+    if (quote !== null) {
+      if (character === quote) {
+        if (quote === "'" && condition[index + 1] === "'") {
+          index += 1;
+          continue;
+        }
+        quote = null;
+      }
+      unquoted += " ";
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      unquoted += " ";
+      continue;
+    }
+    unquoted += character;
+  }
+  return /\b(?:always|failure|cancelled|success)\s*\(/i.test(unquoted);
+};
+
+const rejectFailureBypassConditions = (value: unknown, path = "workflow") => {
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => validateRuntimeSetups(entry, `${path}[${index}]`));
+    value.forEach((entry, index) =>
+      rejectFailureBypassConditions(entry, `${path}[${index}]`),
+    );
+    return;
+  }
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "continue-on-error") {
+      fail(`${path}.continue-on-error must not mask release failure`);
+    }
+    if (
+      key === "if" &&
+      typeof entry === "string" &&
+      containsStatusFunction(entry)
+    ) {
+      fail(`${path}.if must remain success-gated`);
+    }
+    rejectFailureBypassConditions(entry, `${path}.${key}`);
+  }
+};
+
+const validateRuntimeRunner = (job: JsonObject, path: string) => {
+  const runnerValue = job["runs-on"];
+  if (typeof runnerValue !== "string" || runnerValue.trim().length === 0) {
+    fail(`${path}.runs-on must be a runner label or approved matrix expression`);
+  }
+  const runner = runnerValue.trim();
+  if (HOSTED_RUNTIME_RUNNERS.has(runner)) {
+    return;
+  }
+  if (
+    runner !== "${{ matrix.os }}" &&
+    runner !== "${{ matrix.runner }}" &&
+    runner !== "${{ matrix.settings.os }}"
+  ) {
+    fail(`${path}.runs-on must select an approved GitHub-hosted runner`);
+  }
+  const strategy = object(job.strategy, `${path}.strategy`);
+  const matrix = object(strategy.matrix, `${path}.strategy.matrix`);
+  const include = matrix.include === undefined ? [] : matrix.include;
+  if (!Array.isArray(include)) {
+    fail(`${path}.strategy.matrix.include must be a list`);
+  }
+  const includeEntries = include.map((value, index) =>
+    object(value, `${path}.strategy.matrix.include[${index}]`),
+  );
+  const directValues = (key: string) => {
+    const values = matrix[key];
+    if (values === undefined) {
+      return [];
+    }
+    if (!Array.isArray(values)) {
+      fail(`${path}.strategy.matrix.${key} must be a list`);
+    }
+    return values;
+  };
+  const validateCandidates = (candidates: unknown[], label: string) => {
+    if (
+      candidates.length === 0 ||
+      candidates.some(
+        (value) => typeof value !== "string" || !HOSTED_RUNTIME_RUNNERS.has(value),
+      )
+    ) {
+      fail(`${label} must contain only approved GitHub-hosted runners`);
+    }
+  };
+  if (runner === "${{ matrix.os }}") {
+    validateCandidates(
+      [
+        ...directValues("os"),
+        ...includeEntries.filter(({ os }) => os !== undefined).map(({ os }) => os),
+      ],
+      `${path}.strategy.matrix.os`,
+    );
+    return;
+  }
+  if (runner === "${{ matrix.runner }}") {
+    validateCandidates(
+      [
+        ...directValues("runner"),
+        ...includeEntries
+          .filter(({ runner: value }) => value !== undefined)
+          .map(({ runner: value }) => value),
+      ],
+      `${path}.strategy.matrix.runner`,
+    );
+    return;
+  }
+  if (runner === "${{ matrix.settings.os }}") {
+    const directSettings = directValues("settings").map((value, index) =>
+      object(value, `${path}.strategy.matrix.settings[${index}]`),
+    );
+    const includedSettings = includeEntries
+      .filter(({ settings }) => settings !== undefined)
+      .map(({ settings }, index) =>
+        object(settings, `${path}.strategy.matrix.include[${index}].settings`),
+      );
+    validateCandidates(
+      [...directSettings, ...includedSettings].map(({ os }) => os),
+      `${path}.strategy.matrix.settings`,
+    );
+    return;
+  }
+};
+
+const validateRuntimeSetups = (
+  value: unknown,
+  readRepositoryFile: ReadRepositoryFile,
+  path = "workflow",
+) => {
+  if (Array.isArray(value)) {
+    const steps = value.map((rawStep) => {
+      if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+        return null;
+      }
+      return rawStep as JsonObject;
+    });
+    const runtimeSteps = steps.flatMap((step, index) => {
+      const action = typeof step?.uses === "string" ? step.uses.toLowerCase() : "";
+      if (action.startsWith("oven-sh/setup-bun@")) {
+        return [{ index, type: "bun" as const }];
+      }
+      if (action.startsWith("actions/setup-node@")) {
+        return [{ index, type: "node" as const }];
+      }
+      return [];
+    });
+    if (runtimeSteps.length > 0) {
+      const checkoutIndexes = steps.flatMap((step, index) => {
+        const action = typeof step?.uses === "string" ? step.uses.toLowerCase() : "";
+        return action.startsWith("actions/checkout@") ? [index] : [];
+      });
+      const checkout = object(value[0], `${path}[0]`);
+      if (checkoutIndexes.length !== 1 || checkoutIndexes[0] !== 0) {
+        fail(`${path} must begin with the workflow's sole checkout`);
+      }
+      if (runtimeSteps.some(({ index }, runtimeIndex) => index !== runtimeIndex + 1)) {
+        fail(`${path} must set up runtimes before mutable steps`);
+      }
+      const runtimeOrder = runtimeSteps.map(({ type }) => type);
+      const expectedOrder = runtimeOrder.includes("bun") ? ["bun", "node"] : ["node"];
+      if (
+        new Set(runtimeOrder).size !== runtimeOrder.length ||
+        runtimeOrder.some((type, index) => type !== expectedOrder[index])
+      ) {
+        fail(`${path} must set up Bun once before Node.js once`);
+      }
+      const checkoutInputs =
+        checkout.with === undefined ? {} : object(checkout.with, `${path}[0].with`);
+      if ("if" in checkout || "continue-on-error" in checkout || "env" in checkout) {
+        fail(
+          `${path}[0] must be an unconditional, fail-closed checkout without environment overrides`,
+        );
+      }
+      for (const key of Object.keys(checkoutInputs)) {
+        if (!RUNTIME_SOURCE_CHECKOUT_INPUTS.has(key)) {
+          fail(`${path}[0].with.${key} must not change the runtime source`);
+        }
+      }
+      if (checkoutInputs["persist-credentials"] !== false) {
+        fail(`${path}[0].with.persist-credentials must be false`);
+      }
+    }
+    value.forEach((entry, index) =>
+      validateRuntimeSetups(entry, readRepositoryFile, `${path}[${index}]`),
+    );
     return;
   }
   if (value === null || typeof value !== "object") {
@@ -84,25 +306,105 @@ const validateRuntimeSetups = (value: unknown, path = "workflow") => {
   }
 
   const entry = value as JsonObject;
+  if (
+    Array.isArray(entry.steps) &&
+    entry.steps.some((rawStep) => {
+      if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+        return false;
+      }
+      const action = (rawStep as JsonObject).uses;
+      return (
+        typeof action === "string" &&
+        (action.toLowerCase().startsWith("actions/setup-node@") ||
+          action.toLowerCase().startsWith("oven-sh/setup-bun@"))
+      );
+    })
+  ) {
+    validateRuntimeRunner(entry, path);
+    if ("container" in entry || "services" in entry || "continue-on-error" in entry) {
+      fail(`${path} must not weaken fail-closed runtime setup`);
+    }
+    const jobEnvironment = entry.env === undefined ? {} : object(entry.env, `${path}.env`);
+    for (const key of Object.keys(jobEnvironment)) {
+      if (!RUNTIME_JOB_ENV.has(key)) {
+        fail(`${path}.env.${key} must not alter runtime setup`);
+      }
+    }
+  }
   if (typeof entry.uses === "string") {
     const inputs = entry.with === undefined ? {} : object(entry.with, `${path}.with`);
     const action = entry.uses.toLowerCase();
+    if (
+      (action.startsWith("actions/setup-node@") || action.startsWith("oven-sh/setup-bun@")) &&
+      ("if" in entry || "continue-on-error" in entry || "env" in entry)
+    ) {
+      fail(`${path} must be an unconditional, fail-closed runtime setup`);
+    }
     if (action.startsWith("actions/setup-node@")) {
+      for (const key of Object.keys(inputs)) {
+        if (!NODE_SETUP_INPUTS.has(key)) {
+          fail(`${path}.with.${key} is not an approved Node.js setup input`);
+        }
+      }
       const version = staticString(inputs["node-version"], `${path}.with.node-version`);
       if (!EXACT_RUNTIME_VERSION.test(version)) {
         fail(`${path}.with.node-version must be an exact Node.js release`);
       }
+      if (
+        "registry-url" in inputs &&
+        staticString(inputs["registry-url"], `${path}.with.registry-url`) !==
+          "https://registry.npmjs.org"
+      ) {
+        fail(`${path}.with.registry-url must use the canonical npm registry`);
+      }
     }
     if (action.startsWith("oven-sh/setup-bun@")) {
-      const version = staticString(inputs["bun-version"], `${path}.with.bun-version`);
-      if (!EXACT_RUNTIME_VERSION.test(version)) {
-        fail(`${path}.with.bun-version must be an exact Bun release`);
+      for (const key of Object.keys(inputs)) {
+        if (!BUN_SETUP_INPUTS.has(key)) {
+          fail(`${path}.with.${key} is not an approved Bun setup input`);
+        }
+      }
+      const hasVersion = "bun-version" in inputs;
+      const hasVersionFile = "bun-version-file" in inputs;
+      if (hasVersion === hasVersionFile) {
+        fail(`${path}.with must set exactly one Bun version source`);
+      }
+      if (hasVersion) {
+        const version = staticString(inputs["bun-version"], `${path}.with.bun-version`);
+        if (!EXACT_RUNTIME_VERSION.test(version)) {
+          fail(`${path}.with.bun-version must be an exact Bun release`);
+        }
+      } else {
+        const versionFile = staticString(
+          inputs["bun-version-file"],
+          `${path}.with.bun-version-file`,
+        );
+        validateRepositoryPath(versionFile, `${path}.with.bun-version-file`);
+        if (!versionFile.endsWith("package.json")) {
+          fail(`${path}.with.bun-version-file must identify a package.json`);
+        }
+        let manifest: JsonObject;
+        try {
+          manifest = object(
+            JSON.parse(readRepositoryFile(versionFile)),
+            `${path}.with.bun-version-file manifest`,
+          );
+        } catch {
+          fail(`${path}.with.bun-version-file must be readable JSON`);
+        }
+        const packageManager = staticString(
+          manifest.packageManager,
+          `${path}.with.bun-version-file packageManager`,
+        );
+        if (!/^bun@[0-9]+\.[0-9]+\.[0-9]+$/.test(packageManager)) {
+          fail(`${path}.with.bun-version-file packageManager must pin an exact Bun release`);
+        }
       }
     }
   }
 
   for (const [key, child] of Object.entries(entry)) {
-    validateRuntimeSetups(child, `${path}.${key}`);
+    validateRuntimeSetups(child, readRepositoryFile, `${path}.${key}`);
   }
 };
 
@@ -630,7 +932,11 @@ const validateAttestation = (job: JsonObject, label: string) => {
   }
 };
 
-export const validateReleaseWorkflow = (source: string, expectedRef: string) => {
+export const validateReleaseWorkflow = (
+  source: string,
+  expectedRef: string,
+  readRepositoryFile: ReadRepositoryFile = readRepositoryFileWithin,
+) => {
   if (!SHA.test(expectedRef)) {
     fail("expected shared ref must be an immutable 40-character commit SHA");
   }
@@ -643,7 +949,8 @@ export const validateReleaseWorkflow = (source: string, expectedRef: string) => 
   }
   exactPermissions(workflow.permissions, { contents: "read" }, "workflow.permissions");
   walkUses(workflow);
-  validateRuntimeSetups(workflow);
+  rejectFailureBypassConditions(workflow);
+  validateRuntimeSetups(workflow, readRepositoryFile);
   for (const [key, value] of Object.entries(workflow)) {
     if (key !== "jobs") {
       walkSecretReferences(value, `workflow.${key}`);
