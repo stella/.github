@@ -121,47 +121,68 @@ const validateRuntimeRunner = (job: JsonObject, path: string) => {
   }
   const strategy = object(job.strategy, `${path}.strategy`);
   const matrix = object(strategy.matrix, `${path}.strategy.matrix`);
-  if (runner === "${{ matrix.os }}") {
-    if (
-      !Array.isArray(matrix.os) ||
-      matrix.os.length === 0 ||
-      matrix.os.some((value) => typeof value !== "string" || !HOSTED_RUNTIME_RUNNERS.has(value))
-    ) {
-      fail(`${path}.strategy.matrix.os must contain only approved GitHub-hosted runners`);
-    }
-    return;
+  const include = matrix.include === undefined ? [] : matrix.include;
+  if (!Array.isArray(include)) {
+    fail(`${path}.strategy.matrix.include must be a list`);
   }
-  if (runner === "${{ matrix.runner }}") {
-    const candidates = Array.isArray(matrix.runner)
-      ? matrix.runner
-      : Array.isArray(matrix.include)
-        ? matrix.include
-            .map((value, index) =>
-              object(value, `${path}.strategy.matrix.include[${index}]`),
-            )
-            .map(({ runner: value }) => value)
-        : [];
+  const includeEntries = include.map((value, index) =>
+    object(value, `${path}.strategy.matrix.include[${index}]`),
+  );
+  const directValues = (key: string) => {
+    const values = matrix[key];
+    if (values === undefined) {
+      return [];
+    }
+    if (!Array.isArray(values)) {
+      fail(`${path}.strategy.matrix.${key} must be a list`);
+    }
+    return values;
+  };
+  const validateCandidates = (candidates: unknown[], label: string) => {
     if (
       candidates.length === 0 ||
       candidates.some(
         (value) => typeof value !== "string" || !HOSTED_RUNTIME_RUNNERS.has(value),
       )
     ) {
-      fail(`${path}.strategy.matrix.runner must contain only approved GitHub-hosted runners`);
+      fail(`${label} must contain only approved GitHub-hosted runners`);
     }
+  };
+  if (runner === "${{ matrix.os }}") {
+    validateCandidates(
+      [
+        ...directValues("os"),
+        ...includeEntries.filter(({ os }) => os !== undefined).map(({ os }) => os),
+      ],
+      `${path}.strategy.matrix.os`,
+    );
+    return;
+  }
+  if (runner === "${{ matrix.runner }}") {
+    validateCandidates(
+      [
+        ...directValues("runner"),
+        ...includeEntries
+          .filter(({ runner: value }) => value !== undefined)
+          .map(({ runner: value }) => value),
+      ],
+      `${path}.strategy.matrix.runner`,
+    );
     return;
   }
   if (runner === "${{ matrix.settings.os }}") {
-    if (
-      !Array.isArray(matrix.settings) ||
-      matrix.settings.length === 0 ||
-      matrix.settings.some((value, index) => {
-        const settings = object(value, `${path}.strategy.matrix.settings[${index}]`);
-        return typeof settings.os !== "string" || !HOSTED_RUNTIME_RUNNERS.has(settings.os);
-      })
-    ) {
-      fail(`${path}.strategy.matrix.settings must contain only approved GitHub-hosted runners`);
-    }
+    const directSettings = directValues("settings").map((value, index) =>
+      object(value, `${path}.strategy.matrix.settings[${index}]`),
+    );
+    const includedSettings = includeEntries
+      .filter(({ settings }) => settings !== undefined)
+      .map(({ settings }, index) =>
+        object(settings, `${path}.strategy.matrix.include[${index}].settings`),
+      );
+    validateCandidates(
+      [...directSettings, ...includedSettings].map(({ os }) => os),
+      `${path}.strategy.matrix.settings`,
+    );
     return;
   }
 };

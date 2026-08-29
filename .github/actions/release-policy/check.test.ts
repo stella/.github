@@ -233,6 +233,8 @@ describe("release policy", () => {
     "    runs-on: self-hosted\n",
     "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest, self-hosted]\n",
     "    runs-on: ${{ matrix.runner }}\n    strategy:\n      matrix:\n        include:\n          - runner: ubuntu-24.04\n          - runner: self-hosted\n",
+    "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest]\n        include:\n          - os: self-hosted\n",
+    "    runs-on: ${{ matrix.settings.os }}\n    strategy:\n      matrix:\n        settings:\n          - os: ubuntu-latest\n        include:\n          - settings:\n              os: self-hosted\n",
   ])("rejects non-hosted runtime runners", (runner) => {
     const workflow = base.replace("    runs-on: ubuntu-latest\n", runner);
     expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
