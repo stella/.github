@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   checkNewLockedRegistryReleaseAges,
+  pathEntryExists,
   readLockedRegistryVersions,
   readNewLockedRegistryVersions,
 } from "./check-lock-age";
@@ -22,6 +26,18 @@ ${excludes}
 `;
 
 describe("locked package release age", () => {
+  test("detects a base npmrc symlink without following its target", () => {
+    const directory = mkdtempSync(join(tmpdir(), "quarantine-lock-age-"));
+    try {
+      const npmrc = join(directory, ".npmrc");
+      symlinkSync("missing-target", npmrc);
+      expect(pathEntryExists(npmrc)).toBe(true);
+      expect(pathEntryExists(join(directory, "absent"))).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   test("finds only newly locked exact registry versions", () => {
     const baseLockfile = lockfile("stable@1.0.0", "changed@1.0.0");
     const currentLockfile = lockfile(
