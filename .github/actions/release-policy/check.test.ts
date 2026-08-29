@@ -68,7 +68,9 @@ describe("release policy", () => {
     ["secret inheritance", base.replace("    secrets:\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "    secrets: inherit")],
     ["unexpected secret", base.replace("RELEASE_APP_ID }}", "NPM_TOKEN }}")],
     ["approved secret in a build", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          TOKEN: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}")],
+    ["whole secrets context", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          ALL_SECRETS: \${{ toJSON(secrets) }}")],
     ["extra write grant", base.replace("      id-token: write\n    steps:", "      id-token: write\n      packages: write\n    steps:")],
+    ["new write permission", base.replace("    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout", "    runs-on: ubuntu-latest\n    permissions:\n      artifact-metadata: write\n    steps:\n      - uses: actions/checkout")],
     ["privileged container", base.replace("    permissions:\n      id-token: write", "    container: attacker/image\n    permissions:\n      id-token: write")],
     ["privileged job environment", base.replace("    permissions:\n      id-token: write", "    env:\n      ATTACK: yes\n    permissions:\n      id-token: write")],
   ])("rejects %s", (_name, workflow) => {

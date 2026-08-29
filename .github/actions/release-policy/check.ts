@@ -4,23 +4,6 @@ import { YAML } from "bun";
 type JsonObject = Record<string, unknown>;
 
 const SHA = /^[0-9a-f]{40}$/;
-const WRITE_PERMISSIONS = new Set([
-  "actions",
-  "attestations",
-  "checks",
-  "contents",
-  "deployments",
-  "discussions",
-  "id-token",
-  "issues",
-  "models",
-  "packages",
-  "pages",
-  "pull-requests",
-  "repository-projects",
-  "security-events",
-  "statuses",
-]);
 const RELEASE_SECRETS = new Set([
   "CHANGELOG_APP_ID",
   "CHANGELOG_APP_PRIVATE_KEY",
@@ -59,9 +42,7 @@ const exactPermissions = (value: unknown, expected: JsonObject, label: string) =
 };
 
 const hasWritePermission = (permissions: JsonObject) =>
-  Object.entries(permissions).some(
-    ([name, value]) => WRITE_PERMISSIONS.has(name) && value === "write",
-  );
+  Object.values(permissions).some((value) => value === "write");
 
 const assertPinnedUses = (uses: string, label: string) => {
   if (uses.startsWith("./")) {
@@ -100,7 +81,7 @@ const walkSecretReferences = (value: unknown, path = "workflow") => {
     }
     return;
   }
-  if (typeof value !== "string" || !/secrets\s*(?:\.|\[)/i.test(value)) {
+  if (typeof value !== "string" || !/\$\{\{[\s\S]*\bsecrets\b/i.test(value)) {
     return;
   }
   const match = path.match(/^workflow\.jobs\.[^.]+\.secrets\.([A-Z0-9_]+)$/);
