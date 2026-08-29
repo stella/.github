@@ -93,6 +93,8 @@ def main() -> None:
         if not isinstance(platform_tags, list) or not platform_tags:
             fail(f"{artifact_name} must declare at least one platform tag")
         artifact = artifact_root / artifact_name
+        if artifact.is_symlink() or not stat.S_ISDIR(artifact.lstat().st_mode):
+            fail(f"artifact must be a real directory: {artifact_name}")
         entries = list(artifact.iterdir())
         wheels = [path for path in entries if path.suffix == ".whl"]
         if len(entries) != 1 or len(wheels) != 1:

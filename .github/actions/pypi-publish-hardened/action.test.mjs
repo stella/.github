@@ -20,6 +20,7 @@ test("wheel validation binds artifact, filename, metadata, and tag identities", 
     "metadata_info.file_size > MAX_METADATA_BYTES",
     "actual_tags != expected_tags",
     "not path.is_symlink()",
+    "artifact.is_symlink()",
   ]) {
     assert.match(validator, new RegExp(invariant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
