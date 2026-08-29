@@ -271,7 +271,7 @@ export const validateCallerWorkflowRefs = ({
   }
   const expected = [
     ["quarantine-policy.yml", policyWorkflow, ["merge_group", "pull_request"]],
-    ["quarantine-prune.yml", pruneWorkflow, ["schedule", "workflow_dispatch"]],
+    ["quarantine-prune.yml", pruneWorkflow, ["schedule"]],
   ] as const;
   return expected.flatMap(([name, workflow, expectedTriggers]) => {
     const target = `${SHARED_WORKFLOW_PREFIX}${name}@${expectedRef}`;
@@ -306,7 +306,6 @@ export const validateCallerWorkflowRefs = ({
       }
     } else {
       const schedule = parsed.on.schedule;
-      const dispatch = parsed.on.workflow_dispatch;
       if (
         !Array.isArray(schedule) ||
         schedule.length !== 1 ||
@@ -315,11 +314,9 @@ export const validateCallerWorkflowRefs = ({
         !("cron" in schedule[0]) ||
         typeof schedule[0].cron !== "string" ||
         Object.keys(schedule[0]).length !== 1 ||
-        !HOURLY_CRON.test(schedule[0].cron) ||
-        (dispatch !== null &&
-          (typeof dispatch !== "object" || Object.keys(dispatch).length !== 0))
+        !HOURLY_CRON.test(schedule[0].cron)
       ) {
-        return [`.github/workflows/${name} must declare one hourly schedule and unfiltered workflow_dispatch`];
+        return [`.github/workflows/${name} must declare one hourly schedule`];
       }
     }
     if (!("permissions" in parsed) || typeof parsed.permissions !== "object" || parsed.permissions === null) {

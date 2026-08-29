@@ -38,7 +38,6 @@ jobs:
 on:
   schedule:
     - cron: "17 * * * *"
-  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -192,22 +191,25 @@ describe("quarantine policy", () => {
         ),
       },
       {
-        expectedError: "must declare only schedule and workflow_dispatch",
-        pruneWorkflow: workflows.pruneWorkflow.replace("  workflow_dispatch:\n", ""),
-      },
-      {
-        expectedError: "must declare one hourly schedule and unfiltered workflow_dispatch",
+        expectedError: "must declare only schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          "  workflow_dispatch:\n",
-          "  workflow_dispatch:\n    inputs:\n      reason:\n        required: false\n",
+          "permissions:\n",
+          "  workflow_dispatch:\npermissions:\n",
         ),
       },
       {
-        expectedError: "must declare one hourly schedule and unfiltered workflow_dispatch",
+        expectedError: "must declare required triggers",
+        pruneWorkflow: workflows.pruneWorkflow.replace(
+          "  schedule:\n    - cron: \"17 * * * *\"\n",
+          "",
+        ),
+      },
+      {
+        expectedError: "must declare one hourly schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace("17 * * * *", "17 0 * * *"),
       },
       {
-        expectedError: "must declare one hourly schedule and unfiltered workflow_dispatch",
+        expectedError: "must declare one hourly schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace(
           "    - cron: \"17 * * * *\"\n",
           "    - cron: \"17 * * * *\"\n    - cron: \"47 * * * *\"\n",
