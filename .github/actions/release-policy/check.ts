@@ -7,7 +7,7 @@ type ReadRepositoryFile = (path: string) => string;
 
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
-const BUN_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
+const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
 const NODE_SETUP_INPUTS = new Set(["node-version", "registry-url"]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
@@ -193,57 +193,58 @@ const validateRuntimeSetups = (
   path = "workflow",
 ) => {
   if (Array.isArray(value)) {
-    value.forEach((rawEntry, index) => {
-      if (rawEntry === null || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
-        return;
+    const steps = value.map((rawStep) => {
+      if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+        return null;
       }
-      const entry = rawEntry as JsonObject;
-      if (
-        typeof entry.uses !== "string" ||
-        !entry.uses.toLowerCase().startsWith("oven-sh/setup-bun@")
-      ) {
-        return;
+      return rawStep as JsonObject;
+    });
+    const runtimeSteps = steps.flatMap((step, index) => {
+      const action = typeof step?.uses === "string" ? step.uses.toLowerCase() : "";
+      if (action.startsWith("oven-sh/setup-bun@")) {
+        return [{ index, type: "bun" as const }];
       }
-      const inputs = entry.with === undefined ? {} : object(entry.with, `${path}[${index}].with`);
-      if (!("bun-version-file" in inputs)) {
-        return;
+      if (action.startsWith("actions/setup-node@")) {
+        return [{ index, type: "node" as const }];
       }
-      const checkoutIndexes = value.flatMap((rawStep, stepIndex) => {
-        if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
-          return [];
-        }
-        const step = rawStep as JsonObject;
-        const action = typeof step.uses === "string" ? step.uses.toLowerCase() : "";
-        return action.startsWith("actions/checkout@") ? [stepIndex] : [];
+      return [];
+    });
+    if (runtimeSteps.length > 0) {
+      const checkoutIndexes = steps.flatMap((step, index) => {
+        const action = typeof step?.uses === "string" ? step.uses.toLowerCase() : "";
+        return action.startsWith("actions/checkout@") ? [index] : [];
       });
-      const preceding = index === 1 ? object(value[0], `${path}[0]`) : {};
-      const precedingAction =
-        typeof preceding.uses === "string" ? preceding.uses.toLowerCase() : "";
+      const checkout = object(value[0], `${path}[0]`);
+      if (checkoutIndexes.length !== 1 || checkoutIndexes[0] !== 0) {
+        fail(`${path} must begin with the workflow's sole checkout`);
+      }
+      if (runtimeSteps.some(({ index }, runtimeIndex) => index !== runtimeIndex + 1)) {
+        fail(`${path} must set up runtimes before mutable steps`);
+      }
+      const runtimeOrder = runtimeSteps.map(({ type }) => type);
+      const expectedOrder = runtimeOrder.includes("bun") ? ["bun", "node"] : ["node"];
       if (
-        !precedingAction.startsWith("actions/checkout@") ||
-        checkoutIndexes.length !== 1 ||
-        checkoutIndexes[0] !== 0
+        new Set(runtimeOrder).size !== runtimeOrder.length ||
+        runtimeOrder.some((type, index) => type !== expectedOrder[index])
       ) {
-        fail(
-          `${path}[${index}].with.bun-version-file must immediately follow the workflow's sole checkout`,
-        );
+        fail(`${path} must set up Bun once before Node.js once`);
       }
       const checkoutInputs =
-        preceding.with === undefined ? {} : object(preceding.with, `${path}[0].with`);
-      if ("if" in preceding || "continue-on-error" in preceding || "env" in preceding) {
+        checkout.with === undefined ? {} : object(checkout.with, `${path}[0].with`);
+      if ("if" in checkout || "continue-on-error" in checkout || "env" in checkout) {
         fail(
           `${path}[0] must be an unconditional, fail-closed checkout without environment overrides`,
         );
       }
       for (const key of Object.keys(checkoutInputs)) {
-        if (!BUN_SOURCE_CHECKOUT_INPUTS.has(key)) {
-          fail(`${path}[0].with.${key} must not change the Bun manifest source`);
+        if (!RUNTIME_SOURCE_CHECKOUT_INPUTS.has(key)) {
+          fail(`${path}[0].with.${key} must not change the runtime source`);
         }
       }
       if (checkoutInputs["persist-credentials"] !== false) {
         fail(`${path}[0].with.persist-credentials must be false`);
       }
-    });
+    }
     value.forEach((entry, index) =>
       validateRuntimeSetups(entry, readRepositoryFile, `${path}[${index}]`),
     );

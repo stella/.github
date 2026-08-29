@@ -171,6 +171,32 @@ describe("release policy", () => {
   });
 
   test.each([
+    base.replace(
+      `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+      `      - run: node scripts/export-proxy.mjs\n      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+    ),
+    base
+      .replace(
+        `      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n        with:\n          bun-version: 1.4.0\n`,
+        "",
+      )
+      .replace(
+        `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+        `      - run: node scripts/export-proxy.mjs\n      - uses: actions/setup-node@${"3".repeat(40)}\n`,
+      ),
+  ])("rejects a mutable step before runtime setup", (workflow) => {
+    expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
+  });
+
+  test("rejects Node.js setup before Bun setup", () => {
+    const bun = `      - uses: oven-sh/setup-bun@${"4".repeat(40)}\n        with:\n          bun-version: 1.4.0\n`;
+    const node = `      - uses: actions/setup-node@${"3".repeat(40)}\n        with:\n          node-version: 22.21.1\n`;
+    expect(() =>
+      validateReleaseWorkflow(base.replace(`${bun}${node}`, `${node}${bun}`), ref),
+    ).toThrow();
+  });
+
+  test.each([
     [`actions/setup-node@${"3".repeat(40)}`, "        if: false\n"],
     [`actions/setup-node@${"3".repeat(40)}`, "        continue-on-error: true\n"],
     [`actions/setup-node@${"3".repeat(40)}`, "        env:\n          INPUT_NODE-VERSION: latest\n"],
