@@ -17,8 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
       - name: Test shared actions and workflows
-        run: find .github -type f -name '*.test.mjs' -print0 | sort -z | xargs -0 node --test
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          find .github -type f -name '*.test.mjs' -print0 | sort -z | xargs -0 node --test
+          bun test ./.github/actions/release-policy/check.test.ts
+          find .github -type f -name '*_test.py' -print0 | sort -z | xargs -0 -n1 python3
 
   sync-ai:
     name: Check generated AI instructions

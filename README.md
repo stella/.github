@@ -16,6 +16,9 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
 | `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
 | `npm-independent-release.yml` | Publish independently versioned npm monorepos from caller-built tarballs |
+| `npm-artifact-publish.yml` | Publish one pre-packed npm artifact without exposing OIDC to its build |
+| `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
+| `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
 
 ### Composite Actions
 
@@ -25,6 +28,8 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `notify-failure` | Send failure notification to Google Chat webhook |
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
 | `changeset-policy` | Require valid release intent for caller-declared package paths |
+| `npm-publish-hardened` | Publish pre-packed npm tarballs through trusted publishing |
+| `pypi-publish-hardened` | Validate an exact wheel matrix and publish through trusted publishing |
 | `sync-cargo-workspace-lock` | Synchronize inherited Cargo workspace versions in Cargo.lock |
 
 ### Templates
@@ -346,6 +351,7 @@ jobs:
   release:
     needs: pack
     permissions:
+      actions: read
       contents: write
       id-token: write
     uses: stella/.github/.github/workflows/npm-independent-release.yml@<commit-sha>
@@ -356,7 +362,9 @@ jobs:
       package-files: |
         packages/core/package.json
         packages/react/package.json
-    secrets: inherit
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 ```
 
 The shared job validates an exact one-to-one mapping between the declared public
@@ -395,6 +403,51 @@ Callers that pack a verified commit other than the triggering `github.sha` (for
 example, a `workflow_run` gated on a promoted application release) pass that commit
 as `source-ref`. The shared workflow resolves the ref once after checkout and uses
 the resulting immutable SHA for package tag and release provenance.
+
+### Release privilege policy
+
+Keep builds, tests, package installation, and artifact creation in caller jobs with
+read-only permissions. A separate workflow supplies one stable required check:
+
+```yaml
+# .github/workflows/release-policy.yml
+name: Release policy
+
+on:
+  pull_request:
+    paths: [.github/workflows/release.yml]
+  push:
+    branches: [main]
+    paths: [.github/workflows/release.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  release-policy:
+    uses: stella/.github/.github/workflows/release-policy.yml@<commit-sha>
+```
+
+Require `Release policy / Enforce release boundaries` on the default branch. The
+policy rejects public-event release triggers, workflow-level execution controls,
+mutable action references, inherited secrets, and repository-controlled code in an
+OIDC or write-capable job. Approved publishers must use the same immutable shared
+commit as the policy.
+
+For tamper-resistant enforcement, configure this workflow as a ruleset workflow
+sourced from `stella/.github`; the local caller is fast feedback, not the trust
+anchor. The shared workflow supports `pull_request` and `merge_group` for that
+purpose and selects `publish.yml` for `stella/tooling`, otherwise `release.yml`.
+
+PyPI is the one registry-specific exception to reusable publishing workflows. Its
+trusted publisher remains bound to the caller's `release.yml`; the privileged job
+contains one pinned `pypi-publish-hardened` composite step. The action downloads and
+validates the exact declared wheel set before requesting a PyPI credential.
+
+crates.io and npm callers can delegate to `crates-io-publish.yml`,
+`npm-artifact-publish.yml`, or `npm-version-finalize.yml`. Their unprivileged jobs
+hand immutable artifacts to the shared privileged implementation; no caller source
+is executed after OIDC becomes available.
 
 ### Apply Ruleset
 

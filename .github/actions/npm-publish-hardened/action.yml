@@ -43,6 +43,12 @@ inputs:
     description: npm dist-tag for the publish (e.g. latest, next, rc)
     required: false
     default: latest
+  expected-name:
+    description: Optional exact package name required in a single tarball.
+    required: false
+  expected-version:
+    description: Optional exact package version required in a single tarball.
+    required: false
 
 runs:
   using: composite
@@ -53,6 +59,8 @@ runs:
         TARBALL: ${{ inputs.tarball }}
         TARBALLS: ${{ inputs.tarballs }}
         DIST_TAG: ${{ inputs.tag }}
+        EXPECTED_NAME: ${{ inputs.expected-name }}
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
       # Invoke bash explicitly rather than running the path as a command.
       # The GitHub Actions runner does not always preserve the file-mode
       # exec bit on action checkouts, so `./publish.sh` can silently
