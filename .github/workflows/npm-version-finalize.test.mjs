@@ -34,3 +34,15 @@ test("the only install in the npm OIDC job disables lifecycle scripts", () => {
     "        run: npm install --global --ignore-scripts npm@11.11.1",
   ]);
 });
+
+test("the finalizer publishes with its own immutable tooling checkout", () => {
+  assert.match(workflow, /ref: \$\{\{ job\.workflow_sha \}\}/);
+  assert.match(
+    workflow,
+    /uses: \.\/\.release-tooling\/\.github\/actions\/npm-publish-hardened/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /uses: stella\/\.github\/\.github\/actions\/npm-publish-hardened@/,
+  );
+});

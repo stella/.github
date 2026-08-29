@@ -418,7 +418,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.validate.outputs.changed == 'true' && inputs.publish-to-npm
-        uses: stella/.github/.github/actions/npm-publish-hardened@1ce0079bbdbf93a4c1917d2857496b89aedcec14
+        uses: ./.release-tooling/.github/actions/npm-publish-hardened
         with:
           tarballs: ${{ steps.validate.outputs.tarballs }}
           tag: ${{ steps.validate.outputs.dist_tag }}
