@@ -20,6 +20,13 @@ test("npm artifact publication validates caller-declared identity", () => {
   assert.match(publisher, /actual_version.*EXPECTED_VERSION/);
 });
 
+test("npm idempotency is bound to exact registry bytes", () => {
+  assert.match(publisher, /createHash\("sha512"\)/);
+  assert.match(publisher, /npm view .* dist\.integrity/);
+  assert.match(publisher, /registry_integrity.*local_integrity/);
+  assert.match(publisher, /return 2/);
+});
+
 test("the OIDC workflow installs only pinned npm without lifecycle scripts", () => {
   assert.match(workflow, /npm install --global --ignore-scripts npm@11\.11\.1/);
   assert.doesNotMatch(workflow, /bun install|npm ci|npm install(?! --global --ignore-scripts)/);

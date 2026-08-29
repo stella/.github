@@ -40,8 +40,22 @@ runs:
         VALIDATOR_PATH: ${{ github.action_path }}/validate_wheels.py
         WHEEL_CONTRACT: ${{ inputs.wheel-contract }}
       run: python3 "${VALIDATOR_PATH}" wheel-artifacts dist
+    - name: Verify any existing PyPI files match exact bytes
+      shell: bash
+      env:
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PYPI_VERSION: ${{ inputs.expected-version }}
+        VERIFIER_PATH: ${{ github.action_path }}/verify_registry.py
+      run: python3 "${VERIFIER_PATH}" --allow-missing
     - name: Publish wheels to PyPI
       uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
       with:
         packages-dir: dist
         skip-existing: ${{ inputs.skip-existing }}
+    - name: Verify published PyPI files match exact bytes
+      shell: bash
+      env:
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PYPI_VERSION: ${{ inputs.expected-version }}
+        VERIFIER_PATH: ${{ github.action_path }}/verify_registry.py
+      run: python3 "${VERIFIER_PATH}"

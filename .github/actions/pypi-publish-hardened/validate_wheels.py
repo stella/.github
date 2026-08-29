@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import stat
 import sys
@@ -10,23 +9,13 @@ import zipfile
 from email.parser import Parser
 from pathlib import Path
 
-SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$")
+from release_version import pep440_version
+
 MAX_METADATA_BYTES = 1024 * 1024
 
 
 def fail(message: str) -> None:
     raise SystemExit(message)
-
-
-def pep440_version(version: str) -> str:
-    match = SEMVER.fullmatch(version)
-    if match is None:
-        fail(f"invalid Stella release version: {version}")
-    major, minor, patch, prerelease, number = match.groups()
-    if prerelease is None:
-        return f"{major}.{minor}.{patch}"
-    prefix = {"alpha": "a", "beta": "b", "rc": "rc"}[prerelease]
-    return f"{major}.{minor}.{patch}{prefix}{number}"
 
 
 def regular_file(path: Path) -> bool:
@@ -76,7 +65,10 @@ def main() -> None:
     output = Path(sys.argv[2])
     project = os.environ["PROJECT_NAME"]
     distribution = os.environ["DISTRIBUTION_NAME"]
-    version = pep440_version(os.environ["EXPECTED_VERSION"])
+    try:
+        version = pep440_version(os.environ["EXPECTED_VERSION"])
+    except ValueError as error:
+        fail(str(error))
     contract = json.loads(os.environ["WHEEL_CONTRACT"])
     if not isinstance(contract, dict) or not contract:
         fail("wheel-contract must be a non-empty JSON object")
@@ -89,6 +81,7 @@ def main() -> None:
         )
 
     output.mkdir(parents=True, exist_ok=False)
+    destination_names: set[str] = set()
     for artifact_name, platform_tags in contract.items():
         if not isinstance(platform_tags, list) or not platform_tags:
             fail(f"{artifact_name} must declare at least one platform tag")
@@ -101,6 +94,9 @@ def main() -> None:
             fail(f"{artifact_name} must contain exactly one wheel and no other entries")
         filename_platforms = ".".join(platform_tags)
         expected_filename = f"{distribution}-{version}-cp311-abi3-{filename_platforms}.whl"
+        if expected_filename in destination_names:
+            fail(f"multiple artifacts resolve to destination wheel {expected_filename}")
+        destination_names.add(expected_filename)
         expected_tags = {f"cp311-abi3-{tag}" for tag in platform_tags}
         validate_wheel(
             wheels[0],

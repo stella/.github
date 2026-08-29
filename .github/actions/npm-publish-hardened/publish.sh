@@ -148,7 +148,7 @@ fi
 
 publish_one() {
   local tarball="$1"
-  local package_name package_version
+  local package_name package_version local_integrity
 
   # Extract name and version from the tarball's bundled package.json
   # rather than the working tree — the published artifact is whatever
@@ -175,18 +175,38 @@ publish_one() {
     return 2
   fi
 
-  # Idempotency: skip if exact version is already published.
-  already_published() {
-    local seen
-    seen=$(npm view "${package_name}@${package_version}" version 2>/dev/null) || return 1
-    [[ "${seen}" == "${package_version}" ]]
+  # shellcheck disable=SC2016  # JS template literals do not need shell expansion.
+  local_integrity=$(node -e '
+    const { createHash } = require("node:crypto");
+    const { readFileSync } = require("node:fs");
+    const digest = createHash("sha512").update(readFileSync(process.argv[1])).digest("base64");
+    console.log(`sha512-${digest}`);
+  ' "${tarball}")
+
+  # Idempotency is byte-bound: an immutable version is reusable only when
+  # npm's registry integrity matches the exact prepared tarball.
+  published_state() {
+    local registry_integrity
+    registry_integrity=$(npm view "${package_name}@${package_version}" dist.integrity 2>/dev/null) || return 1
+    if [[ "${registry_integrity}" != "${local_integrity}" ]]; then
+      printf '::error::npm has %s@%s with integrity %s; prepared artifact is %s.\n' \
+        "${package_name}" "${package_version}" "${registry_integrity}" "${local_integrity}"
+      return 2
+    fi
+    return 0
   }
 
-  if already_published; then
-    printf '::notice::%s@%s already published; skipping.\n' \
-      "${package_name}" "${package_version}"
-    return 0
-  fi
+  local state=0
+  published_state || state=$?
+  case "${state}" in
+    0)
+      printf '::notice::%s@%s already published with exact prepared bytes; skipping.\n' \
+        "${package_name}" "${package_version}"
+      return 0
+      ;;
+    1) ;;
+    2) return 2 ;;
+  esac
 
   # Publish, with retries. npm 11.5+ auto-detects
   # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN (set
@@ -211,11 +231,17 @@ publish_one() {
 
     cat "${publish_log}" >&2
 
-    if already_published; then
-      printf '::notice::%s@%s became visible after publish attempt %d; treating as success.\n' \
-        "${package_name}" "${package_version}" "${attempt}"
-      return 0
-    fi
+    state=0
+    published_state || state=$?
+    case "${state}" in
+      0)
+        printf '::notice::%s@%s became visible with exact bytes after publish attempt %d.\n' \
+          "${package_name}" "${package_version}" "${attempt}"
+        return 0
+        ;;
+      1) ;;
+      2) return 2 ;;
+    esac
 
     if (( attempt == max_attempts )); then
       break
@@ -231,11 +257,17 @@ publish_one() {
   local poll
   for poll in 1 2 3 4 5; do
     sleep "${poll}"
-    if already_published; then
-      printf '::notice::%s@%s became visible after final publish failure; treating as success.\n' \
-        "${package_name}" "${package_version}"
-      return 0
-    fi
+    state=0
+    published_state || state=$?
+    case "${state}" in
+      0)
+        printf '::notice::%s@%s became visible with exact bytes after final publish failure.\n' \
+          "${package_name}" "${package_version}"
+        return 0
+        ;;
+      1) ;;
+      2) return 2 ;;
+    esac
   done
 
   printf '::error::Failed to publish %s@%s after %d attempts and post-failure polling.\n' \

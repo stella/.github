@@ -46,12 +46,18 @@ class WheelValidatorTest(unittest.TestCase):
                 )
         return artifacts, self.root / "dist"
 
-    def run_validator(self, version: str, artifacts: Path, output: Path) -> subprocess.CompletedProcess[str]:
+    def run_validator(
+        self,
+        version: str,
+        artifacts: Path,
+        output: Path,
+        contract: dict[str, list[str]] = CONTRACT,
+    ) -> subprocess.CompletedProcess[str]:
         environment = os.environ | {
             "PROJECT_NAME": "example-core",
             "DISTRIBUTION_NAME": "example_core",
             "EXPECTED_VERSION": version,
-            "WHEEL_CONTRACT": json.dumps(CONTRACT),
+            "WHEEL_CONTRACT": json.dumps(contract),
         }
         return subprocess.run(
             ["python3", str(VALIDATOR), str(artifacts), str(output)],
@@ -98,6 +104,15 @@ class WheelValidatorTest(unittest.TestCase):
         result = self.run_validator("1.2.3", artifacts, output)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("regular, non-symlink", result.stderr)
+
+    def test_rejects_duplicate_destination_filenames(self) -> None:
+        artifacts, output = self.make_fixture()
+        duplicate_contract = {
+            artifact: CONTRACT["python-wheel-linux"] for artifact in CONTRACT
+        }
+        result = self.run_validator("1.2.3", artifacts, output, duplicate_contract)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("multiple artifacts resolve", result.stderr)
 
 
 if __name__ == "__main__":
