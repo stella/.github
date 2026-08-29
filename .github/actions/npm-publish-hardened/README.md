@@ -70,7 +70,7 @@ the action. The standard pattern:
 ```yaml
 - uses: actions/setup-node@<sha>  # v6
   with:
-    node-version: "22"
+    node-version: "22.21.1"
     registry-url: https://registry.npmjs.org
 - run: npm install --global npm@11
 ```

@@ -13,6 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@${"2".repeat(40)}
+      - uses: actions/setup-node@${"3".repeat(40)}
+        with:
+          node-version: 22.21.1
+      - uses: oven-sh/setup-bun@${"4".repeat(40)}
+        with:
+          bun-version: 1.4.0
       - run: npm pack
   publish-pypi:
     runs-on: ubuntu-latest
@@ -158,6 +164,12 @@ jobs:
     ["workflow environment", base.replace("permissions:", "env:\n  BASH_ENV: artifact/payload\npermissions:")],
     ["workflow defaults", base.replace("permissions:", "defaults:\n  run:\n    shell: ./payload\npermissions:")],
     ["mutable action", base.replace("actions/checkout@" + "2".repeat(40), "actions/checkout@main")],
+    ["floating Node.js runtime", base.replace("node-version: 22.21.1", "node-version: 22")],
+    ["mixed-case floating Node.js runtime", base.replace("actions/setup-node@", "ACTIONS/SETUP-NODE@").replace("node-version: 22.21.1", "node-version: 22")],
+    ["missing Node.js runtime", base.replace("        with:\n          node-version: 22.21.1\n", "")],
+    ["floating Bun runtime", base.replace("bun-version: 1.4.0", "bun-version: latest")],
+    ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
+    ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
     ["publisher command", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi", "    steps:\n      - run: npm install\n      - uses: stella/.github/.github/actions/pypi")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)\n    permissions:\n      id-token: write", "    if: true\n    permissions:\n      id-token: write")],
@@ -170,7 +182,7 @@ jobs:
     ["secret inheritance", base.replace("    secrets:\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "    secrets: inherit")],
     ["unexpected secret", base.replace("RELEASE_APP_ID }}", "NPM_TOKEN }}")],
     ["approved secret in a build", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          TOKEN: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}")],
-    ["approved secret in an arbitrary reusable job", base.replace("  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@" + "2".repeat(40) + "\n      - run: npm pack", "  build:\n    uses: owner/repository/.github/workflows/receive-secret.yml@" + "2".repeat(40) + "\n    secrets:\n      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}")],
+    ["approved secret in an arbitrary reusable job", base.replace(/  build:[\s\S]*?(?=  publish-pypi:)/, "  build:\n    uses: owner/repository/.github/workflows/receive-secret.yml@" + "2".repeat(40) + "\n    secrets:\n      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n")],
     ["whole secrets context", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          ALL_SECRETS: \${{ toJSON(secrets) }}")],
     ["extra write grant", base.replace("      id-token: write\n    steps:", "      id-token: write\n      packages: write\n    steps:")],
     ["new write permission", base.replace("    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout", "    runs-on: ubuntu-latest\n    permissions:\n      artifact-metadata: write\n    steps:\n      - uses: actions/checkout")],
