@@ -1,7 +1,8 @@
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   exactTimestamp,
   NPM_REGISTRY,
+  pathEntryExists,
   readParsedExcludes,
   REQUIRED_RELEASE_AGE_SECONDS,
 } from "./check";
@@ -24,9 +25,6 @@ type LoadPackageMetadata = (name: string) => Promise<unknown>;
 
 const registryKey = ({ name, version }: LockedRegistryVersion): string =>
   `${name}@${version}`;
-
-export const pathEntryExists = (path: string): boolean =>
-  lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
 export const readLockedRegistryVersions = (
   lockfile: string,

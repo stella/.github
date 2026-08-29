@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   checkNewLockedRegistryReleaseAges,
-  pathEntryExists,
   readLockedRegistryVersions,
   readNewLockedRegistryVersions,
 } from "./check-lock-age";
+import { pathEntryExists } from "./check";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
 const lockfile = (...resolutions: string[]) => `{

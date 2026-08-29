@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const BUNFIG = "bunfig.toml";
@@ -18,6 +18,9 @@ type BlockRange = { end: number; start: number };
 const fail = (message: string): never => {
   throw new Error(message);
 };
+
+export const pathEntryExists = (entryPath: string): boolean =>
+  lstatSync(entryPath, { throwIfNoEntry: false }) !== undefined;
 
 const findExcludeBlock = (bunfig: string): BlockRange | undefined => {
   const declaration = /^[\t ]*minimumReleaseAgeExcludes[\t ]*=/mu.exec(bunfig);
@@ -408,7 +411,7 @@ const run = () => {
   const result = checkQuarantinePolicy({
     bunfig,
     lockfile: readFileSync(path.join(root, LOCKFILE), "utf8"),
-    npmrcPresent: existsSync(path.join(root, ".npmrc")),
+    npmrcPresent: pathEntryExists(path.join(root, ".npmrc")),
   });
   const expectedRef = process.argv[2];
   if (expectedRef !== undefined) {

@@ -100,6 +100,16 @@ describe("quarantine policy", () => {
     expect(npmrc.errors.join("\n")).toContain("does not allow a repository .npmrc");
   });
 
+  test("uses non-following current npmrc detection", () => {
+    const source = readFileSync(
+      ".github/actions/quarantine-policy/check.ts",
+      "utf8",
+    );
+    expect(source).toContain(
+      'npmrcPresent: pathEntryExists(path.join(root, ".npmrc"))',
+    );
+  });
+
   test("warns briefly, then rejects an expired temporary exclude", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-29T11:00:00.000Z',
