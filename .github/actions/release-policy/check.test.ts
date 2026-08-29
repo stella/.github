@@ -135,6 +135,23 @@ describe("release policy", () => {
     },
   );
 
+  test.each(["        if: false\n", "        continue-on-error: true\n"])(
+    "rejects conditional or error-tolerant checkout metadata",
+    (metadata) => {
+      const workflow = base
+        .replace("bun-version: 1.4.0", "bun-version-file: package.json")
+        .replace(
+          `      - uses: actions/checkout@${"2".repeat(40)}\n`,
+          `      - uses: actions/checkout@${"2".repeat(40)}\n${metadata}`,
+        );
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () =>
+          JSON.stringify({ packageManager: "bun@1.4.0" }),
+        ),
+      ).toThrow();
+    },
+  );
+
   test("rejects a checkout after package.json selects Bun", () => {
     const workflow = base
       .replace("bun-version: 1.4.0", "bun-version-file: package.json")

@@ -134,6 +134,9 @@ const validateRuntimeSetups = (
       }
       const checkoutInputs =
         preceding.with === undefined ? {} : object(preceding.with, `${path}[0].with`);
+      if ("if" in preceding || "continue-on-error" in preceding) {
+        fail(`${path}[0] must be an unconditional, fail-closed checkout`);
+      }
       for (const key of Object.keys(checkoutInputs)) {
         if (!BUN_SOURCE_CHECKOUT_INPUTS.has(key)) {
           fail(`${path}[0].with.${key} must not change the Bun manifest source`);
