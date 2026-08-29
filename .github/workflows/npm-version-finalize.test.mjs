@@ -12,6 +12,7 @@ test("the npm OIDC job does not persist a write-capable checkout token", () => {
     workflow,
     /- uses: actions\/checkout@[0-9a-f]{40} # v6\n\s+with:\n\s+fetch-depth: 0\n\s+persist-credentials: false\n\s+token:/,
   );
+  assert.doesNotMatch(workflow, /git\", \[\"fetch\"/);
 });
 
 test("the release App token requests only repository contents write", () => {

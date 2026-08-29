@@ -305,8 +305,6 @@ jobs:
 
           const tarballLines = orderedPackageNames.map((name) => tarballPackages.get(name).tarball);
 
-          run("git", ["fetch", "--force", "--tags", "origin"]);
-
           const tag = `v${version}`;
           const prerelease = version.match(/-(alpha|beta|rc)\./)?.[1];
           const distTag = prerelease ?? "latest";
