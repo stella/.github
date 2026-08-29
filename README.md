@@ -351,6 +351,7 @@ jobs:
   release:
     needs: pack
     permissions:
+      actions: read
       contents: write
       id-token: write
     uses: stella/.github/.github/workflows/npm-independent-release.yml@<commit-sha>
@@ -361,7 +362,9 @@ jobs:
       package-files: |
         packages/core/package.json
         packages/react/package.json
-    secrets: inherit
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 ```
 
 The shared job validates an exact one-to-one mapping between the declared public

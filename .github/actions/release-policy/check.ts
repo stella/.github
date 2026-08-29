@@ -147,6 +147,7 @@ const validateTriggers = (value: unknown) => {
   }
   if ("push" in triggers) {
     const push = object(triggers.push, "workflow.on.push");
+    rejectUnexpectedKeys(push, new Set(["branches", "paths"]), "workflow.on.push");
     const branches = push.branches;
     const paths = push.paths;
     if (!Array.isArray(branches) || branches.length !== 1 || branches[0] !== "main") {

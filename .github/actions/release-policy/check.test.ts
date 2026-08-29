@@ -59,6 +59,7 @@ describe("release policy", () => {
     ["workflow OIDC", base.replace("contents: read\njobs:", "contents: read\n  id-token: write\njobs:")],
     ["public comment trigger", base.replace("  workflow_dispatch:", "  workflow_dispatch:\n  issue_comment:")],
     ["release push without paths", base.replace("  workflow_dispatch:\n", "  push:\n    branches: [main]\n    paths: []\n  workflow_dispatch:\n")],
+    ["release tag trigger", base.replace("  workflow_dispatch:\n", "  push:\n    branches: [main]\n    paths: [VERSION]\n    tags: ['v*']\n  workflow_dispatch:\n")],
     ["workflow environment", base.replace("permissions:", "env:\n  BASH_ENV: artifact/payload\npermissions:")],
     ["workflow defaults", base.replace("permissions:", "defaults:\n  run:\n    shell: ./payload\npermissions:")],
     ["mutable action", base.replace("actions/checkout@" + "2".repeat(40), "actions/checkout@main")],
