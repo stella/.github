@@ -78,18 +78,25 @@ describe("quarantine policy", () => {
 
   test("binds both caller workflows to the exact shared revision", () => {
     const expectedRef = "a".repeat(40);
+    const caller = (uses: string) => `jobs:\n  enforce:\n    uses: ${uses}\n`;
     expect(
       validateCallerWorkflowRefs({
         expectedRef,
-        policyWorkflow: `uses: stella/.github/.github/workflows/quarantine-policy.yml@${expectedRef}`,
-        pruneWorkflow: `uses: stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}`,
+        policyWorkflow: caller(
+          `stella/.github/.github/workflows/quarantine-policy.yml@${expectedRef}`,
+        ),
+        pruneWorkflow: caller(
+          `stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}`,
+        ),
       }),
     ).toEqual([]);
     expect(
       validateCallerWorkflowRefs({
         expectedRef,
-        policyWorkflow: "uses: stella/.github/.github/workflows/quarantine-policy.yml@main",
-        pruneWorkflow: `uses: stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}`,
+        policyWorkflow: `${caller("evil/repo/.github/workflows/policy.yml@main")}# stella/.github/.github/workflows/quarantine-policy.yml@${expectedRef}`,
+        pruneWorkflow: caller(
+          `stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}`,
+        ),
       }).join("\n"),
     ).toContain("must use");
   });

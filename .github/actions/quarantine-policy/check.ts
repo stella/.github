@@ -265,10 +265,24 @@ export const validateCallerWorkflowRefs = ({
   ] as const;
   return expected.flatMap(([name, workflow]) => {
     const target = `${SHARED_WORKFLOW_PREFIX}${name}@${expectedRef}`;
-    const sharedUses = [
-      ...workflow.matchAll(/stella\/\.github\/\.github\/workflows\/quarantine-(?:policy|prune)\.yml@[^\s]+/gu),
-    ].map(([value]) => value);
-    if (sharedUses.length !== 1 || sharedUses[0] !== target) {
+    let parsed: unknown;
+    try {
+      parsed = Bun.YAML.parse(workflow);
+    } catch {
+      return [`.github/workflows/${name} must be valid YAML`];
+    }
+    if (typeof parsed !== "object" || parsed === null || !("jobs" in parsed)) {
+      return [`.github/workflows/${name} must declare jobs`];
+    }
+    const jobs = parsed.jobs;
+    if (typeof jobs !== "object" || jobs === null) {
+      return [`.github/workflows/${name} must declare jobs`];
+    }
+    const jobUses = Object.values(jobs).flatMap((job) => {
+      if (typeof job !== "object" || job === null || !("uses" in job)) return [];
+      return typeof job.uses === "string" ? [job.uses] : [];
+    });
+    if (jobUses.length !== 1 || jobUses[0] !== target) {
       return [`.github/workflows/${name} must use ${target} exactly once`];
     }
     return [];
