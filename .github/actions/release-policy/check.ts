@@ -767,21 +767,19 @@ const validateIndependentNpmPublisher = (job: JsonObject, ref: string, label: st
 };
 
 const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
-  rejectUnexpectedKeys(job, STEP_JOB_KEYS, label);
-  exactPermissions(job.permissions, { "id-token": "write" }, `${label}.permissions`);
-  const steps = job.steps;
-  if (!Array.isArray(steps) || steps.length !== 1) {
-    fail(`${label} must contain exactly one privileged publisher step`);
+  rejectUnexpectedKeys(job, REUSABLE_JOB_KEYS, label);
+  if (job.uses !== expectedSharedUse("workflows/pypi-publish.yml", ref)) {
+    fail(`${label} must call the immutable shared PyPI publisher`);
   }
-  const step = object(steps[0], `${label}.steps[0]`);
-  rejectUnexpectedKeys(step, ACTION_STEP_KEYS, `${label}.steps[0]`);
-  if (step.uses !== expectedSharedUse("actions/pypi-publish-hardened", ref)) {
-    fail(`${label} must use the immutable shared PyPI publisher`);
+  exactPermissions(
+    job.permissions,
+    { contents: "read", "id-token": "write" },
+    `${label}.permissions`,
+  );
+  if ("secrets" in job) {
+    fail(`${label} must not receive secrets`);
   }
-  if ("if" in step || "id" in step) {
-    fail(`${label}.steps[0] must not be conditional or expose action outputs`);
-  }
-  const inputs = object(step.with, `${label}.steps[0].with`);
+  const inputs = object(job.with, `${label}.with`);
   rejectUnexpectedKeys(
     inputs,
     new Set([
@@ -790,55 +788,47 @@ const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
       "project-name",
       "distribution-name",
       "wheel-contract",
-      "skip-existing",
     ]),
-    `${label}.steps[0].with`,
+    `${label}.with`,
   );
   requireKeys(
     inputs,
     new Set(["expected-version", "project-name", "distribution-name", "wheel-contract"]),
-    `${label}.steps[0].with`,
+    `${label}.with`,
   );
-  nonEmptyString(inputs["expected-version"], `${label}.steps[0].with.expected-version`);
+  nonEmptyString(inputs["expected-version"], `${label}.with.expected-version`);
   const projectName = staticString(
     inputs["project-name"],
-    `${label}.steps[0].with.project-name`,
+    `${label}.with.project-name`,
   );
   const distributionName = staticString(
     inputs["distribution-name"],
-    `${label}.steps[0].with.distribution-name`,
+    `${label}.with.distribution-name`,
   );
   if (!/^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$/.test(projectName)) {
-    fail(`${label}.steps[0].with.project-name is not a valid static Python project name`);
+    fail(`${label}.with.project-name is not a valid static Python project name`);
   }
   if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(distributionName)) {
-    fail(`${label}.steps[0].with.distribution-name must be wheel-normalized`);
+    fail(`${label}.with.distribution-name must be wheel-normalized`);
   }
   if ("artifact-pattern" in inputs) {
     validateArtifactPattern(
       inputs["artifact-pattern"],
-      `${label}.steps[0].with.artifact-pattern`,
+      `${label}.with.artifact-pattern`,
     );
-  }
-  if (
-    "skip-existing" in inputs &&
-    inputs["skip-existing"] !== "true" &&
-    inputs["skip-existing"] !== true
-  ) {
-    fail(`${label}.steps[0].with.skip-existing must remain true`);
   }
   let contract: unknown;
   try {
-    contract = JSON.parse(staticString(inputs["wheel-contract"], `${label}.steps[0].with.wheel-contract`));
+    contract = JSON.parse(staticString(inputs["wheel-contract"], `${label}.with.wheel-contract`));
   } catch {
-    fail(`${label}.steps[0].with.wheel-contract must be valid static JSON`);
+    fail(`${label}.with.wheel-contract must be valid static JSON`);
   }
-  const contractMap = object(contract, `${label}.steps[0].with.wheel-contract`);
+  const contractMap = object(contract, `${label}.with.wheel-contract`);
   if (Object.keys(contractMap).length === 0) {
-    fail(`${label}.steps[0].with.wheel-contract must not be empty`);
+    fail(`${label}.with.wheel-contract must not be empty`);
   }
   for (const [artifactName, platformTags] of Object.entries(contractMap)) {
-    validateArtifactPattern(artifactName, `${label}.steps[0].with.wheel-contract artifact`);
+    validateArtifactPattern(artifactName, `${label}.with.wheel-contract artifact`);
     if (
       !Array.isArray(platformTags) ||
       platformTags.length === 0 ||
@@ -847,7 +837,7 @@ const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
         (tag) => typeof tag !== "string" || !/^[A-Za-z0-9]+(?:[_.][A-Za-z0-9]+)*$/.test(tag),
       )
     ) {
-      fail(`${label}.steps[0].with.wheel-contract.${artifactName} has invalid platform tags`);
+      fail(`${label}.with.wheel-contract.${artifactName} has invalid platform tags`);
     }
   }
 };
@@ -982,6 +972,8 @@ export const validateReleaseWorkflow = (
         validateNpmArtifactPublisher(job, expectedRef, label);
       } else if (job.uses.includes("crates-io-publish.yml")) {
         validateCratesPublisher(job, expectedRef, label);
+      } else if (job.uses.includes("pypi-publish.yml")) {
+        validatePyPiPublisher(job, expectedRef, label);
       } else {
         fail(`${label} calls an unsupported privileged reusable workflow`);
       }
@@ -993,9 +985,7 @@ export const validateReleaseWorkflow = (
     const uses = steps
       .map((step) => (step && typeof step === "object" ? (step as JsonObject).uses : undefined))
       .filter((value): value is string => typeof value === "string");
-    if (uses.some((use) => use.includes("pypi-publish-hardened"))) {
-      validatePyPiPublisher(job, expectedRef, label);
-    } else if (uses.some((use) => use.startsWith("actions/attest@"))) {
+    if (uses.some((use) => use.startsWith("actions/attest@"))) {
       validateAttestation(job, label);
     } else {
       fail(`${label} has write permission but is not an approved publisher or attestor`);

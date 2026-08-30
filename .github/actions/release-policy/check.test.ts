@@ -26,17 +26,16 @@ jobs:
           node-version: 22.21.1
       - run: npm pack
   publish-pypi:
-    runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && (true)
+    uses: stella/.github/.github/workflows/pypi-publish.yml@${ref}
     permissions:
+      contents: read
       id-token: write
-    steps:
-      - uses: stella/.github/.github/actions/pypi-publish-hardened@${ref}
-        with:
-          project-name: example
-          distribution-name: example
-          expected-version: 1.2.3
-          wheel-contract: '{"python-wheel-linux":["manylinux_2_17_x86_64"]}'
+    with:
+      project-name: example
+      distribution-name: example
+      expected-version: 1.2.3
+      wheel-contract: '{"python-wheel-linux":["manylinux_2_17_x86_64"]}'
   finalize:
     if: github.ref == 'refs/heads/main' && (true)
     uses: stella/.github/.github/workflows/npm-version-finalize.yml@${ref}
@@ -449,12 +448,12 @@ jobs:
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
     ["dual Bun version sources", base.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
-    ["publisher command", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi", "    steps:\n      - run: npm install\n      - uses: stella/.github/.github/actions/pypi")],
+    ["publisher command", base.replace(`    uses: stella/.github/.github/workflows/pypi-publish.yml@${ref}`, "    runs-on: ubuntu-latest\n    steps:\n      - run: npm install")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
-    ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)\n    permissions:\n      id-token: write", "    if: true\n    permissions:\n      id-token: write")],
+    ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)", "    if: true")],
     ["publisher guard bypass", base.replace("github.ref == 'refs/heads/main' && (true)", "github.ref == 'refs/heads/main' && (true) || true")],
-    ["conditional PyPI step", base.replace("      - uses: stella/.github/.github/actions/pypi", "      - if: false\n        uses: stella/.github/.github/actions/pypi")],
-    ["unexpected PyPI input", base.replace("          wheel-contract:", "          attacker-input: value\n          wheel-contract:")],
+    ["publisher secret inheritance", base.replace("    with:\n      project-name:", "    secrets: inherit\n    with:\n      project-name:")],
+    ["unexpected PyPI input", base.replace("      wheel-contract:", "      attacker-input: value\n      wheel-contract:")],
     ["empty wheel contract", base.replace("'{\"python-wheel-linux\":[\"manylinux_2_17_x86_64\"]}'", "'{}'")],
     ["finalizer package path escape", base.replace("package-files: package.json", "package-files: ../package.json")],
     ["embedded changelog mutation", base.replace("      package-files: package.json", "      package-files: package.json\n      update-changelog: false")],
@@ -465,10 +464,10 @@ jobs:
     ["approved secret in a build", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          TOKEN: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}")],
     ["approved secret in an arbitrary reusable job", base.replace(/  build:[\s\S]*?(?=  publish-pypi:)/, "  build:\n    uses: owner/repository/.github/workflows/receive-secret.yml@" + "2".repeat(40) + "\n    secrets:\n      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n")],
     ["whole secrets context", base.replace("      - run: npm pack", "      - run: npm pack\n        env:\n          ALL_SECRETS: \${{ toJSON(secrets) }}")],
-    ["extra write grant", base.replace("      id-token: write\n    steps:", "      id-token: write\n      packages: write\n    steps:")],
+    ["extra write grant", base.replace("      id-token: write\n    with:", "      id-token: write\n      packages: write\n    with:")],
     ["new write permission", base.replace("    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout", "    runs-on: ubuntu-latest\n    permissions:\n      artifact-metadata: write\n    steps:\n      - uses: actions/checkout")],
-    ["privileged container", base.replace("    permissions:\n      id-token: write", "    container: attacker/image\n    permissions:\n      id-token: write")],
-    ["privileged job environment", base.replace("    permissions:\n      id-token: write", "    env:\n      ATTACK: yes\n    permissions:\n      id-token: write")],
+    ["privileged container", base.replace(`    uses: stella/.github/.github/workflows/pypi-publish.yml@${ref}`, `    uses: stella/.github/.github/workflows/pypi-publish.yml@${ref}\n    container: attacker/image`)],
+    ["privileged job environment", base.replace(`    uses: stella/.github/.github/workflows/pypi-publish.yml@${ref}`, `    uses: stella/.github/.github/workflows/pypi-publish.yml@${ref}\n    env:\n      ATTACK: yes`)],
   ])("rejects %s", (_name, workflow) => {
     expect(() => validateReleaseWorkflow(workflow, ref)).toThrow();
   });
