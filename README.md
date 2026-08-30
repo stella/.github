@@ -17,7 +17,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
 | `npm-independent-release.yml` | Publish independently versioned npm monorepos from caller-built tarballs |
 | `npm-artifact-publish.yml` | Publish one pre-packed npm artifact without exposing OIDC to its build |
-| `pypi-publish.yml` | Validate and publish an exact wheel matrix through trusted publishing |
+| `pypi-publish-hardened` | Prepare and verify an exact wheel matrix around top-level PyPI trusted publishing |
 | `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
 | `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
 
@@ -439,10 +439,12 @@ sourced from `stella/.github`; the local caller is fast feedback, not the trust
 anchor. The shared workflow supports `pull_request` and `merge_group` for that
 purpose and selects `publish.yml` for `stella/tooling`, otherwise `release.yml`.
 
-PyPI callers delegate to `pypi-publish.yml`. The reusable workflow downloads and
-validates the exact declared wheel set before requesting a PyPI credential, then
-verifies the published files byte for byte. Its Docker publisher runs as a workflow
-step; publisher tooling is checked out from the called workflow's immutable commit.
+PyPI trusted publishers remain bound to each caller's top-level release workflow;
+PyPI does not support reusable workflows for this OIDC exchange. Callers use the
+pinned `pypi-publish-hardened` prepare action, invoke the pinned PyPI Docker action
+directly, then use the pinned verification action. The shared guards validate the
+exact declared wheel set and verify published files byte for byte without nesting a
+Docker action inside a composite action.
 
 crates.io and npm callers can delegate to `crates-io-publish.yml`,
 `npm-artifact-publish.yml`, or `npm-version-finalize.yml`. Their unprivileged jobs
