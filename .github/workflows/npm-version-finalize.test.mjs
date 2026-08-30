@@ -22,10 +22,15 @@ test("the release App token requests only repository contents write", () => {
   );
   assert.match(
     workflow,
-    /client-id: \$\{\{ secrets\.RELEASE_APP_ID \|\| secrets\.CHANGELOG_APP_ID \}\}/,
+    /client-id: \$\{\{ secrets\.RELEASE_APP_ID \}\}/,
   );
   assert.match(workflow, /permission-contents: write/);
   assert.doesNotMatch(workflow, /^\s+app-id:/m);
+});
+
+test("the finalizer exposes only release and registry capabilities", () => {
+  assert.doesNotMatch(workflow, /CHANGELOG_APP|update-changelog|pull-requests:/);
+  assert.doesNotMatch(workflow, /^    uses:/m);
 });
 
 test("the only install in the npm OIDC job disables lifecycle scripts", () => {

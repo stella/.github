@@ -449,6 +449,9 @@ crates.io and npm callers can delegate to `crates-io-publish.yml`,
 hand immutable artifacts to the shared privileged implementation; no caller source
 is executed after OIDC becomes available.
 
+`npm-version-finalize.yml` does not mutate pull requests. Post-release changelog
+automation remains a separate workflow and permission boundary.
+
 ### Apply Ruleset
 
 Create or update a GitHub ruleset from a JSON file. Idempotent:
