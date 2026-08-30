@@ -17,6 +17,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
 | `npm-independent-release.yml` | Publish independently versioned npm monorepos from caller-built tarballs |
 | `npm-artifact-publish.yml` | Publish one pre-packed npm artifact without exposing OIDC to its build |
+| `pypi-publish.yml` | Validate and publish an exact wheel matrix through trusted publishing |
 | `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
 | `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
 
@@ -29,7 +30,6 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
 | `changeset-policy` | Require valid release intent for caller-declared package paths |
 | `npm-publish-hardened` | Publish pre-packed npm tarballs through trusted publishing |
-| `pypi-publish-hardened` | Validate an exact wheel matrix and publish through trusted publishing |
 | `sync-cargo-workspace-lock` | Synchronize inherited Cargo workspace versions in Cargo.lock |
 
 ### Templates
@@ -439,10 +439,10 @@ sourced from `stella/.github`; the local caller is fast feedback, not the trust
 anchor. The shared workflow supports `pull_request` and `merge_group` for that
 purpose and selects `publish.yml` for `stella/tooling`, otherwise `release.yml`.
 
-PyPI is the one registry-specific exception to reusable publishing workflows. Its
-trusted publisher remains bound to the caller's `release.yml`; the privileged job
-contains one pinned `pypi-publish-hardened` composite step. The action downloads and
-validates the exact declared wheel set before requesting a PyPI credential.
+PyPI callers delegate to `pypi-publish.yml`. The reusable workflow downloads and
+validates the exact declared wheel set before requesting a PyPI credential, then
+verifies the published files byte for byte. Its Docker publisher runs as a workflow
+step; publisher tooling is checked out from the called workflow's immutable commit.
 
 crates.io and npm callers can delegate to `crates-io-publish.yml`,
 `npm-artifact-publish.yml`, or `npm-version-finalize.yml`. Their unprivileged jobs
