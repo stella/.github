@@ -457,6 +457,8 @@ jobs:
     ["unexpected PyPI input", base.replace("          wheel-contract:", "          attacker-input: value\n          wheel-contract:")],
     ["empty wheel contract", base.replace("'{\"python-wheel-linux\":[\"manylinux_2_17_x86_64\"]}'", "'{}'")],
     ["finalizer package path escape", base.replace("package-files: package.json", "package-files: ../package.json")],
+    ["embedded changelog mutation", base.replace("      package-files: package.json", "      package-files: package.json\n      update-changelog: false")],
+    ["changelog credentials", base.replace("      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "      CHANGELOG_APP_ID: \${{ secrets.CHANGELOG_APP_ID }}\n      CHANGELOG_APP_PRIVATE_KEY: \${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}")],
     ["unpaired release secret", base.replace("      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n", "")],
     ["secret inheritance", base.replace("    secrets:\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "    secrets: inherit")],
     ["unexpected secret", base.replace("RELEASE_APP_ID }}", "NPM_TOKEN }}")],

@@ -21,8 +21,6 @@ const HOSTED_RUNTIME_RUNNERS = new Set([
   "windows-2025",
 ]);
 const RELEASE_SECRETS = new Set([
-  "CHANGELOG_APP_ID",
-  "CHANGELOG_APP_PRIVATE_KEY",
   "RELEASE_APP_ID",
   "RELEASE_APP_PRIVATE_KEY",
 ]);
@@ -552,12 +550,10 @@ const validateOptionalBoolean = (value: unknown, label: string) => {
 };
 
 const validateSecretPairs = (secrets: JsonObject, label: string) => {
-  for (const prefix of ["RELEASE_APP", "CHANGELOG_APP"]) {
-    const hasId = `${prefix}_ID` in secrets;
-    const hasKey = `${prefix}_PRIVATE_KEY` in secrets;
-    if (hasId !== hasKey) {
-      fail(`${label} must map both ${prefix} credential fields or neither`);
-    }
+  const hasId = "RELEASE_APP_ID" in secrets;
+  const hasKey = "RELEASE_APP_PRIVATE_KEY" in secrets;
+  if (hasId !== hasKey) {
+    fail(`${label} must map both RELEASE_APP credential fields or neither`);
   }
 };
 
@@ -621,7 +617,6 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
       "package-files",
       "artifact-pattern",
       "publish-to-npm",
-      "update-changelog",
     ]),
     `${label}.with`,
   );
@@ -633,10 +628,8 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
   if ("artifact-pattern" in inputs) {
     validateArtifactPattern(inputs["artifact-pattern"], `${label}.with.artifact-pattern`);
   }
-  for (const key of ["publish-to-npm", "update-changelog"]) {
-    if (key in inputs) {
-      validateOptionalBoolean(inputs[key], `${label}.with.${key}`);
-    }
+  if ("publish-to-npm" in inputs) {
+    validateOptionalBoolean(inputs["publish-to-npm"], `${label}.with.publish-to-npm`);
   }
   const secrets = object(job.secrets ?? {}, `${label}.secrets`);
   for (const [name, expression] of Object.entries(secrets)) {
