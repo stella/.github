@@ -27,6 +27,8 @@ const RELEASE_SECRETS = new Set([
 const DOWNLOAD_ARTIFACT_USE =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
+const PYPI_PUBLISH_USE =
+  "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33";
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -569,6 +571,15 @@ const STEP_JOB_KEYS = new Set([
   "steps",
 ]);
 const ACTION_STEP_KEYS = new Set(["name", "id", "if", "uses", "with"]);
+const PYPI_JOB_KEYS = new Set([
+  "name",
+  "needs",
+  "if",
+  "runs-on",
+  "timeout-minutes",
+  "permissions",
+  "steps",
+]);
 const WORKFLOW_KEYS = new Set(["name", "on", "concurrency", "permissions", "jobs"]);
 
 const validateTriggers = (value: unknown) => {
@@ -766,20 +777,7 @@ const validateIndependentNpmPublisher = (job: JsonObject, ref: string, label: st
   }
 };
 
-const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
-  rejectUnexpectedKeys(job, REUSABLE_JOB_KEYS, label);
-  if (job.uses !== expectedSharedUse("workflows/pypi-publish.yml", ref)) {
-    fail(`${label} must call the immutable shared PyPI publisher`);
-  }
-  exactPermissions(
-    job.permissions,
-    { contents: "read", "id-token": "write" },
-    `${label}.permissions`,
-  );
-  if ("secrets" in job) {
-    fail(`${label} must not receive secrets`);
-  }
-  const inputs = object(job.with, `${label}.with`);
+const validatePyPiPrepareInputs = (inputs: JsonObject, label: string) => {
   rejectUnexpectedKeys(
     inputs,
     new Set([
@@ -789,46 +787,40 @@ const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
       "distribution-name",
       "wheel-contract",
     ]),
-    `${label}.with`,
+    label,
   );
   requireKeys(
     inputs,
     new Set(["expected-version", "project-name", "distribution-name", "wheel-contract"]),
-    `${label}.with`,
+    label,
   );
-  nonEmptyString(inputs["expected-version"], `${label}.with.expected-version`);
-  const projectName = staticString(
-    inputs["project-name"],
-    `${label}.with.project-name`,
-  );
+  nonEmptyString(inputs["expected-version"], `${label}.expected-version`);
+  const projectName = staticString(inputs["project-name"], `${label}.project-name`);
   const distributionName = staticString(
     inputs["distribution-name"],
-    `${label}.with.distribution-name`,
+    `${label}.distribution-name`,
   );
   if (!/^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$/.test(projectName)) {
-    fail(`${label}.with.project-name is not a valid static Python project name`);
+    fail(`${label}.project-name is not a valid static Python project name`);
   }
   if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(distributionName)) {
-    fail(`${label}.with.distribution-name must be wheel-normalized`);
+    fail(`${label}.distribution-name must be wheel-normalized`);
   }
   if ("artifact-pattern" in inputs) {
-    validateArtifactPattern(
-      inputs["artifact-pattern"],
-      `${label}.with.artifact-pattern`,
-    );
+    validateArtifactPattern(inputs["artifact-pattern"], `${label}.artifact-pattern`);
   }
   let contract: unknown;
   try {
-    contract = JSON.parse(staticString(inputs["wheel-contract"], `${label}.with.wheel-contract`));
+    contract = JSON.parse(staticString(inputs["wheel-contract"], `${label}.wheel-contract`));
   } catch {
-    fail(`${label}.with.wheel-contract must be valid static JSON`);
+    fail(`${label}.wheel-contract must be valid static JSON`);
   }
-  const contractMap = object(contract, `${label}.with.wheel-contract`);
+  const contractMap = object(contract, `${label}.wheel-contract`);
   if (Object.keys(contractMap).length === 0) {
-    fail(`${label}.with.wheel-contract must not be empty`);
+    fail(`${label}.wheel-contract must not be empty`);
   }
   for (const [artifactName, platformTags] of Object.entries(contractMap)) {
-    validateArtifactPattern(artifactName, `${label}.with.wheel-contract artifact`);
+    validateArtifactPattern(artifactName, `${label}.wheel-contract artifact`);
     if (
       !Array.isArray(platformTags) ||
       platformTags.length === 0 ||
@@ -837,7 +829,76 @@ const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
         (tag) => typeof tag !== "string" || !/^[A-Za-z0-9]+(?:[_.][A-Za-z0-9]+)*$/.test(tag),
       )
     ) {
-      fail(`${label}.with.wheel-contract.${artifactName} has invalid platform tags`);
+      fail(`${label}.wheel-contract.${artifactName} has invalid platform tags`);
+    }
+  }
+};
+
+const validatePyPiPublisher = (job: JsonObject, ref: string, label: string) => {
+  rejectUnexpectedKeys(job, PYPI_JOB_KEYS, label);
+  if (job["runs-on"] !== "ubuntu-latest") {
+    fail(`${label}.runs-on must be ubuntu-latest`);
+  }
+  exactPermissions(
+    job.permissions,
+    { contents: "read", "id-token": "write" },
+    `${label}.permissions`,
+  );
+  const rawSteps = job.steps;
+  if (!Array.isArray(rawSteps) || rawSteps.length !== 3) {
+    fail(`${label} must contain prepare, publish, and verify steps`);
+  }
+  const steps = rawSteps.map((step, index) => {
+    const value = object(step, `${label}.steps[${index}]`);
+    rejectUnexpectedKeys(
+      value,
+      new Set(["name", "uses", "with"]),
+      `${label}.steps[${index}]`,
+    );
+    return value;
+  });
+  const prepareUse = expectedSharedUse("actions/pypi-publish-hardened", ref);
+  const verifyUse = expectedSharedUse("actions/pypi-publish-hardened/verify", ref);
+  if (
+    steps[0].uses !== prepareUse ||
+    steps[1].uses !== PYPI_PUBLISH_USE ||
+    steps[2].uses !== verifyUse
+  ) {
+    fail(`${label} must prepare, publish, and verify PyPI artifacts in order`);
+  }
+
+  const prepareInputs = object(steps[0].with, `${label}.steps[0].with`);
+  validatePyPiPrepareInputs(prepareInputs, `${label}.steps[0].with`);
+
+  const publishInputs = object(steps[1].with, `${label}.steps[1].with`);
+  rejectUnexpectedKeys(
+    publishInputs,
+    new Set(["packages-dir", "skip-existing"]),
+    `${label}.steps[1].with`,
+  );
+  requireKeys(
+    publishInputs,
+    new Set(["packages-dir", "skip-existing"]),
+    `${label}.steps[1].with`,
+  );
+  if (publishInputs["packages-dir"] !== "dist" || publishInputs["skip-existing"] !== true) {
+    fail(`${label}.steps[1] must publish dist with skip-existing enabled`);
+  }
+
+  const verifyInputs = object(steps[2].with, `${label}.steps[2].with`);
+  rejectUnexpectedKeys(
+    verifyInputs,
+    new Set(["expected-version", "project-name"]),
+    `${label}.steps[2].with`,
+  );
+  requireKeys(
+    verifyInputs,
+    new Set(["expected-version", "project-name"]),
+    `${label}.steps[2].with`,
+  );
+  for (const key of ["expected-version", "project-name"] as const) {
+    if (verifyInputs[key] !== prepareInputs[key]) {
+      fail(`${label}.steps[2].with.${key} must match the prepare step`);
     }
   }
 };
@@ -972,8 +1033,6 @@ export const validateReleaseWorkflow = (
         validateNpmArtifactPublisher(job, expectedRef, label);
       } else if (job.uses.includes("crates-io-publish.yml")) {
         validateCratesPublisher(job, expectedRef, label);
-      } else if (job.uses.includes("pypi-publish.yml")) {
-        validatePyPiPublisher(job, expectedRef, label);
       } else {
         fail(`${label} calls an unsupported privileged reusable workflow`);
       }
@@ -985,7 +1044,9 @@ export const validateReleaseWorkflow = (
     const uses = steps
       .map((step) => (step && typeof step === "object" ? (step as JsonObject).uses : undefined))
       .filter((value): value is string => typeof value === "string");
-    if (uses.some((use) => use.startsWith("actions/attest@"))) {
+    if (uses.includes(PYPI_PUBLISH_USE)) {
+      validatePyPiPublisher(job, expectedRef, label);
+    } else if (uses.some((use) => use.startsWith("actions/attest@"))) {
       validateAttestation(job, label);
     } else {
       fail(`${label} has write permission but is not an approved publisher or attestor`);

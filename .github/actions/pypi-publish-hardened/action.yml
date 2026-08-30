@@ -1,0 +1,45 @@
+name: Prepare hardened PyPI publish
+description: Download and validate an exact wheel set before top-level trusted publishing.
+
+inputs:
+  artifact-pattern:
+    description: Artifact pattern containing one wheel per artifact directory.
+    required: false
+    default: python-wheel-*
+  expected-version:
+    description: Stella semver from the caller's verified VERSION file.
+    required: true
+  project-name:
+    description: Exact Python project name from wheel METADATA.
+    required: true
+  distribution-name:
+    description: Exact underscore-normalized wheel filename prefix.
+    required: true
+  wheel-contract:
+    description: JSON object mapping artifact names to exact platform tag arrays.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download wheel artifacts
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: ${{ inputs.artifact-pattern }}
+        path: wheel-artifacts
+    - name: Validate exact wheel set
+      shell: bash
+      env:
+        DISTRIBUTION_NAME: ${{ inputs.distribution-name }}
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        VALIDATOR_PATH: ${{ github.action_path }}/validate_wheels.py
+        WHEEL_CONTRACT: ${{ inputs.wheel-contract }}
+      run: python3 "${VALIDATOR_PATH}" wheel-artifacts dist
+    - name: Verify any existing PyPI files match exact bytes
+      shell: bash
+      env:
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PYPI_VERSION: ${{ inputs.expected-version }}
+        VERIFIER_PATH: ${{ github.action_path }}/verify_registry.py
+      run: python3 "${VERIFIER_PATH}" --allow-missing

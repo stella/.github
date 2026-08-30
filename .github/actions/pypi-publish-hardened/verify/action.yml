@@ -1,0 +1,21 @@
+name: Verify hardened PyPI publish
+description: Verify that PyPI exposes the exact bytes prepared by the caller.
+
+inputs:
+  expected-version:
+    description: Stella semver published by the caller.
+    required: true
+  project-name:
+    description: Exact Python project name to verify.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify published PyPI files match exact bytes
+      shell: bash
+      env:
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PYPI_VERSION: ${{ inputs.expected-version }}
+        VERIFIER_PATH: ${{ github.action_path }}/../verify_registry.py
+      run: python3 "${VERIFIER_PATH}"
