@@ -374,6 +374,18 @@ test("state machine accepts normal, resumable, repaired, and complete states", (
   );
 });
 
+test("state machine stages a historically tagged unpublished version from its exact source", () => {
+  assert.equal(
+    classifyState(
+      state({
+        head: "historical-release-commit",
+        tagTarget: "historical-release-commit",
+      }),
+    ),
+    "stage-and-publish",
+  );
+});
+
 test("state machine rejects wrong-SHA, premature public, and mismatched release assets", () => {
   assert.throws(
     () => classifyState(state({ tagTarget: "other" })),
