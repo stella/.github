@@ -2,6 +2,12 @@ name: Dependabot Bun Dedupe
 
 on:
   workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner labels as a JSON array"
+        required: false
+        type: string
+        default: '["ubuntu-24.04"]'
 
 permissions:
   contents: read
@@ -15,7 +21,7 @@ jobs:
       && github.event.pull_request.user.login == 'dependabot[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
       && startsWith(github.event.pull_request.head.ref, 'dependabot/bun/')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
