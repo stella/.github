@@ -11,6 +11,7 @@ import {
   listTarballs,
   resolveSourceSha,
   selectLatestReleaseEntry,
+  stageReleaseEntries,
   validateGithubLatestConfiguration,
   validateGithubLatestPolicy,
   waitForStagedState,
@@ -62,6 +63,64 @@ test("publishes package drafts without claiming GitHub latest", () => {
 
   assertLatestIsDisabled(args);
   assert.ok(args.includes("--draft=false"));
+});
+
+test("missing npm namespaces stop before tag or draft creation", async () => {
+  let releaseWrites = 0;
+  const entry = {
+    path: "package.tgz",
+    pkg: { name: "@stll/chat", version: "0.1.1" },
+    registry: { exists: false },
+    status: "stage-and-publish",
+    tag: "@stll/chat@0.1.1",
+  };
+
+  await assert.rejects(
+    stageReleaseEntries({
+      createDraftRelease: () => {
+        releaseWrites += 1;
+      },
+      entries: [entry],
+      hasNpmNamespace: () => false,
+      head: sourceSha,
+      repository: "stella/example",
+      temporaryDirectory: "/tmp/release",
+    }),
+    /Bootstrap it and configure trusted publishing.*no tag or GitHub release draft was created/,
+  );
+  assert.equal(releaseWrites, 0);
+});
+
+test("stages an unpublished version after namespace bootstrap", async () => {
+  const writes = [];
+  const entry = {
+    path: "package.tgz",
+    pkg: { name: "@stll/chat", version: "0.1.1" },
+    registry: { exists: false },
+    status: "stage-and-publish",
+    tag: "@stll/chat@0.1.1",
+  };
+
+  await stageReleaseEntries({
+    createDraftRelease: (args) => writes.push(args),
+    createNotes: () => "release notes",
+    entries: [entry],
+    hasNpmNamespace: () => true,
+    head: sourceSha,
+    repository: "stella/example",
+    temporaryDirectory: "/tmp/release",
+  });
+
+  assert.deepEqual(writes, [
+    {
+      asset: "package.tgz",
+      entry,
+      head: sourceSha,
+      notes: "release notes",
+      repository: "stella/example",
+      temporaryDirectory: "/tmp/release",
+    },
+  ]);
 });
 
 test("validates GitHub Latest policy at the action boundary", () => {
