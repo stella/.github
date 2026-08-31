@@ -56,7 +56,22 @@ jobs:
 
           git diff --check -- bun.lock
 
+      - name: Prepare private-repository fetch authorization
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          authorization="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${authorization}"
+          echo "AUTOFIX_GIT_AUTHORIZATION=AUTHORIZATION: basic ${authorization}" >> "$GITHUB_ENV"
+
       - name: Push dedupe fix
         uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a # v1.3.4
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0: ${{ env.AUTOFIX_GIT_AUTHORIZATION }}
         with:
           commit-message: "chore: dedupe Bun lockfile"
