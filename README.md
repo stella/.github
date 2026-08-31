@@ -75,7 +75,8 @@ jobs:
 
 The shared workflow accepts only same-repository Dependabot branches under
 `dependabot/bun/`. It runs Bun's lockfile-only dedupe and rejects changes outside
-`bun.lock` before passing the patch to autofix.ci.
+`bun.lock` before passing the patch to autofix.ci. Callers may pass `runs-on` as a
+JSON runner-label array; it defaults to `["ubuntu-24.04"]`.
 
 ### Base Checks (Recommended)
 

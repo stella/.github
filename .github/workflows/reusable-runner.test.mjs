@@ -2,19 +2,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-const workflowFiles = ["ai-shared-update.yml", "changeset-release-pr.yml"];
+const workflowDefaults = new Map([
+  ["ai-shared-update.yml", "ubuntu-latest"],
+  ["changeset-release-pr.yml", "ubuntu-latest"],
+  ["dependabot-bun-dedupe.yml", "ubuntu-24.04"],
+]);
 
-for (const workflowFile of workflowFiles) {
+for (const [workflowFile, hostedDefault] of workflowDefaults) {
   test(`${workflowFile} supports a JSON runner label array with a hosted default`, async () => {
     const workflow = await readFile(new URL(workflowFile, import.meta.url), "utf8");
-    const runnerInput = workflow.match(
-      / {6}runs-on:\n[\s\S]+?(?=\n {6}[a-z][a-z-]+:|\n {4}secrets:)/,
-    )?.[0];
+    const runnerInput = `      runs-on:
+        description: "Runner labels as a JSON array"
+        required: false
+        type: string
+        default: '["${hostedDefault}"]'`;
 
-    assert.ok(runnerInput, "missing runs-on workflow input");
-    assert.match(runnerInput, /required: false/);
-    assert.match(runnerInput, /type: string/);
-    assert.match(runnerInput, /default: '\["ubuntu-latest"\]'/);
+    assert.ok(workflow.includes(runnerInput), "missing runs-on workflow input");
     assert.match(
       workflow,
       /runs-on: \$\{\{ fromJSON\(inputs\.runs-on\) \}\}/,
