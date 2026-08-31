@@ -122,6 +122,19 @@ const npmState = (name, version) => {
   };
 };
 
+const npmNamespaceExists = (name) => {
+  const result = attempt("npm", ["view", name, "name", "--json"]);
+  if (result.status !== 0) {
+    if (isNotFound(result)) return false;
+    fail(`npm namespace lookup failed for ${name}: ${result.stderr.trim()}`);
+  }
+  const publishedName = JSON.parse(result.stdout);
+  if (publishedName !== name) {
+    fail(`npm returned '${publishedName}' for package namespace ${name}.`);
+  }
+  return true;
+};
+
 const releaseAssetIntegrity = (repository, release) => {
   if (!release || release.assets.length !== 1) return null;
   const [{ id }] = release.assets;
@@ -453,6 +466,63 @@ const pendingStagingEntries = (state) =>
       entry.status === "repair-release",
   );
 
+const unpublishedEntries = (entries) =>
+  entries.filter((entry) => !entry.registry.exists);
+
+export const stageReleaseEntries = async ({
+  createDraftRelease = createDraft,
+  createNotes = notesFor,
+  entries,
+  hasNpmNamespace = npmNamespaceExists,
+  head,
+  recoverRegistryAsset = registryAsset,
+  repository,
+  temporaryDirectory,
+}) => {
+  // A package's first npm publication needs an explicitly bootstrapped
+  // namespace. Check every unpublished target before createDraft can create a
+  // tag, so a registry E404 never strands immutable release provenance.
+  for (const entry of unpublishedEntries(entries)) {
+    if (hasNpmNamespace(entry.pkg.name)) continue;
+    fail(
+      `npm package namespace ${entry.pkg.name} does not exist. Bootstrap it and configure trusted publishing before releasing ${entry.tag}; no tag or GitHub release draft was created.`,
+    );
+  }
+
+  const drafts = new Map();
+  for (const entry of entries) {
+    if (
+      entry.status !== "stage-and-publish" &&
+      entry.status !== "repair-release"
+    ) {
+      continue;
+    }
+    drafts.set(entry.pkg.name, {
+      asset:
+        entry.status === "repair-release"
+          ? await recoverRegistryAsset({ entry, temporaryDirectory })
+          : entry.path,
+      notes: createNotes(entry),
+    });
+  }
+
+  for (const entry of entries) {
+    if (
+      entry.status !== "stage-and-publish" &&
+      entry.status !== "repair-release"
+    ) {
+      continue;
+    }
+    createDraftRelease({
+      ...drafts.get(entry.pkg.name),
+      entry,
+      head,
+      repository,
+      temporaryDirectory,
+    });
+  }
+};
+
 const sleep = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -486,40 +556,19 @@ export const prepare = async () => {
     "npm-independent-release",
   );
 
-  const drafts = new Map();
   for (const entry of state.plan.entries) {
     console.log(
       `::notice::${entry.pkg.name}@${entry.pkg.version}: ${entry.status}; sha256=${entry.sha256}`,
     );
-    if (
-      entry.status === "stage-and-publish" ||
-      entry.status === "repair-release"
-    ) {
-      drafts.set(entry.pkg.name, {
-        asset:
-          entry.status === "repair-release"
-            ? await registryAsset({ entry, temporaryDirectory })
-            : entry.path,
-        notes: notesFor(entry),
-      });
-    }
   }
 
   // Complete every local and registry validation before creating any tag or draft.
-  for (const entry of state.plan.entries) {
-    if (
-      entry.status === "stage-and-publish" ||
-      entry.status === "repair-release"
-    ) {
-      createDraft({
-        ...drafts.get(entry.pkg.name),
-        entry,
-        head: state.head,
-        repository: state.repository,
-        temporaryDirectory,
-      });
-    }
-  }
+  await stageReleaseEntries({
+    entries: state.plan.entries,
+    head: state.head,
+    repository: state.repository,
+    temporaryDirectory,
+  });
 
   // GitHub's release list can lag a successful draft creation. Re-read with a
   // bounded backoff so publishing still requires every exact draft asset.
