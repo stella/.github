@@ -44,7 +44,7 @@ on:
         default: "Automated CHANGELOG.md regeneration after a release."
     secrets:
       auth_token:
-        description: "Optional token for create-pull-request when changelog PRs should trigger downstream CI"
+        description: "Optional token that owns the changelog commit and pull request (a PAT or App token lets the PR trigger downstream CI)"
         required: false
       app_id:
         description: "Optional GitHub App ID used to mint a token inside this workflow"
@@ -126,7 +126,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          token: ${{ secrets.auth_token || steps.app-token.outputs.token || github.token }}
+          # The commit goes through the API, so no credential reaches disk.
+          persist-credentials: false
           ref: >-
             ${{ inputs.base-branch
                 || github.event.repository.default_branch
@@ -143,27 +144,35 @@ jobs:
           OUTPUT: ${{ inputs.changelog-path }}
           GITHUB_REPO: ${{ github.repository }}
 
+      - name: Checkout shared tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .signed-commit
+          persist-credentials: false
+
       - name: Open or update PR
-        id: cpr
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        id: commit
+        uses: ./.signed-commit/.github/actions/signed-commit
         with:
           token: ${{ secrets.auth_token || steps.app-token.outputs.token || github.token }}
+          mode: refresh-pr
           branch: ${{ inputs.branch }}
           base: >-
             ${{ inputs.base-branch
                 || github.event.repository.default_branch
                 || 'main' }}
-          delete-branch: true
+          paths: ${{ inputs.changelog-path }}
           commit-message: ${{ inputs.commit-message }}
-          title: ${{ inputs.pr-title }}
-          body: ${{ inputs.pr-body }}
-          add-paths: ${{ inputs.changelog-path }}
+          pr-title: ${{ inputs.pr-title }}
+          pr-body: ${{ inputs.pr-body }}
 
       - name: Report result
         shell: bash
         env:
-          OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
-          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+          OPERATION: ${{ steps.commit.outputs.operation }}
+          PR_URL: ${{ steps.commit.outputs.pull-request-url }}
         run: |
           case "$OPERATION" in
             created|updated)
