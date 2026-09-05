@@ -1,0 +1,92 @@
+name: Signed commit
+description: >
+  Commit the working tree's changes under `paths` to a branch through the
+  GitHub API instead of the git CLI. GitHub signs every commit it creates and
+  attributes it to the token's owner (a GitHub App bot, or github-actions[bot]
+  for GITHUB_TOKEN), so the commit passes a "require signed commits" rule
+  without any key on the runner. Only GitHub-hosted code touches the token.
+
+  `refresh-pr` mode rebuilds `branch` from the checked-out HEAD (the base),
+  commits on top of it, and keeps one pull request against `base` open while
+  there are changes; when the managed paths match base again, it closes the
+  stale pull request and deletes the branch. `append` mode commits on top of
+  the checked-out HEAD, which must be the current tip of `branch`; a foreign
+  commit on the branch fails the call instead of being built upon.
+
+  Symlinks and submodules cannot travel through the API path and fail the
+  step. Large change sets are split into several commits of at most
+  `max-commit-bytes` of file content each. The managed paths are left staged
+  in the local index.
+
+  The token needs `contents: write`, plus `pull-requests: write` in
+  `refresh-pr` mode.
+
+inputs:
+  token:
+    description: GitHub App installation token or GITHUB_TOKEN that owns the commit.
+    required: true
+  mode:
+    description: "`refresh-pr` or `append` (see the description)."
+    required: true
+  branch:
+    description: Branch that receives the commit.
+    required: true
+  paths:
+    description: Newline-separated git pathspecs; only changes under them are committed.
+    required: true
+  commit-message:
+    description: Commit message; the first line is the headline, the rest the body.
+    required: true
+  base:
+    description: Pull request base branch. Required in `refresh-pr` mode.
+    required: false
+    default: ""
+  pr-title:
+    description: Pull request title. Required in `refresh-pr` mode; an open pull request is retitled to it.
+    required: false
+    default: ""
+  pr-body:
+    description: Pull request body; an open pull request's body is replaced by it.
+    required: false
+    default: ""
+  max-commit-bytes:
+    description: File content bytes per commit before the change set is split into several commits.
+    required: false
+    default: "20000000"
+
+outputs:
+  operation:
+    description: >
+      `refresh-pr`: `created`, `updated`, `closed`, or `none`.
+      `append`: `committed` or `none`.
+    value: ${{ steps.commit.outputs.operation }}
+  commit-sha:
+    description: Tip of the branch after the last commit; empty when nothing was committed.
+    value: ${{ steps.commit.outputs.commit-sha }}
+  pull-request-number:
+    description: Number of the pull request that was created, updated, or closed.
+    value: ${{ steps.commit.outputs.pull-request-number }}
+  pull-request-url:
+    description: URL of the pull request that was created, updated, or closed.
+    value: ${{ steps.commit.outputs.pull-request-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Commit through the GitHub API
+      id: commit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        MODE: ${{ inputs.mode }}
+        BRANCH: ${{ inputs.branch }}
+        BASE: ${{ inputs.base }}
+        PATHS: ${{ inputs.paths }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY: ${{ inputs.pr-body }}
+        MAX_COMMIT_BYTES: ${{ inputs.max-commit-bytes }}
+        ACTION_PATH: ${{ github.action_path }}
+      # `bash <path>` rather than executing the file: the runner does not
+      # always preserve the exec bit on action checkouts.
+      run: bash -eo pipefail "${{ github.action_path }}/commit.sh"
