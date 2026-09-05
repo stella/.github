@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 const workflowDefaults = new Map([
-  ["ai-shared-update.yml", "ubuntu-latest"],
   ["changeset-release-pr.yml", "ubuntu-latest"],
   ["dependabot-bun-dedupe.yml", "ubuntu-24.04"],
 ]);
