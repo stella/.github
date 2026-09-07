@@ -49,8 +49,8 @@ jobs:
       contents: read
     uses: stella/.github/.github/workflows/quarantine-prune.yml@${expectedRef}
     secrets:
-      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}
-      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      CHANGELOG_APP_ID: \${{ secrets.CHANGELOG_APP_ID }}
+      CHANGELOG_APP_PRIVATE_KEY: \${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}
 `,
 });
 
@@ -302,14 +302,14 @@ describe("quarantine policy", () => {
       {
         expectedError: "must pass only the quarantine App secrets",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          "    secrets:\n      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}\n      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n",
+          "    secrets:\n      CHANGELOG_APP_ID: ${{ secrets.CHANGELOG_APP_ID }}\n      CHANGELOG_APP_PRIVATE_KEY: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}\n",
           "    secrets: inherit\n",
         ),
       },
       {
         expectedError: "must pass only the quarantine App secrets",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          "${{ secrets.RELEASE_APP_ID }}",
+          "${{ secrets.CHANGELOG_APP_ID }}",
           "${{ secrets.NPM_TOKEN }}",
         ),
       },
