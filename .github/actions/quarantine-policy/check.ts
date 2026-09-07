@@ -386,8 +386,8 @@ export const validateCallerWorkflowRefs = ({
       }
       const secrets = Object.entries(job.secrets).sort(([left], [right]) => left.localeCompare(right));
       const expectedSecrets = [
-        ["RELEASE_APP_ID", "${{ secrets.RELEASE_APP_ID }}"],
-        ["RELEASE_APP_PRIVATE_KEY", "${{ secrets.RELEASE_APP_PRIVATE_KEY }}"],
+        ["CHANGELOG_APP_ID", "${{ secrets.CHANGELOG_APP_ID }}"],
+        ["CHANGELOG_APP_PRIVATE_KEY", "${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}"],
       ];
       if (JSON.stringify(secrets) !== JSON.stringify(expectedSecrets)) {
         return [`.github/workflows/${name} must pass only the quarantine App secrets`];
