@@ -246,6 +246,10 @@ jobs:
 # In a separate push-to-main workflow:
 jobs:
   version:
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
     uses: stella/.github/.github/workflows/changeset-release-pr.yml@<commit-sha>
     with:
       prepare-rust-wasm: true
@@ -261,10 +265,28 @@ the workflow's declared permissions and secrets.
 The caller must provide `changeset`, `changeset:version`, and a `.changeset/config.json`.
 The shared workflow serializes each target branch without interrupting an active
 release mutation, and skips write-capable steps when its trigger commit is no longer
-the branch head. A current no-op run closes any stale version PR and deletes its
-generated branch, so queued runs converge without a duplicate release PR. Callers
+the branch head. Armed or queued release PRs are frozen: version updates and cleanup
+both defer, leaving new changesets for the next batch. A current no-op run closes an
+unarmed stale version PR and deletes its generated branch. Callers
 should use matching workflow-level concurrency without cancellation; newer pushes
 replace obsolete pending runs while the active mutation finishes.
+
+For unattended merging, pass `auto-merge-command` with a repository-owned gate, for
+example `bun scripts/merge-bar.ts "$RELEASE_PR_NUMBER"`. It runs only after a
+successful version update and must verify merge requirements and pin the head it
+hands to the queue. The default is empty, preserving manual release handoff for
+callers that do not opt in. Add a scheduled trigger and `workflow_dispatch` alongside
+the main push trigger to reconcile interrupted runs; restrict manual dispatch to the
+release base branch. Dependency installation runs before the App token is minted.
+The gate receives `GH_READ_TOKEN` for read-only contents, PR, and check inspection;
+`GH_TOKEN` is the App credential for the handoff. This avoids granting check access
+to the release App.
+
+Read requests retry transient HTTP failures twice; writes are never blindly retried.
+The exact GitHub queue-lock rejection during versioning is a successful deferral;
+other failures propagate. A dequeued PR or one whose auto-merge was disabled requires
+attention, preventing scheduled runs from repeatedly requeueing a failed batch.
+Resolve the failure and re-arm that PR, or close it to create a replacement batch.
 
 For hybrid repositories, `changeset:version` must synchronize the selected package
 version into every npm, Cargo manifest, Python, and central `VERSION` surface. With
