@@ -23,6 +23,9 @@ const environment = {
 const releasePullRequest = (overrides = {}) => ({
   number: 42,
   headRefOid: HEAD_SHA,
+  state: "OPEN",
+  baseRefName: "main",
+  headRefName: "changeset-release/main",
   isCrossRepository: false,
   autoMergeRequest: null,
   mergeQueueEntry: null,
@@ -33,17 +36,24 @@ const releasePullRequest = (overrides = {}) => ({
 const repository = ({
   baseSha = SOURCE_SHA,
   pullRequest = releasePullRequest(),
-  pullRequests = pullRequest === null ? [] : [pullRequest],
+  restPulls = pullRequest === null ? [] : [{ number: pullRequest.number }],
 } = {}) => ({
   ref: { target: { oid: baseSha } },
-  pullRequests: { nodes: pullRequests },
+  pullRequest,
+  restPulls,
 });
 
-const responseFor = (state) => JSON.stringify({ data: { repository: state } });
+const responseFor = (state) =>
+  (() => {
+    const { restPulls: _restPulls, ...repositoryState } = state;
+    return JSON.stringify({ data: { repository: repositoryState } });
+  })();
 
 const makeHarness = ({
   states = [repository()],
   extraGhResponses = [],
+  mutationGhResponses = [],
+  missingBranch = false,
   commandResults = [],
   env = environment,
 } = {}) => {
@@ -53,6 +63,7 @@ const makeHarness = ({
   const outputs = [];
   const queuedStates = [...states];
   const queuedGhResponses = [...extraGhResponses];
+  const queuedMutationGhResponses = [...mutationGhResponses];
   const queuedCommandResults = [...commandResults];
 
   const execute = (command, args, options) => {
@@ -60,6 +71,35 @@ const makeHarness = ({
     if (command === "gh") {
       const response = queuedGhResponses.shift();
       if (response !== undefined) return response;
+      if (args[1] === "--method" && args[2] === "GET") {
+        if (args[3].endsWith("/pulls")) {
+          const state = queuedStates[0];
+          return {
+            status: 0,
+            stdout: JSON.stringify(state.restPulls ?? [{ number: 42 }]),
+            stderr: "",
+          };
+        }
+      }
+      if (
+        missingBranch &&
+        ((args[1] === "--method" && args[3]?.includes("/git/ref/heads/")) ||
+          args[1]?.includes("/git/ref/heads/"))
+      ) {
+        return { status: 1, stdout: "", stderr: "HTTP 404" };
+      }
+      if (
+        args[1] === "--method" &&
+        (args[2] === "PATCH" || args[2] === "DELETE")
+      ) {
+        return (
+          queuedMutationGhResponses.shift() ?? {
+            status: 0,
+            stdout: "{}",
+            stderr: "",
+          }
+        );
+      }
       if (args[1] === "graphql") {
         const state =
           queuedStates.length > 1 ? queuedStates.shift() : queuedStates[0];
@@ -88,6 +128,7 @@ const mutationCalls = (calls) =>
     ({ command, args }) =>
       (command === "gh" &&
         args[1] === "--method" &&
+        (args[2] === "PATCH" || args[2] === "DELETE") &&
         (args[3]?.startsWith("repos/") ?? false)) ||
       command === "bash" ||
       command === process.execPath,
@@ -142,13 +183,18 @@ test("inspection is repeatable and never mutates the release branch", async () =
 
   assert.equal(
     harness.calls.filter(({ command }) => command === "gh").length,
-    2,
+    4,
   );
   assert.deepEqual(harness.sleeps, []);
   assert.deepEqual(harness.outputs, [
     { name: "status", value: "mutable" },
     { name: "status", value: "mutable" },
   ]);
+  assert.equal(
+    harness.outputs.some(({ name }) => name === "pr-number"),
+    false,
+    "lifecycle inspection must not overwrite the upstream action's PR output",
+  );
 });
 
 test("incomplete GitHub state fails closed before any mutation", async () => {
@@ -166,11 +212,11 @@ test("incomplete GitHub state fails closed before any mutation", async () => {
   });
   const incompleteStates = [
     {},
-    { ref: { target: {} }, pullRequests: { nodes: [] } },
-    { ref: { target: { oid: SOURCE_SHA } }, pullRequests: {} },
+    { ref: { target: {} } },
+    { ref: { target: { oid: SOURCE_SHA } } },
     {
       ref: { target: { oid: SOURCE_SHA } },
-      pullRequests: { nodes: [{ number: 42, headRefOid: HEAD_SHA }] },
+      pullRequest: {},
     },
     ...missingPullRequestFields,
   ];
@@ -179,27 +225,40 @@ test("incomplete GitHub state fails closed before any mutation", async () => {
     const harness = makeHarness({ states: [state] });
     await assert.rejects(
       harness.runtime.inspect(),
-      /GitHub returned incomplete release state|GitHub returned incomplete release PR state/,
+      /GitHub returned incomplete release (?:state|PR state|PR lookup)/,
     );
     assert.deepEqual(mutationCalls(harness.calls), []);
   }
 });
 
-test("a null release PR node fails closed with a lifecycle error", async () => {
+test("a missing branch and no release PR are a read-only no-op", async () => {
   const harness = makeHarness({
-    states: [
-      {
-        ref: { target: { oid: SOURCE_SHA } },
-        pullRequests: { nodes: [null] },
-      },
-    ],
+    states: [repository({ pullRequest: null })],
+    missingBranch: true,
   });
 
-  await assert.rejects(
-    harness.runtime.inspect(),
-    /GitHub returned incomplete release PR state/,
-  );
+  assert.equal(await harness.runtime.inspect(), true);
+  await harness.runtime.cleanup();
   assert.deepEqual(mutationCalls(harness.calls), []);
+
+  const lookup = harness.calls.find(
+    ({ command, args }) =>
+      command === "gh" &&
+      args[1] === "--method" &&
+      args[2] === "GET" &&
+      args[3] === "repos/stella/stella/pulls",
+  );
+  assert.ok(lookup);
+  assert.deepEqual(lookup.args.slice(4), [
+    "-f",
+    "head=stella:changeset-release/main",
+    "-f",
+    "base=main",
+    "-f",
+    "state=open",
+    "-f",
+    "per_page=2",
+  ]);
 });
 
 test("the mutation detector observes a production-shaped cleanup write", async () => {
@@ -241,6 +300,31 @@ test("cleanup skips branch deletion when its post-close re-read is frozen", asyn
     writes.some(({ args }) => args[2] === "DELETE"),
     false,
   );
+});
+
+test("cleanup skips branch deletion when its post-close re-read is closed or retargeted", async () => {
+  for (const pullRequest of [
+    releasePullRequest({ state: "CLOSED" }),
+    releasePullRequest({ baseRefName: "release" }),
+    releasePullRequest({ headRefName: "other" }),
+  ]) {
+    const harness = makeHarness({
+      states: [repository(), repository({ pullRequest })],
+    });
+
+    await harness.runtime.cleanup();
+
+    const writes = mutationCalls(harness.calls).filter(
+      ({ command }) => command === "gh",
+    );
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].args[2], "PATCH");
+    assert.equal(
+      writes.some(({ args }) => args[2] === "DELETE"),
+      false,
+      `cleanup must not delete after ${pullRequest.state ?? `${pullRequest.baseRefName}/${pullRequest.headRefName}`} re-read`,
+    );
+  }
 });
 
 test("only the exact queue race is deferrable", () => {
@@ -359,10 +443,7 @@ test("multiple returned PRs fail closed even when one is from a fork", async () 
   const harness = makeHarness({
     states: [
       repository({
-        pullRequests: [
-          releasePullRequest(),
-          releasePullRequest({ isCrossRepository: true }),
-        ],
+        restPulls: [{ number: 42 }, { number: 43 }],
       }),
     ],
   });
@@ -383,7 +464,7 @@ test("read retries are bounded, while mutation failures are never retried", asyn
   assert.equal(await readHarness.runtime.inspect(), true);
   assert.equal(
     readHarness.calls.filter(({ command }) => command === "gh").length,
-    2,
+    3,
   );
   assert.deepEqual(readHarness.sleeps, [1000]);
 
@@ -401,10 +482,7 @@ test("read retries are bounded, while mutation failures are never retried", asyn
   assert.deepEqual(exhaustedReadHarness.sleeps, [1000, 3000]);
 
   const mutationHarness = makeHarness({
-    extraGhResponses: [
-      { status: 0, stdout: responseFor(repository()), stderr: "" },
-      { status: 1, stdout: "", stderr: "HTTP 500" },
-    ],
+    mutationGhResponses: [{ status: 1, stdout: "", stderr: "HTTP 500" }],
   });
 
   await assert.rejects(
@@ -413,7 +491,10 @@ test("read retries are bounded, while mutation failures are never retried", asyn
   );
   assert.equal(
     mutationHarness.calls.filter(
-      ({ command, args }) => command === "gh" && args[1] === "--method",
+      ({ command, args }) =>
+        command === "gh" &&
+        args[1] === "--method" &&
+        (args[2] === "PATCH" || args[2] === "DELETE"),
     ).length,
     1,
   );

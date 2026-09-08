@@ -7,53 +7,52 @@ const READ_RETRY_DELAYS_MS = [1000, 3000];
 const QUEUE_REJECTION =
   "A pull request for this branch has been added to a merge queue. Branches that are queued for merging cannot be updated. To modify this branch, dequeue the associated pull request.";
 
-const query = `query($owner:String!, $name:String!, $base:String!, $head:String!) {
+const query = `query($owner:String!, $name:String!, $base:String!, $number:Int!, $hasPullRequest:Boolean!) {
   repository(owner:$owner, name:$name) {
     ref(qualifiedName:$base) { target { oid } }
-    pullRequests(headRefName:$head, baseRefName:$base, states:OPEN, first:2) {
-      nodes {
-        number headRefOid isCrossRepository
-        autoMergeRequest { enabledAt }
-        mergeQueueEntry { id }
-        timelineItems(last:1, itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT, AUTO_MERGE_DISABLED_EVENT]) {
-          nodes { __typename }
-        }
+    pullRequest(number:$number) @include(if:$hasPullRequest) {
+      number state baseRefName headRefName headRefOid isCrossRepository
+      autoMergeRequest { enabledAt }
+      mergeQueueEntry { id }
+      timelineItems(last:1, itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT, AUTO_MERGE_DISABLED_EVENT]) {
+        nodes { __typename }
       }
     }
   }
 }`;
 
-export const classifyRelease = ({ sourceSha, repository }) => {
+const classifyRelease = ({ sourceSha, base, repository }) => {
   if (
     !repository?.ref?.target?.oid ||
-    !Array.isArray(repository.pullRequests?.nodes)
+    !Object.hasOwn(repository, "pullRequest")
   ) {
     throw new Error("GitHub returned incomplete release state");
   }
   if (repository.ref.target.oid !== sourceSha) return { status: "stale" };
-  // first:2 is a bounded ambiguity detector. Never filter a full page and
-  // assume the same-repository release PR was not hidden behind fork PRs.
-  if (repository.pullRequests.nodes.length > 1)
-    throw new Error("Multiple open release PRs share the release branch");
+  const pr = repository.pullRequest;
+  if (pr === null) return { status: "mutable", pullRequest: null };
   if (
-    repository.pullRequests.nodes.some(
-      (pr) => typeof pr?.isCrossRepository !== "boolean",
-    )
-  )
-    throw new Error("GitHub returned incomplete release PR state");
-  const pulls = repository.pullRequests.nodes.filter(
-    (pr) => !pr.isCrossRepository,
-  );
-  const pr = pulls[0];
-  if (!pr) return { status: "mutable", pullRequest: null };
-  if (
+    !pr ||
     !Number.isSafeInteger(pr.number) ||
+    pr.number <= 0 ||
     !/^[0-9a-f]{40}$/.test(pr.headRefOid) ||
+    typeof pr.isCrossRepository !== "boolean" ||
+    !["OPEN", "CLOSED", "MERGED"].includes(pr.state) ||
+    typeof pr.baseRefName !== "string" ||
+    typeof pr.headRefName !== "string" ||
     !Object.hasOwn(pr, "autoMergeRequest") ||
     !Object.hasOwn(pr, "mergeQueueEntry") ||
     !Array.isArray(pr.timelineItems?.nodes)
   ) {
     throw new Error("GitHub returned incomplete release PR state");
+  }
+  if (
+    pr.state !== "OPEN" ||
+    pr.baseRefName !== base ||
+    pr.headRefName !== `changeset-release/${base}` ||
+    pr.isCrossRepository
+  ) {
+    return { status: "stale" };
   }
   if (pr.autoMergeRequest !== null || pr.mergeQueueEntry !== null) {
     return { status: "frozen", pullRequest: pr };
@@ -160,6 +159,33 @@ export const createRuntime = ({
   };
 
   const inspect = async () => {
+    // REST's owner-qualified head filter excludes fork PRs before the bound
+    // is applied. GraphQL headRefName alone also matches unrelated forks.
+    const pulls = await gh(
+      [
+        "--method",
+        "GET",
+        `repos/${repository}/pulls`,
+        "-f",
+        `head=${owner}:${head}`,
+        "-f",
+        `base=${base}`,
+        "-f",
+        "state=open",
+        "-f",
+        "per_page=2",
+      ],
+      { read: true },
+    );
+    if (
+      !Array.isArray(pulls) ||
+      pulls.some((pr) => !Number.isSafeInteger(pr?.number) || pr.number <= 0)
+    ) {
+      throw new Error("GitHub returned incomplete release PR lookup");
+    }
+    if (pulls.length > 1)
+      throw new Error("Multiple open release PRs share the release branch");
+    const pullNumber = pulls[0]?.number;
     const response = await gh(
       [
         "graphql",
@@ -170,9 +196,11 @@ export const createRuntime = ({
         "-f",
         `name=${name}`,
         "-f",
-        `base=${base}`,
-        "-f",
-        `head=${head}`,
+        `base=refs/heads/${base}`,
+        "-F",
+        `number=${pullNumber ?? 0}`,
+        "-F",
+        `hasPullRequest=${pullNumber !== undefined}`,
       ],
       { read: true },
     );
@@ -180,7 +208,11 @@ export const createRuntime = ({
       throw new Error("GitHub could not resolve release state");
     return classifyRelease({
       sourceSha,
-      repository: response.data?.repository,
+      base,
+      repository:
+        pullNumber === undefined
+          ? { ...response.data?.repository, pullRequest: null }
+          : response.data?.repository,
     });
   };
 
@@ -191,7 +223,7 @@ export const createRuntime = ({
         return true;
       case "stale":
         report(
-          "::notice::Deferring release maintenance because the source revision is stale.",
+          "::notice::Deferring release maintenance because the source or PR snapshot changed.",
         );
         return false;
       case "frozen":
