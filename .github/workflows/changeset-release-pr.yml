@@ -23,6 +23,13 @@ on:
         required: false
         type: string
         default: "chore: version packages"
+      auto-merge-command:
+        description: >-
+          Optional repository-owned merge gate. RELEASE_PR_NUMBER identifies the
+          current release PR. Must enforce required checks and pin the PR head.
+        required: false
+        type: string
+        default: ''
       sync-cargo-inherited-lock:
         description: >-
           Validate and synchronize Cargo.lock entries for workspace packages
@@ -57,6 +64,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
+  checks: read
 
 jobs:
   version:
@@ -71,22 +80,35 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Inspect release lifecycle
+        id: lifecycle
+        uses: stella/.github/.github/actions/changeset-release-lifecycle@72148bfe3ef523a532a60c0c251864570869a8b3
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - if: steps.lifecycle.outputs.status == 'mutable'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: ${{ inputs.bun-version-file }}
 
-      - run: bun install --frozen-lockfile
+      - if: steps.lifecycle.outputs.status == 'mutable'
+        run: bun install --frozen-lockfile
 
-      - if: inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm
+      - if: steps.lifecycle.outputs.status == 'mutable' && (inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       # rust-toolchain only prepends the toolchain when it installs one. Keep
       # Cargo available when the runner already has the requested toolchain.
-      - if: inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm
+      - if: steps.lifecycle.outputs.status == 'mutable' && (inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm)
         name: Add Cargo to PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - if: inputs.prepare-rust-wasm
+      - if: steps.lifecycle.outputs.status == 'mutable' && inputs.prepare-rust-wasm
         name: Prepare locked Rust Wasm toolchain
         shell: bash
         env:
@@ -109,7 +131,7 @@ jobs:
           fi
           cargo install wasm-bindgen-cli --version "${versions[0]}" --locked
 
-      - if: inputs.sync-cargo-inherited-lock
+      - if: steps.lifecycle.outputs.status == 'mutable' && inputs.sync-cargo-inherited-lock
         name: Validate inherited Cargo lock versions
         id: cargo-sync
         uses: stella/.github/.github/actions/sync-cargo-workspace-lock@7c43baa7e76584907c5b6e2876e1e9962a48518e
@@ -118,7 +140,8 @@ jobs:
           manifest: ${{ inputs.cargo-manifest }}
           lockfile: ${{ inputs.cargo-lockfile }}
 
-      - name: Prepare version command
+      - if: steps.lifecycle.outputs.status == 'mutable'
+        name: Prepare version command
         id: version-command
         shell: bash
         run: |
@@ -143,28 +166,8 @@ jobs:
           chmod 0700 "$version_command"
           printf 'path=%s\n' "$version_command" >> "$GITHUB_OUTPUT"
 
-      - name: Check release source is current
-        id: source
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          current_sha="$(
-            gh api \
-              "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" \
-              --jq '.object.sha'
-          )"
-          if [[ "$current_sha" == "$GITHUB_SHA" ]]; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "current=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::Skipping version PR update because $GITHUB_SHA is no longer the head of $GITHUB_REF_NAME."
-
       # Install hooks run before a write-capable credential exists in the job.
-      - if: steps.source.outputs.current == 'true'
+      - if: steps.lifecycle.outputs.status == 'mutable'
         name: Mint version PR token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -176,68 +179,61 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - if: steps.source.outputs.current == 'true'
+      # Run the pinned upstream entrypoint under a wrapper so only GitHub's
+      # queue-lock rejection becomes a deferral. Other failures stay red.
+      - if: steps.lifecycle.outputs.status == 'mutable'
+        name: Fetch Changesets action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: changesets/action
+          ref: 8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+          path: .changesets-action
+          persist-credentials: false
+
+      - if: steps.lifecycle.outputs.status == 'mutable'
+        name: Isolate Changesets action from release contents
+        id: changesets-runtime
+        run: |
+          action_path="$RUNNER_TEMP/changesets-action-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mv .changesets-action "$action_path"
+          printf 'entrypoint=%s\n' "$action_path/dist/index.js" >> "$GITHUB_OUTPUT"
+
+      - if: steps.lifecycle.outputs.status == 'mutable'
         name: Create or update version packages PR
         id: changesets
-        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          version-script: bash ${{ steps.version-command.outputs.path }}
-          pr-title: ${{ inputs.title }}
-          commit-message: ${{ inputs.commit }}
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          LIFECYCLE_SCRIPT: ${{ steps.lifecycle.outputs.script }}
+          CHANGESETS_ENTRYPOINT: ${{ steps.changesets-runtime.outputs.entrypoint }}
+          INPUT_GITHUB-TOKEN: ${{ steps.app-token.outputs.token }}
+          INPUT_VERSION-SCRIPT: bash ${{ steps.version-command.outputs.path }}
+          INPUT_PR-TITLE: ${{ inputs.title }}
+          INPUT_COMMIT-MESSAGE: ${{ inputs.commit }}
+          INPUT_CREATE-GITHUB-RELEASES: 'true'
+          INPUT_PUSH-GIT-TAGS: 'true'
+          INPUT_PUSH-WITH-GIT-CLI: 'false'
           CARGO_LOCKFILE_PATH: ${{ inputs.cargo-lockfile }}
           CARGO_MANIFEST_PATH: ${{ inputs.cargo-manifest }}
           CARGO_SYNC_SCRIPT: ${{ steps.cargo-sync.outputs.script }}
           SYNC_CARGO_INHERITED_LOCK: ${{ inputs.sync-cargo-inherited-lock }}
+        run: node "$LIFECYCLE_SCRIPT" version
 
       - if: >-
-          steps.source.outputs.current == 'true' &&
+          steps.changesets.outputs.status == 'mutable' &&
           steps.changesets.outputs.pr-number == ''
         name: Remove stale version packages PR
-        shell: bash
         env:
-          BASE_BRANCH: ${{ github.ref_name }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASE_BRANCH: changeset-release/${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          current_sha="$(
-            gh api \
-              "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE_BRANCH" \
-              --jq '.object.sha'
-          )"
-          if [[ "$current_sha" != "$GITHUB_SHA" ]]; then
-            echo "::notice::Skipping stale version PR cleanup because $GITHUB_SHA is no longer the head of $BASE_BRANCH."
-            exit 0
-          fi
+          LIFECYCLE_SCRIPT: ${{ steps.lifecycle.outputs.script }}
+        run: node "$LIFECYCLE_SCRIPT" cleanup
 
-          owner="${GITHUB_REPOSITORY%%/*}"
-          pr_number="$(
-            gh api \
-              --method GET \
-              "repos/$GITHUB_REPOSITORY/pulls" \
-              -f base="$BASE_BRANCH" \
-              -f head="$owner:$RELEASE_BRANCH" \
-              -f per_page=1 \
-              -f state=open \
-              --jq '.[0].number // empty'
-          )"
-          if [[ -n "$pr_number" ]]; then
-            gh api \
-              --method PATCH \
-              "repos/$GITHUB_REPOSITORY/pulls/$pr_number" \
-              -f state=closed \
-              --silent
-            echo "::notice::Closed stale version PR #$pr_number."
-          fi
-
-          if gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/$RELEASE_BRANCH" \
-            --silent >/dev/null 2>&1; then
-            gh api \
-              --method DELETE \
-              "repos/$GITHUB_REPOSITORY/git/refs/heads/$RELEASE_BRANCH" \
-              --silent
-            echo "::notice::Deleted stale branch $RELEASE_BRANCH."
-          fi
+      - if: >-
+          steps.changesets.outputs.status == 'mutable' &&
+          steps.changesets.outputs.pr-number != '' && inputs.auto-merge-command != ''
+        name: Hand release PR to the repository merge gate
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_READ_TOKEN: ${{ github.token }}
+          LIFECYCLE_SCRIPT: ${{ steps.lifecycle.outputs.script }}
+          RELEASE_MERGE_COMMAND: ${{ inputs.auto-merge-command }}
+        run: node "$LIFECYCLE_SCRIPT" merge

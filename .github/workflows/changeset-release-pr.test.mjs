@@ -30,20 +30,23 @@ test("Rust Wasm preparation is explicit and disabled by default", () => {
   assert.match(input, /default: false/);
   assert.equal(
     workflow.match(
-      /if: inputs\.sync-cargo-inherited-lock \|\| inputs\.prepare-rust-wasm/g,
+      /if: steps\.lifecycle\.outputs\.status == 'mutable' && \(inputs\.sync-cargo-inherited-lock \|\| inputs\.prepare-rust-wasm\)/g,
     )?.length,
     2,
   );
   assert.match(
     workflow,
-    /if: inputs\.prepare-rust-wasm\n {8}name: Prepare locked Rust Wasm toolchain/,
+    /if: steps\.lifecycle\.outputs\.status == 'mutable' && inputs\.prepare-rust-wasm\n {8}name: Prepare locked Rust Wasm toolchain/,
   );
 });
 
 test("Rust Wasm preparation uses the caller's locked dependency graph", () => {
   assert.match(workflow, /rustup target add wasm32-unknown-unknown/);
   assert.match(workflow, /cargo metadata \\\n {14}--locked/);
-  assert.match(workflow, /CARGO_MANIFEST_PATH: \$\{\{ inputs\.cargo-manifest \}\}/);
+  assert.match(
+    workflow,
+    /CARGO_MANIFEST_PATH: \$\{\{ inputs\.cargo-manifest \}\}/,
+  );
   assert.match(workflow, /--manifest-path "\$CARGO_MANIFEST_PATH"/);
   assert.match(workflow, /select\(\.name == "wasm-bindgen"\)/);
   assert.match(
@@ -63,38 +66,35 @@ test("GitHub App tokens use the supported client-id input", () => {
     workflow,
     /uses: actions\/create-github-app-token@[0-9a-f]{40} # v3\.2\.0/,
   );
-  assert.match(
-    workflow,
-    /client-id: \$\{\{ secrets\.CHANGELOG_APP_ID \}\}/,
-  );
+  assert.match(workflow, /client-id: \$\{\{ secrets\.CHANGELOG_APP_ID \}\}/);
   assert.doesNotMatch(workflow, /^\s+app-id:/m);
 });
 
 test("changesets/action uses the v2 interface", () => {
   const changesets = workflow.match(
-    / {6}- if: steps\.source\.outputs\.current == 'true'\n {8}name: Create or update version packages PR[\s\S]+?(?=\n {6}- |\n\S|$)/,
+    / {6}- if: steps\.lifecycle\.outputs\.status == 'mutable'\n {8}name: Create or update version packages PR[\s\S]+?(?=\n {6}- |\n\S|$)/,
   )?.[0];
 
   assert.ok(changesets, "missing changesets/action step");
   assert.match(
-    changesets,
-    /uses: changesets\/action@[0-9a-f]{40} # v2\.\d+\.\d+$/m,
+    workflow,
+    /repository: changesets\/action\n {10}ref: [0-9a-f]{40} # v2\.\d+\.\d+$/m,
   );
   assert.match(
     changesets,
-    /github-token: \$\{\{ steps\.app-token\.outputs\.token \}\}/,
+    /INPUT_GITHUB-TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}/,
   );
   assert.match(
     changesets,
-    /version-script: bash \$\{\{ steps\.version-command\.outputs\.path \}\}/,
+    /INPUT_VERSION-SCRIPT: bash \$\{\{ steps\.version-command\.outputs\.path \}\}/,
   );
-  assert.match(changesets, /pr-title: \$\{\{ inputs\.title \}\}/);
-  assert.match(changesets, /commit-message: \$\{\{ inputs\.commit \}\}/);
+  assert.match(changesets, /INPUT_PR-TITLE: \$\{\{ inputs\.title \}\}/);
+  assert.match(changesets, /INPUT_COMMIT-MESSAGE: \$\{\{ inputs\.commit \}\}/);
   assert.doesNotMatch(changesets, /GITHUB_TOKEN:/);
 });
 
 test("stale source revisions cannot mint credentials or mutate release PRs", () => {
-  const freshness = indexOf("name: Check release source is current");
+  const freshness = indexOf("name: Inspect release lifecycle");
   const token = indexOf("name: Mint version PR token");
   const release = indexOf("name: Create or update version packages PR");
 
@@ -103,31 +103,41 @@ test("stale source revisions cannot mint credentials or mutate release PRs", () 
   assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(
     workflow,
-    /git\/ref\/heads\/\$GITHUB_REF_NAME[\s\S]+?if \[\[ "\$current_sha" == "\$GITHUB_SHA" \]\]/,
+    /if: steps\.lifecycle\.outputs\.status == 'mutable'\n {8}name: Mint version PR token/,
   );
   assert.match(
     workflow,
-    /if: steps\.source\.outputs\.current == 'true'\n {8}name: Mint version PR token/,
-  );
-  assert.match(
-    workflow,
-    /if: steps\.source\.outputs\.current == 'true'\n {8}name: Create or update version packages PR/,
+    /if: steps\.lifecycle\.outputs\.status == 'mutable'\n {8}name: Create or update version packages PR/,
   );
 });
 
-test("a current no-op run removes the stale release PR and branch", () => {
+test("only a completed mutable version run may clean up or hand off", () => {
   const cleanup = workflow.match(
-    / {6}- if: >-\n {10}steps\.source\.outputs\.current == 'true'[\s\S]+?(?=\n {6}- |\n\S|$)/,
+    / {6}- if: >-[\s\S]+?name: Remove stale version packages PR[\s\S]+?(?=\n {6}- |$)/,
   )?.[0];
-
-  assert.ok(cleanup, "missing stale release cleanup step");
+  assert.ok(cleanup);
+  assert.match(cleanup, /steps\.changesets\.outputs\.status == 'mutable'/);
   assert.match(cleanup, /steps\.changesets\.outputs\.pr-number == ''/);
-  assert.match(cleanup, /name: Remove stale version packages PR/);
-  assert.match(cleanup, /current_sha="\$\(\n {12}gh api/);
-  assert.match(cleanup, /if \[\[ "\$current_sha" != "\$GITHUB_SHA" \]\]/);
-  assert.match(cleanup, /-f base="\$BASE_BRANCH"/);
-  assert.match(cleanup, /-f head="\$owner:\$RELEASE_BRANCH"/);
-  assert.match(cleanup, /-f per_page=1/);
-  assert.match(cleanup, /-f state=closed/);
-  assert.match(cleanup, /git\/refs\/heads\/\$RELEASE_BRANCH/);
+  assert.match(cleanup, /node "\$LIFECYCLE_SCRIPT" cleanup/);
+  assert.match(
+    workflow,
+    /steps\.changesets\.outputs\.pr-number != '' && inputs\.auto-merge-command != ''/,
+  );
+  assert.match(workflow, /node "\$LIFECYCLE_SCRIPT" merge/);
+  assert.doesNotMatch(workflow, /continue-on-error|--admin/);
+});
+
+test("release freeze is checked before installation and again at every mutation", () => {
+  assert.ok(
+    indexOf("name: Inspect release lifecycle") < indexOf("run: bun install"),
+  );
+  assert.match(
+    workflow,
+    /uses: stella\/\.github\/\.github\/actions\/changeset-release-lifecycle@[0-9a-f]{40}/,
+  );
+  assert.match(workflow, /run: node "\$LIFECYCLE_SCRIPT" version/);
+  assert.ok(
+    indexOf('mv .changesets-action "$action_path"') <
+      indexOf("name: Create or update version packages PR"),
+  );
 });
