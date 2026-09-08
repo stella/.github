@@ -1,0 +1,17 @@
+name: Inspect changeset release lifecycle
+description: Preserve armed release batches and expose the pinned lifecycle runner.
+outputs:
+  status:
+    description: mutable, frozen, or stale; dequeued releases fail for attention.
+    value: ${{ steps.inspect.outputs.status }}
+  script:
+    description: Absolute path to the lifecycle runner for subsequent guarded mutations.
+    value: ${{ steps.inspect.outputs.script }}
+runs:
+  using: composite
+  steps:
+    - id: inspect
+      shell: bash
+      run: |
+        node "$GITHUB_ACTION_PATH/lifecycle.mjs" inspect
+        printf 'script=%s\n' "$GITHUB_ACTION_PATH/lifecycle.mjs" >> "$GITHUB_OUTPUT"
