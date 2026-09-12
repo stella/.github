@@ -178,7 +178,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: ${{ inputs.install-command }}
-      - uses: stella/.github/actions/provenance-check@7c43baa7e76584907c5b6e2876e1e9962a48518e
+      - uses: stella/.github/actions/provenance-check@fb1e83fbc3fae39902da763ca7b2613090571717
         with:
           provenance-version: ${{ inputs.provenance-version }}
 
