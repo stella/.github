@@ -87,7 +87,7 @@ jobs:
 
       - name: Inspect release lifecycle
         id: lifecycle
-        uses: stella/.github/.github/actions/changeset-release-lifecycle@b1a898515fa70ac1942ec41361111c0e4ca9037d
+        uses: stella/.github/.github/actions/changeset-release-lifecycle@eac0f2e312c082c0e4366ad10d3b21d3173e4727
         env:
           GH_TOKEN: ${{ github.token }}
 
