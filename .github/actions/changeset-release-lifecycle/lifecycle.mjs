@@ -231,10 +231,17 @@ export const createRuntime = ({
           `::notice::Release PR #${state.pullRequest.number} is armed or queued; preserving this batch.`,
         );
         return false;
-      case "blocked":
-        throw new Error(
-          `Release PR #${state.pullRequest.number} was dequeued or auto-merge was disabled. Resolve the failure and re-arm it, or close it to replace the batch.`,
-        );
+      case "blocked": {
+        const message = `Release PR #${state.pullRequest.number} was dequeued or auto-merge was disabled. Resolve the failure and re-arm it, or close it to replace the batch.`;
+        // A push run is attributed to the commit that triggered it, so failing
+        // there reads as that commit's own failure. The scheduled run carries
+        // the attention signal; a push run only annotates.
+        if (env.GITHUB_EVENT_NAME === "push") {
+          report(`::warning::${message}`);
+          return false;
+        }
+        throw new Error(message);
+      }
       default:
         throw new Error(`Unknown release state: ${state.status}`);
     }

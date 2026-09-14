@@ -529,3 +529,43 @@ test("a successful merge handoff receives the exact release PR number", async ()
   );
   assert.deepEqual(harness.sleeps, []);
 });
+
+test("a dequeued release PR annotates a push run and fails every other event", async () => {
+  const blocked = repository({
+    pullRequest: releasePullRequest({
+      timelineItems: { nodes: [{ __typename: "AUTO_MERGE_DISABLED_EVENT" }] },
+    }),
+  });
+
+  const push = makeHarness({
+    states: [blocked],
+    env: { ...environment, GITHUB_EVENT_NAME: "push" },
+  });
+  assert.equal(await push.runtime.inspect(), false);
+  for (const operation of ["version", "cleanup", "merge"]) {
+    await push.runtime[operation]();
+  }
+  assert.deepEqual(mutationCalls(push.calls), []);
+  assert.ok(push.reports.length > 0);
+  assert.ok(
+    push.reports.every((line) =>
+      line.startsWith("::warning::Release PR #42 was dequeued"),
+    ),
+  );
+  assert.deepEqual(
+    push.outputs.map(({ value }) => value),
+    ["blocked", "blocked", "blocked", "blocked"],
+  );
+
+  for (const event of ["schedule", "workflow_dispatch"]) {
+    const harness = makeHarness({
+      states: [blocked],
+      env: { ...environment, GITHUB_EVENT_NAME: event },
+    });
+    await assert.rejects(
+      harness.runtime.inspect(),
+      /was dequeued or auto-merge was disabled/,
+    );
+    assert.deepEqual(harness.reports, []);
+  }
+});
