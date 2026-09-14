@@ -18,13 +18,11 @@ jobs:
     concurrency:
       group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: false
+    # The main ruleset requires the `cla / cla` context on every pull request.
+    # A skipped caller job never reports it, so bot pull requests run the
+    # reusable workflow too; its allowlist waives the signature for them.
     if: |
-      (
-        github.event_name == 'pull_request_target' &&
-        github.event.pull_request.user.login != 'dependabot[bot]' &&
-        github.event.pull_request.user.login != 'renovate[bot]' &&
-        github.event.pull_request.user.login != 'github-actions[bot]'
-      ) || (
+      github.event_name == 'pull_request_target' || (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
         (
