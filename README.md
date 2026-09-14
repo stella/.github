@@ -285,8 +285,10 @@ to the release App.
 Read requests retry transient HTTP failures twice; writes are never blindly retried.
 The exact GitHub queue-lock rejection during versioning is a successful deferral;
 other failures propagate. A dequeued PR or one whose auto-merge was disabled requires
-attention, preventing scheduled runs from repeatedly requeueing a failed batch.
-Resolve the failure and re-arm that PR, or close it to create a replacement batch.
+attention, preventing scheduled runs from repeatedly requeueing a failed batch:
+scheduled and dispatched runs fail, while push runs only annotate, so the commit
+that triggered them is not painted red for an unrelated batch. Resolve the failure
+and re-arm that PR, or close it to create a replacement batch.
 
 For hybrid repositories, `changeset:version` must synchronize the selected package
 version into every npm, Cargo manifest, Python, and central `VERSION` surface. With
