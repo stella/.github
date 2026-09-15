@@ -30,13 +30,13 @@ test("Rust Wasm preparation is explicit and disabled by default", () => {
   assert.match(input, /default: false/);
   assert.equal(
     workflow.match(
-      /if: steps\.lifecycle\.outputs\.status == 'mutable' && \(inputs\.sync-cargo-inherited-lock \|\| inputs\.prepare-rust-wasm\)/g,
+      /if: steps\.lifecycle\.outputs\.may-update == 'true' && \(inputs\.sync-cargo-inherited-lock \|\| inputs\.prepare-rust-wasm\)/g,
     )?.length,
     2,
   );
   assert.match(
     workflow,
-    /if: steps\.lifecycle\.outputs\.status == 'mutable' && inputs\.prepare-rust-wasm\n {8}name: Prepare locked Rust Wasm toolchain/,
+    /if: steps\.lifecycle\.outputs\.may-update == 'true' && inputs\.prepare-rust-wasm\n {8}name: Prepare locked Rust Wasm toolchain/,
   );
 });
 
@@ -72,7 +72,7 @@ test("GitHub App tokens use the supported client-id input", () => {
 
 test("changesets/action uses the v2 interface", () => {
   const changesets = workflow.match(
-    / {6}- if: steps\.lifecycle\.outputs\.status == 'mutable'\n {8}name: Create or update version packages PR[\s\S]+?(?=\n {6}- |\n\S|$)/,
+    / {6}- if: steps\.lifecycle\.outputs\.may-update == 'true'\n {8}name: Create or update version packages PR[\s\S]+?(?=\n {6}- |\n\S|$)/,
   )?.[0];
 
   assert.ok(changesets, "missing changesets/action step");
@@ -103,20 +103,20 @@ test("stale source revisions cannot mint credentials or mutate release PRs", () 
   assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(
     workflow,
-    /if: steps\.lifecycle\.outputs\.status == 'mutable'\n {8}name: Mint version PR token/,
+    /if: steps\.lifecycle\.outputs\.may-update == 'true'\n {8}name: Mint version PR token/,
   );
   assert.match(
     workflow,
-    /if: steps\.lifecycle\.outputs\.status == 'mutable'\n {8}name: Create or update version packages PR/,
+    /if: steps\.lifecycle\.outputs\.may-update == 'true'\n {8}name: Create or update version packages PR/,
   );
 });
 
-test("only a completed mutable version run may clean up or hand off", () => {
+test("only a completed updatable version run may clean up or hand off", () => {
   const cleanup = workflow.match(
     / {6}- if: >-[\s\S]+?name: Remove stale version packages PR[\s\S]+?(?=\n {6}- |$)/,
   )?.[0];
   assert.ok(cleanup);
-  assert.match(cleanup, /steps\.changesets\.outputs\.status == 'mutable'/);
+  assert.match(cleanup, /steps\.changesets\.outputs\.may-update == 'true'/);
   assert.match(cleanup, /steps\.changesets\.outputs\.pr-number == ''/);
   assert.match(cleanup, /node "\$LIFECYCLE_SCRIPT" cleanup/);
   assert.match(

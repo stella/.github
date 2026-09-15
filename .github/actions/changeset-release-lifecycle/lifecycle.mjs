@@ -6,6 +6,12 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const READ_RETRY_DELAYS_MS = [1000, 3000];
 const QUEUE_REJECTION =
   "A pull request for this branch has been added to a merge queue. Branches that are queued for merging cannot be updated. To modify this branch, dequeue the associated pull request.";
+const DEQUEUE_EVENT = "RemovedFromMergeQueueEvent";
+const AUTO_MERGE_DISABLED_EVENT = "AutoMergeDisabledEvent";
+const MANUAL_DEQUEUE_REASON = "manual";
+const BOT_ACTOR = "Bot";
+const ARMING_RETRY = "retry";
+const ARMING_HOLD = "hold";
 
 const query = `query($owner:String!, $name:String!, $base:String!, $number:Int!, $hasPullRequest:Boolean!) {
   repository(owner:$owner, name:$name) {
@@ -14,12 +20,52 @@ const query = `query($owner:String!, $name:String!, $base:String!, $number:Int!,
       number state baseRefName headRefName headRefOid isCrossRepository
       autoMergeRequest { enabledAt }
       mergeQueueEntry { id }
+      commits(last:1) { nodes { commit { committedDate } } }
       timelineItems(last:1, itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT, AUTO_MERGE_DISABLED_EVENT]) {
-        nodes { __typename }
+        nodes {
+          __typename
+          ... on RemovedFromMergeQueueEvent { createdAt reason }
+          ... on AutoMergeDisabledEvent { createdAt disabler { __typename login } }
+        }
       }
     }
   }
 }`;
+
+const timestamp = (value) =>
+  typeof value === "string" && Number.isFinite(Date.parse(value))
+    ? Date.parse(value)
+    : null;
+
+const describeUnarming = (event) => {
+  if (event.__typename === DEQUEUE_EVENT) {
+    return {
+      // A maintainer's own dequeue is a decision; every other reason
+      // (failed_checks, merge_conflict) is the queue reporting a result.
+      human: event.reason === MANUAL_DEQUEUE_REASON,
+      cause: `removed from the merge queue (${event.reason}) at ${event.createdAt}`,
+    };
+  }
+  // A null disabler (deleted account) cannot be attributed to automation, so
+  // it holds rather than re-arming on its own.
+  const login = event.disabler?.login;
+  return {
+    human: event.disabler?.__typename !== BOT_ACTOR,
+    cause: login ? `auto-merge disabled by ${login}` : "auto-merge disabled",
+  };
+};
+
+const validateUnarmingEvent = (event) => {
+  if (timestamp(event?.createdAt) === null) return false;
+  if (event.__typename === DEQUEUE_EVENT)
+    return typeof event.reason === "string";
+  if (event.__typename !== AUTO_MERGE_DISABLED_EVENT) return false;
+  if (event.disabler === null) return true;
+  return (
+    typeof event.disabler?.__typename === "string" &&
+    typeof event.disabler?.login === "string"
+  );
+};
 
 const classifyRelease = ({ sourceSha, base, repository }) => {
   if (
@@ -42,7 +88,10 @@ const classifyRelease = ({ sourceSha, base, repository }) => {
     typeof pr.headRefName !== "string" ||
     !Object.hasOwn(pr, "autoMergeRequest") ||
     !Object.hasOwn(pr, "mergeQueueEntry") ||
-    !Array.isArray(pr.timelineItems?.nodes)
+    !Array.isArray(pr.timelineItems?.nodes) ||
+    !pr.timelineItems.nodes.every(validateUnarmingEvent) ||
+    !Array.isArray(pr.commits?.nodes) ||
+    timestamp(pr.commits.nodes.at(0)?.commit?.committedDate) === null
   ) {
     throw new Error("GitHub returned incomplete release PR state");
   }
@@ -57,11 +106,21 @@ const classifyRelease = ({ sourceSha, base, repository }) => {
   if (pr.autoMergeRequest !== null || pr.mergeQueueEntry !== null) {
     return { status: "frozen", pullRequest: pr };
   }
-  // An explicit dequeue/disable must survive scheduled reconciliation. A
-  // maintainer can re-arm this PR or close it to start a replacement batch.
-  if (pr.timelineItems.nodes.length > 0)
-    return { status: "blocked", pullRequest: pr };
-  return { status: "mutable", pullRequest: pr };
+  const event = pr.timelineItems.nodes.at(0);
+  if (!event) return { status: "mutable", pullRequest: pr };
+  // Nothing is queued, so the batch contents stay updatable. Only re-arming
+  // needs care: a maintainer's decision holds until they act, while an
+  // automatic removal is retried once the batch has been rewritten since.
+  const { human, cause } = describeUnarming(event);
+  const rewritten =
+    timestamp(pr.commits.nodes.at(0).commit.committedDate) >
+    timestamp(event.createdAt);
+  return {
+    status: "unarmed",
+    pullRequest: pr,
+    arming: !human && rewritten ? ARMING_RETRY : ARMING_HOLD,
+    cause,
+  };
 };
 
 export const isQueueRejection = (result) => {
@@ -216,48 +275,89 @@ export const createRuntime = ({
     });
   };
 
-  const mayMutate = (state) => {
+  const publish = (state) => {
     setOutput("status", state.status);
-    switch (state.status) {
-      case "mutable":
-        return true;
-      case "stale":
-        report(
-          "::notice::Deferring release maintenance because the source or PR snapshot changed.",
-        );
-        return false;
-      case "frozen":
-        report(
-          `::notice::Release PR #${state.pullRequest.number} is armed or queued; preserving this batch.`,
-        );
-        return false;
-      case "blocked": {
-        const message = `Release PR #${state.pullRequest.number} was dequeued or auto-merge was disabled. Resolve the failure and re-arm it, or close it to replace the batch.`;
-        // A push run is attributed to the commit that triggered it, so failing
-        // there reads as that commit's own failure. The scheduled run carries
-        // the attention signal; a push run only annotates.
-        if (env.GITHUB_EVENT_NAME === "push") {
-          report(`::warning::${message}`);
-          return false;
-        }
-        throw new Error(message);
-      }
-      default:
-        throw new Error(`Unknown release state: ${state.status}`);
+    setOutput(
+      "may-update",
+      state.status === "mutable" || state.status === "unarmed"
+        ? "true"
+        : "false",
+    );
+  };
+
+  const defer = (state) => {
+    if (state.status === "stale") {
+      report(
+        "::notice::Deferring release maintenance because the source or PR snapshot changed.",
+      );
+      return false;
     }
+    if (state.status === "frozen") {
+      report(
+        `::notice::Release PR #${state.pullRequest.number} is armed or queued; preserving this batch.`,
+      );
+      return false;
+    }
+    throw new Error(`Unknown release state: ${state.status}`);
+  };
+
+  // Rewriting the batch is safe whenever nothing is queued, so an unarmed PR
+  // still takes new changesets.
+  const mayUpdate = (state) => {
+    publish(state);
+    if (state.status === "mutable" || state.status === "unarmed") return true;
+    return defer(state);
+  };
+
+  // Arming is the decision that must not be taken back from a maintainer.
+  const mayArm = (state) => {
+    publish(state);
+    if (state.status === "mutable") return true;
+    if (state.status !== "unarmed") return defer(state);
+    if (state.arming === ARMING_RETRY) return true;
+    report(
+      `::notice::Release PR #${state.pullRequest.number} is not armed (${state.cause}); leaving this batch for a maintainer.`,
+    );
+    return false;
+  };
+
+  const announce = (state) => {
+    if (state.status !== "unarmed") return;
+    if (state.arming === ARMING_RETRY) {
+      report(
+        `::notice::Release PR #${state.pullRequest.number} was rewritten after ${state.cause}; re-arming it.`,
+      );
+      return;
+    }
+    const message = `Release PR #${state.pullRequest.number} is current but not armed (${state.cause}). Re-arm it to merge, or close it to start a replacement batch.`;
+    // A push run is attributed to the commit that triggered it, so failing
+    // there reads as that commit's own failure; it only annotates, and its
+    // version step still folds the new changeset into the batch. Other events
+    // fail for attention, and only on a hold: inspection runs before
+    // versioning, so a retry is a run that re-arms itself at the merge step.
+    if (env.GITHUB_EVENT_NAME === "push") {
+      report(`::warning::${message}`);
+      return;
+    }
+    throw new Error(message);
   };
 
   return {
-    inspect: async () => mayMutate(await inspect()),
+    inspect: async () => {
+      const state = await inspect();
+      const updatable = mayUpdate(state);
+      announce(state);
+      return updatable;
+    },
     version: async () => {
-      if (!mayMutate(await inspect())) return;
+      if (!mayUpdate(await inspect())) return;
       if (!env.CHANGESETS_ENTRYPOINT)
         throw new Error("CHANGESETS_ENTRYPOINT is required");
       const result = execute(process.execPath, [env.CHANGESETS_ENTRYPOINT], {
         env,
       });
       if (isQueueRejection(result)) {
-        setOutput("status", "frozen");
+        publish({ status: "frozen" });
         report(
           "::notice::Release PR entered the merge queue during versioning; deferring this update.",
         );
@@ -272,7 +372,7 @@ export const createRuntime = ({
     },
     cleanup: async () => {
       const state = await inspect();
-      if (!mayMutate(state)) return;
+      if (!mayUpdate(state)) return;
       if (state.pullRequest) {
         await gh([
           "--method",
@@ -293,7 +393,7 @@ export const createRuntime = ({
       // Re-read after closing the PR: a later run or an external actor may
       // have created/armed its replacement before branch deletion.
       const latest = await inspect();
-      if (!mayMutate(latest) || latest.pullRequest) return;
+      if (!mayUpdate(latest) || latest.pullRequest) return;
       await gh([
         "--method",
         "DELETE",
@@ -303,7 +403,7 @@ export const createRuntime = ({
     },
     merge: async () => {
       const state = await inspect();
-      if (!mayMutate(state) || !state.pullRequest) return;
+      if (!mayArm(state) || !state.pullRequest) return;
       if (!env.RELEASE_MERGE_COMMAND)
         throw new Error("RELEASE_MERGE_COMMAND is required");
       const result = execute(
