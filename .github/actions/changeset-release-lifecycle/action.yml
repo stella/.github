@@ -3,9 +3,16 @@ description: Preserve armed release batches and expose the pinned lifecycle runn
 outputs:
   status:
     description: >-
-      mutable, frozen, stale, or blocked. A dequeued release fails scheduled
-      and dispatched runs for attention and only annotates push runs.
+      mutable, frozen, stale, or unarmed. An unarmed batch still takes content
+      updates; it is re-armed only after an automatic dequeue rewrote it, and a
+      maintainer's own dequeue fails scheduled and dispatched runs for attention
+      while push runs only annotate.
     value: ${{ steps.inspect.outputs.status }}
+  may-update:
+    description: >-
+      'true' when versioning and cleanup may run, meaning nothing is queued and
+      the snapshot is current.
+    value: ${{ steps.inspect.outputs.may-update }}
   script:
     description: Absolute path to the lifecycle runner for subsequent guarded mutations.
     value: ${{ steps.inspect.outputs.script }}

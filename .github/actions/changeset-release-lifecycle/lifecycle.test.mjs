@@ -6,6 +6,9 @@ import { createRuntime, isQueueRejection } from "./lifecycle.mjs";
 const SOURCE_SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
 const HEAD_SHA = "c".repeat(40);
+const UNARMED_AT = "2026-09-14T10:00:00Z";
+const BEFORE_UNARMING = "2026-09-14T09:00:00Z";
+const AFTER_UNARMING = "2026-09-14T11:00:00Z";
 const QUEUE_REJECTION =
   "A pull request for this branch has been added to a merge queue. " +
   "Branches that are queued for merging cannot be updated. To modify this " +
@@ -29,9 +32,30 @@ const releasePullRequest = (overrides = {}) => ({
   isCrossRepository: false,
   autoMergeRequest: null,
   mergeQueueEntry: null,
+  commits: { nodes: [{ commit: { committedDate: BEFORE_UNARMING } }] },
   timelineItems: { nodes: [] },
   ...overrides,
 });
+
+const dequeued = (reason) => ({
+  __typename: "RemovedFromMergeQueueEvent",
+  createdAt: UNARMED_AT,
+  reason,
+});
+
+const autoMergeDisabled = (disabler) => ({
+  __typename: "AutoMergeDisabledEvent",
+  createdAt: UNARMED_AT,
+  disabler,
+});
+
+const unarmedRepository = (event, committedDate = BEFORE_UNARMING) =>
+  repository({
+    pullRequest: releasePullRequest({
+      commits: { nodes: [{ commit: { committedDate } }] },
+      timelineItems: { nodes: [event] },
+    }),
+  });
 
 const repository = ({
   baseSha = SOURCE_SHA,
@@ -134,7 +158,7 @@ const mutationCalls = (calls) =>
       command === process.execPath,
   );
 
-test("frozen, blocked, and stale states prevent every lifecycle mutation", async () => {
+test("frozen and stale states prevent every lifecycle mutation", async () => {
   const states = {
     frozen: repository({
       pullRequest: releasePullRequest({
@@ -144,33 +168,24 @@ test("frozen, blocked, and stale states prevent every lifecycle mutation", async
     queued: repository({
       pullRequest: releasePullRequest({ mergeQueueEntry: { id: "queue-1" } }),
     }),
-    blocked: repository({
-      pullRequest: releasePullRequest({
-        timelineItems: {
-          nodes: [{ __typename: "REMOVED_FROM_MERGE_QUEUE_EVENT" }],
-        },
-      }),
-    }),
     stale: repository({ baseSha: OTHER_SHA }),
   };
 
   for (const [name, state] of Object.entries(states)) {
     const harness = makeHarness({ states: [state] });
-    const expected =
-      name === "blocked" ? /was dequeued or auto-merge was disabled/ : null;
 
     for (const operation of ["version", "cleanup", "merge"]) {
-      if (expected) {
-        await assert.rejects(harness.runtime[operation](), expected);
-      } else {
-        await harness.runtime[operation]();
-      }
+      await harness.runtime[operation]();
     }
 
     assert.deepEqual(
       mutationCalls(harness.calls),
       [],
       `${name} state must not invoke version, cleanup, or merge mutations`,
+    );
+    assert.deepEqual(
+      harness.outputs.filter(({ name: output }) => output === "may-update"),
+      Array.from({ length: 3 }, () => ({ name: "may-update", value: "false" })),
     );
   }
 });
@@ -188,7 +203,9 @@ test("inspection is repeatable and never mutates the release branch", async () =
   assert.deepEqual(harness.sleeps, []);
   assert.deepEqual(harness.outputs, [
     { name: "status", value: "mutable" },
+    { name: "may-update", value: "true" },
     { name: "status", value: "mutable" },
+    { name: "may-update", value: "true" },
   ]);
   assert.equal(
     harness.outputs.some(({ name }) => name === "pr-number"),
@@ -204,12 +221,20 @@ test("incomplete GitHub state fails closed before any mutation", async () => {
     "isCrossRepository",
     "autoMergeRequest",
     "mergeQueueEntry",
+    "commits",
     "timelineItems",
   ].map((field) => {
     const pullRequest = releasePullRequest();
     delete pullRequest[field];
     return repository({ pullRequest });
   });
+  const incompleteUnarmingEvents = [
+    { __typename: "RemovedFromMergeQueueEvent", createdAt: UNARMED_AT },
+    { __typename: "RemovedFromMergeQueueEvent", reason: "failed_checks" },
+    { __typename: "AutoMergeDisabledEvent", createdAt: UNARMED_AT },
+    autoMergeDisabled({ __typename: "User" }),
+    { __typename: "HeadRefForcePushedEvent", createdAt: UNARMED_AT },
+  ].map((event) => unarmedRepository(event));
   const incompleteStates = [
     {},
     { ref: { target: {} } },
@@ -219,6 +244,13 @@ test("incomplete GitHub state fails closed before any mutation", async () => {
       pullRequest: {},
     },
     ...missingPullRequestFields,
+    ...incompleteUnarmingEvents,
+    repository({ pullRequest: releasePullRequest({ commits: { nodes: [] } }) }),
+    repository({
+      pullRequest: releasePullRequest({
+        commits: { nodes: [{ commit: { committedDate: "not a date" } }] },
+      }),
+    }),
   ];
 
   for (const state of incompleteStates) {
@@ -386,7 +418,10 @@ test("a queue race during versioning is handled once without retrying the comman
     1,
   );
   assert.deepEqual(harness.sleeps, []);
-  assert.equal(harness.outputs.at(-1)?.value, "frozen");
+  assert.deepEqual(harness.outputs.slice(-2), [
+    { name: "status", value: "frozen" },
+    { name: "may-update", value: "false" },
+  ]);
 });
 
 test("successful Bun command echoes do not turn a queue deferral into failure", () => {
@@ -530,42 +565,103 @@ test("a successful merge handoff receives the exact release PR number", async ()
   assert.deepEqual(harness.sleeps, []);
 });
 
-test("a dequeued release PR annotates a push run and fails every other event", async () => {
-  const blocked = repository({
-    pullRequest: releasePullRequest({
-      timelineItems: { nodes: [{ __typename: "AUTO_MERGE_DISABLED_EVENT" }] },
-    }),
+test("an unarmed batch still takes content updates", async () => {
+  const state = unarmedRepository(dequeued("failed_checks"));
+
+  const version = makeHarness({ states: [state] });
+  await version.runtime.version();
+  assert.equal(
+    version.calls.filter(({ command }) => command === process.execPath).length,
+    1,
+  );
+  assert.deepEqual(version.outputs, [
+    { name: "status", value: "unarmed" },
+    { name: "may-update", value: "true" },
+  ]);
+
+  const cleanup = makeHarness({
+    states: [state, repository({ pullRequest: null })],
   });
+  await cleanup.runtime.cleanup();
+  assert.deepEqual(
+    mutationCalls(cleanup.calls).map(({ args }) => args[2]),
+    ["PATCH", "DELETE"],
+  );
+});
+
+test("an unarmed batch is re-armed only after automation unarmed a superseded head", async () => {
+  const cases = [
+    { event: dequeued("failed_checks"), head: BEFORE_UNARMING, arms: false },
+    { event: dequeued("failed_checks"), head: AFTER_UNARMING, arms: true },
+    { event: dequeued("manual"), head: AFTER_UNARMING, arms: false },
+    {
+      event: autoMergeDisabled({ __typename: "Bot", login: "release-bot" }),
+      head: AFTER_UNARMING,
+      arms: true,
+    },
+    {
+      event: autoMergeDisabled({ __typename: "User", login: "maintainer" }),
+      head: AFTER_UNARMING,
+      arms: false,
+    },
+  ];
+
+  for (const { event, head, arms } of cases) {
+    const harness = makeHarness({ states: [unarmedRepository(event, head)] });
+
+    await harness.runtime.merge();
+
+    assert.equal(
+      harness.calls.filter(({ command }) => command === "bash").length,
+      arms ? 1 : 0,
+      `${event.__typename} at ${head} must ${arms ? "" : "not "}re-arm the batch`,
+    );
+    assert.deepEqual(harness.outputs, [
+      { name: "status", value: "unarmed" },
+      { name: "may-update", value: "true" },
+    ]);
+    if (arms) continue;
+    assert.ok(
+      harness.reports.some((line) =>
+        line.startsWith("::notice::Release PR #42 is not armed ("),
+      ),
+    );
+  }
+});
+
+test("an unarmed batch with nothing left to try annotates a push run and fails every other event", async () => {
+  const held = unarmedRepository(dequeued("failed_checks"));
 
   const push = makeHarness({
-    states: [blocked],
+    states: [held],
     env: { ...environment, GITHUB_EVENT_NAME: "push" },
   });
-  assert.equal(await push.runtime.inspect(), false);
-  for (const operation of ["version", "cleanup", "merge"]) {
-    await push.runtime[operation]();
-  }
-  assert.deepEqual(mutationCalls(push.calls), []);
-  assert.ok(push.reports.length > 0);
-  assert.ok(
-    push.reports.every((line) =>
-      line.startsWith("::warning::Release PR #42 was dequeued"),
-    ),
-  );
-  assert.deepEqual(
-    push.outputs.map(({ value }) => value),
-    ["blocked", "blocked", "blocked", "blocked"],
-  );
+  assert.equal(await push.runtime.inspect(), true);
+  assert.deepEqual(push.reports, [
+    "::warning::Release PR #42 is current but not armed (removed from the " +
+      `merge queue (failed_checks) at ${UNARMED_AT}). Re-arm it to merge, or ` +
+      "close it to start a replacement batch.",
+  ]);
 
   for (const event of ["schedule", "workflow_dispatch"]) {
     const harness = makeHarness({
-      states: [blocked],
+      states: [held],
       env: { ...environment, GITHUB_EVENT_NAME: event },
     });
     await assert.rejects(
       harness.runtime.inspect(),
-      /was dequeued or auto-merge was disabled/,
+      /is current but not armed \(removed from the merge queue \(failed_checks\)/,
     );
     assert.deepEqual(harness.reports, []);
   }
+
+  const rewritten = makeHarness({
+    states: [unarmedRepository(dequeued("failed_checks"), AFTER_UNARMING)],
+    env: { ...environment, GITHUB_EVENT_NAME: "schedule" },
+  });
+  assert.equal(await rewritten.runtime.inspect(), true);
+  assert.deepEqual(rewritten.reports, [
+    "::notice::Release PR #42 was rewritten after removed from the merge " +
+      `queue (failed_checks) at ${UNARMED_AT}; re-arming it.`,
+  ]);
 });
