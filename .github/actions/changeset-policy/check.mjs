@@ -121,13 +121,18 @@ const run = (command, args) =>
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 
-const main = (environment) => {
+export const main = (environment) => {
   const baseRef = required(environment, "BASE_REF");
+  // Every query is read path by path. Rename detection would pair a release
+  // commit's deleted `.changeset/release-vX.md` with the byte-identical
+  // `release-vY.md` it adds, and the added-entry query would then see no new
+  // entry at all.
   const diff = (filter, pathspecs) => {
     try {
       return lines(
         run("git", [
           "diff",
+          "--no-renames",
           "--name-only",
           `--diff-filter=${filter}`,
           `${baseRef}...HEAD`,
