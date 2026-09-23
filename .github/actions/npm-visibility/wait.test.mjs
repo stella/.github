@@ -8,12 +8,12 @@ const packages = [
   { name: "@stll/vue", version: "1.0.0" },
 ];
 
-test("waits beyond the old 75-second budget for registry propagation", async () => {
+test("waits through a nine-minute registry visibility lag", async () => {
   let elapsed = 0;
   const missing = await waitForNpmPackages({
     packages,
     readNpmState: (name) => ({
-      exists: name === "@stll/core" || elapsed >= 120_000,
+      exists: name === "@stll/core" || elapsed >= 540_000,
     }),
     wait: (delay) => {
       elapsed += delay;
@@ -21,7 +21,22 @@ test("waits beyond the old 75-second budget for registry propagation", async () 
   });
 
   assert.deepEqual(missing, []);
-  assert.ok(elapsed >= 120_000);
+  assert.ok(elapsed >= 540_000);
+  assert.ok(elapsed <= 720_000);
+});
+
+test("stops after the twelve-minute visibility budget", async () => {
+  let elapsed = 0;
+  const missing = await waitForNpmPackages({
+    packages,
+    readNpmState: () => ({ exists: false }),
+    wait: (delay) => {
+      elapsed += delay;
+    },
+  });
+
+  assert.deepEqual(missing, packages);
+  assert.equal(elapsed, 720_000);
 });
 
 test("rechecks only versions still missing and reports bounded failures", async () => {

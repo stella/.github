@@ -1,5 +1,7 @@
+// A successful publish can precede registry metadata visibility by several minutes.
 const NPM_VISIBILITY_RECHECK_DELAYS_MILLISECONDS = [
-  5_000, 10_000, 15_000, 30_000, 60_000, 60_000, 60_000, 60_000,
+  5_000, 10_000, 15_000, 30_000,
+  ...Array(11).fill(60_000),
 ];
 
 const sleep = (milliseconds) =>
