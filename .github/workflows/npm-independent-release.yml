@@ -38,7 +38,7 @@ on:
         type: string
         default: ""
       npm-visibility-timeout-minutes:
-        description: Minutes to poll the npm registry for published versions before finalize fails.
+        description: Minutes to poll the npm registry for published versions before finalize fails. Capped at 25 by this job's fixed timeout-minutes budget.
         required: false
         type: number
         default: 20
@@ -65,9 +65,10 @@ jobs:
   release:
     name: Publish packages
     runs-on: ubuntu-latest
-    # Bounded above the default npm-visibility-timeout-minutes (20) plus
-    # margin for checkout, staging, and the npm publish steps that run
-    # before finalize starts polling the registry.
+    # Fixed budget: GitHub Actions cannot set this from an input. Keep it
+    # above the maximum accepted npm-visibility-timeout-minutes (25, see
+    # MAX_NPM_VISIBILITY_TIMEOUT_MINUTES in runtime.mjs) plus margin for
+    # checkout, staging, and the npm publish steps that run first.
     timeout-minutes: 35
     # Lets a caller keep RELEASE_APP_PRIVATE_KEY as an environment secret whose
     # deployment policy limits the refs that can mint the token; an empty

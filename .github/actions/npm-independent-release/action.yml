@@ -36,7 +36,7 @@ inputs:
     required: false
     default: ""
   npm-visibility-timeout-minutes:
-    description: Minutes to poll the npm registry for published versions before finalize fails.
+    description: Minutes to poll the npm registry for published versions before finalize fails. Capped at 25 by this job's fixed timeout-minutes budget.
     required: false
     default: "20"
 
