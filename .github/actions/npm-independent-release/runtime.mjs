@@ -11,7 +11,10 @@ import {
 import { basename, join } from "node:path";
 import process from "node:process";
 
-import { waitForNpmPackages } from "../npm-visibility/wait.mjs";
+import {
+  NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES,
+  waitForNpmPackages,
+} from "../npm-visibility/wait.mjs";
 import {
   artifactReleaseName,
   changelogSection,
@@ -46,6 +49,32 @@ export const resolveSourceSha = ({ githubSha, sourceSha }) => {
     fail("SOURCE_SHA or GITHUB_SHA must be a full lowercase commit SHA.");
   }
   return resolved;
+};
+
+// GitHub Actions cannot derive a job's `timeout-minutes` from an input, so
+// the release job in npm-independent-release.yml carries a fixed budget
+// (35) for checkout, staging, npm publish, and this wait combined. Cap the
+// input below that fixed budget, with margin for the earlier steps, so an
+// over-large request fails fast here instead of getting silently cut off
+// mid-poll when the runner kills the job. Keep this in sync with that
+// workflow's `timeout-minutes`.
+export const MAX_NPM_VISIBILITY_TIMEOUT_MINUTES = 25;
+
+export const resolveNpmVisibilityTimeoutMinutes = (value) => {
+  if (value === undefined || value === "") {
+    return NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES;
+  }
+  const minutes = Number(value);
+  if (
+    !Number.isFinite(minutes) ||
+    minutes <= 0 ||
+    minutes > MAX_NPM_VISIBILITY_TIMEOUT_MINUTES
+  ) {
+    fail(
+      `npm-visibility-timeout-minutes must be a positive number no greater than ${MAX_NPM_VISIBILITY_TIMEOUT_MINUTES}; got '${value}'.`,
+    );
+  }
+  return minutes;
 };
 
 const run = (command, args, options = {}) =>
@@ -588,9 +617,13 @@ export const finalize = async () => {
     policy: latestPolicy,
   });
   const packages = readPackages(lines(process.env.PACKAGE_FILES));
+  const timeoutMinutes = resolveNpmVisibilityTimeoutMinutes(
+    process.env.NPM_VISIBILITY_TIMEOUT_MINUTES,
+  );
   const missingPackages = await waitForNpmPackages({
     packages,
     readNpmState: npmState,
+    timeoutMinutes,
   });
   for (const pkg of missingPackages) {
     fail(`npm is still missing ${pkg.name}@${pkg.version}.`);

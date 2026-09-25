@@ -9,6 +9,8 @@ import {
   buildMarkLatestArgs,
   buildPublishReleaseArgs,
   listTarballs,
+  MAX_NPM_VISIBILITY_TIMEOUT_MINUTES,
+  resolveNpmVisibilityTimeoutMinutes,
   resolveSourceSha,
   selectLatestReleaseEntry,
   stageReleaseEntries,
@@ -39,6 +41,50 @@ test("rejects refs and abbreviated SHAs at the action boundary", () => {
   assert.throws(
     () => resolveSourceSha({ githubSha, sourceSha: "v1.2.3" }),
     /full lowercase commit SHA/,
+  );
+});
+
+test("defaults the npm visibility timeout when unset", () => {
+  assert.equal(resolveNpmVisibilityTimeoutMinutes(undefined), 20);
+  assert.equal(resolveNpmVisibilityTimeoutMinutes(""), 20);
+});
+
+test("parses an explicit npm visibility timeout", () => {
+  assert.equal(resolveNpmVisibilityTimeoutMinutes("25"), 25);
+  assert.equal(
+    resolveNpmVisibilityTimeoutMinutes(
+      String(MAX_NPM_VISIBILITY_TIMEOUT_MINUTES),
+    ),
+    MAX_NPM_VISIBILITY_TIMEOUT_MINUTES,
+  );
+});
+
+test("rejects a non-positive or non-numeric npm visibility timeout", () => {
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("0"),
+    /must be a positive number/,
+  );
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("-5"),
+    /must be a positive number/,
+  );
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("soon"),
+    /must be a positive number/,
+  );
+});
+
+test("rejects a timeout the fixed job budget cannot honor", () => {
+  assert.throws(
+    () =>
+      resolveNpmVisibilityTimeoutMinutes(
+        String(MAX_NPM_VISIBILITY_TIMEOUT_MINUTES + 1),
+      ),
+    /no greater than 25/,
+  );
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("45"),
+    /no greater than 25/,
   );
 });
 

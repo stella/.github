@@ -355,9 +355,14 @@ manifests and packed tarballs. It rejects unresolved `workspace:`, `catalog:`,
 `link:`, and `file:` dependency specifiers, orders internal dependencies before
 dependants, stages one draft release per `<name>@<version>`, publishes only versions
 missing from npm, verifies the release asset against npm `dist.integrity`, then makes
-the draft releases public. Existing complete versions are immutable no-ops. Safe
-partial runs resume; registry-only versions are repaired with the registry artifact
-and release notes that do not claim a local rebuild was the originally uploaded file.
+the draft releases public. Before publishing GitHub releases, it polls the registry
+for every package to become visible, up to `npm-visibility-timeout-minutes` (default
+20, capped at 25 by the job's fixed `timeout-minutes` budget); npm's read replicas can
+lag a successful publish by several minutes, and a rerun after a timeout resumes from
+whatever already reached the registry. Existing complete
+versions are immutable no-ops. Safe partial runs resume; registry-only versions are
+repaired with the registry artifact and release notes that do not claim a local
+rebuild was the originally uploaded file.
 Package releases preserve the repository's existing GitHub Latest pointer by default.
 Repositories with one canonical package can set `github-latest-policy` to
 `canonical-package` and name it with `github-latest-package`; after the transaction is
