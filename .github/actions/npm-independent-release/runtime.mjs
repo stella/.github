@@ -11,7 +11,10 @@ import {
 import { basename, join } from "node:path";
 import process from "node:process";
 
-import { waitForNpmPackages } from "../npm-visibility/wait.mjs";
+import {
+  NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES,
+  waitForNpmPackages,
+} from "../npm-visibility/wait.mjs";
 import {
   artifactReleaseName,
   changelogSection,
@@ -46,6 +49,19 @@ export const resolveSourceSha = ({ githubSha, sourceSha }) => {
     fail("SOURCE_SHA or GITHUB_SHA must be a full lowercase commit SHA.");
   }
   return resolved;
+};
+
+export const resolveNpmVisibilityTimeoutMinutes = (value) => {
+  if (value === undefined || value === "") {
+    return NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES;
+  }
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    fail(
+      `npm-visibility-timeout-minutes must be a positive number; got '${value}'.`,
+    );
+  }
+  return minutes;
 };
 
 const run = (command, args, options = {}) =>
@@ -588,9 +604,13 @@ export const finalize = async () => {
     policy: latestPolicy,
   });
   const packages = readPackages(lines(process.env.PACKAGE_FILES));
+  const timeoutMinutes = resolveNpmVisibilityTimeoutMinutes(
+    process.env.NPM_VISIBILITY_TIMEOUT_MINUTES,
+  );
   const missingPackages = await waitForNpmPackages({
     packages,
     readNpmState: npmState,
+    timeoutMinutes,
   });
   for (const pkg of missingPackages) {
     fail(`npm is still missing ${pkg.name}@${pkg.version}.`);

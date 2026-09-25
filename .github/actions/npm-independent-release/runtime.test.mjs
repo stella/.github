@@ -9,6 +9,7 @@ import {
   buildMarkLatestArgs,
   buildPublishReleaseArgs,
   listTarballs,
+  resolveNpmVisibilityTimeoutMinutes,
   resolveSourceSha,
   selectLatestReleaseEntry,
   stageReleaseEntries,
@@ -39,6 +40,30 @@ test("rejects refs and abbreviated SHAs at the action boundary", () => {
   assert.throws(
     () => resolveSourceSha({ githubSha, sourceSha: "v1.2.3" }),
     /full lowercase commit SHA/,
+  );
+});
+
+test("defaults the npm visibility timeout when unset", () => {
+  assert.equal(resolveNpmVisibilityTimeoutMinutes(undefined), 20);
+  assert.equal(resolveNpmVisibilityTimeoutMinutes(""), 20);
+});
+
+test("parses an explicit npm visibility timeout", () => {
+  assert.equal(resolveNpmVisibilityTimeoutMinutes("45"), 45);
+});
+
+test("rejects a non-positive or non-numeric npm visibility timeout", () => {
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("0"),
+    /must be a positive number/,
+  );
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("-5"),
+    /must be a positive number/,
+  );
+  assert.throws(
+    () => resolveNpmVisibilityTimeoutMinutes("soon"),
+    /must be a positive number/,
   );
 });
 

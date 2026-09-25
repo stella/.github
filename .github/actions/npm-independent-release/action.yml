@@ -35,6 +35,10 @@ inputs:
     description: Immutable caller commit whose manifests and changelogs match the artifacts.
     required: false
     default: ""
+  npm-visibility-timeout-minutes:
+    description: Minutes to poll the npm registry for published versions before finalize fails.
+    required: false
+    default: "20"
 
 outputs:
   changed:
@@ -91,6 +95,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         GITHUB_LATEST_PACKAGE: ${{ inputs.github-latest-package }}
         GITHUB_LATEST_POLICY: ${{ inputs.github-latest-policy }}
+        NPM_VISIBILITY_TIMEOUT_MINUTES: ${{ inputs.npm-visibility-timeout-minutes }}
         PACKAGE_FILES: ${{ inputs.package-files }}
         SOURCE_SHA: ${{ inputs.source-sha }}
       run: node "$GITHUB_ACTION_PATH/finalize.mjs"
