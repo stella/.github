@@ -206,14 +206,17 @@ jobs:
           git status --short -- "$provenance_path"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
+          # An archive also carries an empty tree, so deletions still commit.
+          mkdir -p "$provenance_path"
+          tar -cf "$RUNNER_TEMP/provenance.tar" -C "$provenance_path" .
+
       - name: Upload refreshed provenance
         if: steps.diff.outputs.changed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provenance
-          path: ${{ steps.diff.outputs.provenance-path }}
+          path: ${{ runner.temp }}/provenance.tar
           if-no-files-found: error
-          include-hidden-files: true
           retention-days: 1
 
   commit:
@@ -236,12 +239,13 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: provenance
-          path: ${{ runner.temp }}/provenance-refresh
+          path: ${{ runner.temp }}/provenance-archive
 
       - name: Stage refreshed provenance
         shell: bash
         env:
           PROVENANCE_PATH: ${{ needs.generate.outputs.provenance-path }}
+          ARCHIVE: ${{ runner.temp }}/provenance-archive/provenance.tar
           REFRESH_DIR: ${{ runner.temp }}/provenance-refresh
         run: |
           set -euo pipefail
@@ -259,10 +263,18 @@ jobs:
               exit 1
               ;;
           esac
-          if [ -n "$(find "$REFRESH_DIR" ! -type f ! -type d)" ]; then
-            echo "::error::The provenance artifact may contain only regular files."
+          # The archive comes from a job that ran pull request code: accept
+          # only regular files and directories under relative, plain paths.
+          if tar -tvf "$ARCHIVE" | grep -qv '^[-d]'; then
+            echo "::error::The provenance archive may contain only regular files and directories."
             exit 1
           fi
+          if tar -tf "$ARCHIVE" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+            echo "::error::The provenance archive contains an unsafe path."
+            exit 1
+          fi
+          mkdir -p "$REFRESH_DIR"
+          tar -xf "$ARCHIVE" -C "$REFRESH_DIR" --no-same-owner --no-same-permissions
 
           rm -rf "$PROVENANCE_PATH"
           mkdir -p "$PROVENANCE_PATH"
@@ -273,7 +285,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.app_id }}
+          client-id: ${{ secrets.app_id }}
           private-key: ${{ secrets.app_private_key }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}

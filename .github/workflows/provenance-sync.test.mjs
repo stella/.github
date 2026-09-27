@@ -35,4 +35,11 @@ test("the refresh commit is owned by the App, never GITHUB_TOKEN", () => {
   assert.match(commit, /token: \$\{\{ steps\.app-token\.outputs\.token \}\}/);
   assert.doesNotMatch(workflow, /github\.token/);
   assert.doesNotMatch(workflow, /git push/);
+  assert.match(commit, /client-id: \$\{\{ secrets\.app_id \}\}/);
+  assert.doesNotMatch(workflow, /^\s+app-id:/m);
+});
+
+test("the staged archive admits only plain files under relative paths", () => {
+  assert.match(commit, /grep -qv '\^\[-d\]'/);
+  assert.match(commit, /--no-same-owner --no-same-permissions/);
 });
