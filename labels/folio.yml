@@ -1,0 +1,6 @@
+# Labels specific to stella/folio, merged on top of the org baseline
+# in labels.yml. Entries here override a baseline entry of the same name.
+
+- name: "ci:full"
+  color: "0E8A16"
+  description: "Run the full CI suite on this pull request"
