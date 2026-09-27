@@ -31,15 +31,24 @@ const required = (environment, name) => {
   return value;
 };
 
-const escapeRegExp = (text) => text.replace(/[\\^$.+()|[\]{}]/gu, "\\$&");
+const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&");
+
+const CHARACTER_CLASS = /^(?:[A-Za-z0-9]|[a-z]-[a-z]|[A-Z]-[A-Z]|[0-9]-[0-9])+$/u;
 
 // GitHub's `paths` filter syntax: `*` matches within one path segment, `**`
-// matches across segments, `?` matches one character, and `{a,b}` matches
-// either alternative.
+// matches across segments, `?` matches one character, `[a-z]` matches an
+// alphanumeric character from a set or range, and `{a,b}` matches either
+// alternative.
 export const globToRegExp = (glob) => {
   let source = "";
   for (let index = 0; index < glob.length; index += 1) {
     const character = glob[index];
+    if (character === "\\") {
+      if (index + 1 === glob.length) fail(`Trailing '\\' in pattern '${glob}'.`);
+      source += escapeRegExp(glob[index + 1]);
+      index += 1;
+      continue;
+    }
     if (character === "*" && glob[index + 1] === "*") {
       index += 1;
       if (glob[index + 1] === "/") {
@@ -56,6 +65,22 @@ export const globToRegExp = (glob) => {
     }
     if (character === "?") {
       source += "[^/]";
+      continue;
+    }
+    if (character === "[") {
+      const close = glob.indexOf("]", index + 1);
+      if (close === -1) fail(`Unclosed '[' in pattern '${glob}'.`);
+      const characters = glob.slice(index + 1, close);
+      if (!CHARACTER_CLASS.test(characters)) {
+        fail(
+          `Invalid character class '[${characters}]' in pattern '${glob}': use alphanumeric characters and ranges.`,
+        );
+      }
+      for (const [, first, last] of characters.matchAll(/([A-Za-z0-9])-([A-Za-z0-9])/gu)) {
+        if (first > last) fail(`Reversed range '${first}-${last}' in pattern '${glob}'.`);
+      }
+      source += `[${characters}]`;
+      index = close;
       continue;
     }
     if (character === "{") {
@@ -122,6 +147,9 @@ export const validatePolicy = (policy) => {
       if (!AREA_KEYS.has(key)) fail(`Area '${name}' has unknown key '${key}'.`);
     }
     if (!isPatternList(area.paths)) fail(`Area '${name}' needs 'paths', a list of path patterns.`);
+    if (!area.paths.some((pattern) => !pattern.startsWith("!"))) {
+      fail(`Area '${name}' 'paths' must contain at least one positive pattern.`);
+    }
     if (area.with !== undefined) {
       if (!Array.isArray(area.with)) fail(`Area '${name}' 'with' must be a list of area names.`);
       for (const other of area.with) {
@@ -294,14 +322,14 @@ export const context = async (environment, api = githubApi(environment)) => {
     workflowFile: eventName === "merge_group" ? workflowFileOf(environment.WORKFLOW_REF) : "",
     api,
   });
-  if (!trust.trusted) console.log(`::error::${trust.reason}`);
+  if (!trust.trusted) fail(trust.reason);
   console.log(`Suite depth: ${suiteDepth}. Trusted: ${trust.trusted}.`);
   return { "suite-depth": suiteDepth, trusted: String(trust.trusted) };
 };
 
 export const scope = (environment, listChangedFiles = changedFiles) => {
   // An untrusted merge group was never checked out: it selects nothing, and the
-  // context stage has already reported why.
+  // context stage has already failed with the reason.
   if (required(environment, "TRUSTED") !== "true") return { "run-all": "false", areas: "{}" };
   const policyFile = required(environment, "POLICY_FILE");
   const policy = validatePolicy(JSON.parse(readFileSync(policyFile, "utf8")));

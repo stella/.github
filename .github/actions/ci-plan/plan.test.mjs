@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   baseBranch,
@@ -43,6 +44,15 @@ test("globs follow GitHub's paths syntax", () => {
   assert.ok(globToRegExp("file?.ts").test("file1.ts"));
   assert.ok(!globToRegExp("file?.ts").test("file/.ts"));
   assert.ok(!globToRegExp("a.b").test("axb"));
+  assert.ok(globToRegExp("packages/pkg[0-9]/**").test("packages/pkg7/src/index.ts"));
+  assert.ok(!globToRegExp("packages/pkg[0-9]/**").test("packages/pkga/src/index.ts"));
+  assert.ok(globToRegExp("packages/pkg[CB]/**").test("packages/pkgC/src/index.ts"));
+  assert.ok(!globToRegExp("packages/pkg[CB]/**").test("packages/pkgA/src/index.ts"));
+  assert.ok(globToRegExp("packages/pkg[0-9a-z]/**").test("packages/pkgq/src/index.ts"));
+  assert.ok(globToRegExp(String.raw`packages/pkg\[0-9\]/**`).test("packages/pkg[0-9]/src/index.ts"));
+  assert.throws(() => globToRegExp("packages/pkg[!0-9]/**"), /Invalid character class/);
+  assert.throws(() => globToRegExp("packages/pkg[z-a]/**"), /Reversed range/);
+  assert.throws(() => globToRegExp("packages/pkg[0-9/**"), /Unclosed/);
 });
 
 test("the last matching pattern decides, as in GitHub's paths filter", () => {
@@ -66,6 +76,16 @@ test("a pull request selects only the areas its paths match", () => {
   });
   assert.equal(scoped(["apps/web/e2e/marketing/landing.spec.ts"]).areas.e2e, false);
   assert.equal(scoped(["VERSION"]).areas.release, true);
+});
+
+test("character-class paths select their area", () => {
+  const withRange = validatePolicy({
+    ...policy,
+    areas: { packages: { paths: ["packages/pkg[0-9]/**"] } },
+  });
+  const plan = (file) => planScopes({ policy: withRange, eventName: "pull_request", suiteDepth: "fast", files: [file] });
+  assert.equal(plan("packages/pkg7/src/index.ts").areas.packages, true);
+  assert.equal(plan("packages/pkga/src/index.ts").areas.packages, false);
 });
 
 test("an area listed in `with` pulls the listing area in", () => {
@@ -122,6 +142,8 @@ test("the policy is validated strictly", () => {
     [{ ...policy, areas: { "Bad-Name": { paths: ["a"] } } }, /must match/],
     [{ ...policy, areas: { a: { paths: [] , typo: 1 } } }, /unknown key 'typo'/],
     [{ ...policy, areas: { a: { paths: [""] } } }, /needs 'paths'/],
+    [{ ...policy, areas: { a: { paths: ["!docs/**"] } } }, /at least one positive pattern/],
+    [{ ...policy, areas: { a: { paths: [] } } }, /at least one positive pattern/],
     [{ ...policy, areas: { a: { paths: ["x"], with: ["b"] } } }, /unknown area 'b'/],
     [{ ...policy, areas: { a: { paths: ["x"], with: ["a"] } } }, /cannot list itself/],
     [{ ...policy, areas: { a: { paths: ["x"], runAll: "no" } } }, /'runAll' must be one of/],
@@ -218,13 +240,48 @@ test("the context stage reads labels live and never trusts by default on merge g
     await context(environment, fakeApi({ "repos/stella/example/issues/7/labels": [{ name: "bug" }] })),
     { "suite-depth": "fast", trusted: "true" },
   );
-  assert.deepEqual(
-    await context(
+  await assert.rejects(
+    context(
       { ...environment, EVENT_NAME: "merge_group", MERGE_GROUP_HEAD_REF: "x", WORKFLOW_REF: "o/r/.github/workflows/ci.yml@refs/heads/main" },
       fakeApi({}),
     ),
-    { "suite-depth": "full", trusted: "false" },
+    /does not name a pull request/,
   );
+});
+
+test("the context stage rejects a fork merge group without a successful pull_request run", async () => {
+  await assert.rejects(
+    context(
+      {
+        EVENT_NAME: "merge_group",
+        FULL_LABEL: "ci:full",
+        MERGE_GROUP_HEAD_REF: "refs/heads/gh-readonly-queue/main/pr-12-0123abcd",
+        REPOSITORY: "stella/example",
+        WORKFLOW_REF: "stella/example/.github/workflows/ci.yml@refs/heads/main",
+      },
+      fakeApi({
+        "repos/stella/example/pulls/12": { head: { repo: { full_name: "someone/example" }, sha: "abc" } },
+        "repos/stella/example/actions/workflows/ci.yml/runs": { total_count: 0 },
+      }),
+    ),
+    /no successful pull_request run/,
+  );
+});
+
+test("an untrusted merge group exits the context step unsuccessfully", () => {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./plan.mjs", import.meta.url)), "context"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      EVENT_NAME: "merge_group",
+      FULL_LABEL: "ci:full",
+      MERGE_GROUP_HEAD_REF: "refs/heads/other",
+      REPOSITORY: "stella/example",
+      WORKFLOW_REF: "stella/example/.github/workflows/ci.yml@refs/heads/main",
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /::error::Merge group head ref does not name a pull request/);
 });
 
 const roots = [];
