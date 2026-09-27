@@ -87,7 +87,7 @@ jobs:
 
       - name: Inspect release lifecycle
         id: lifecycle
-        uses: stella/.github/.github/actions/changeset-release-lifecycle@87a3e7d57a4fbae95c04873a2327567015a14ecf
+        uses: stella/.github/.github/actions/changeset-release-lifecycle@636b7841096c8f0cc5a1572077b78768ef8fea42
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -100,7 +100,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - if: steps.lifecycle.outputs.may-update == 'true' && (inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
 
       # rust-toolchain only prepends the toolchain when it installs one. Keep
       # Cargo available when the runner already has the requested toolchain.
@@ -134,7 +134,7 @@ jobs:
       - if: steps.lifecycle.outputs.may-update == 'true' && inputs.sync-cargo-inherited-lock
         name: Validate inherited Cargo lock versions
         id: cargo-sync
-        uses: stella/.github/.github/actions/sync-cargo-workspace-lock@57a21da3b219c22b781fa7550a1c52894aefec4c
+        uses: stella/.github/.github/actions/sync-cargo-workspace-lock@636b7841096c8f0cc5a1572077b78768ef8fea42
         with:
           mode: check
           manifest: ${{ inputs.cargo-manifest }}

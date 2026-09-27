@@ -48,11 +48,11 @@ runs:
   using: 'composite'
   steps:
     - name: Setup pnpm
-      uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda  # v4
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
     - name: Setup Node.js
       id: setup-node
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version-file: ${{ inputs.working-directory }}/${{ inputs.node-version-file }}
         cache: ${{ inputs.cache-enabled == 'true' && 'pnpm' || '' }}
@@ -60,7 +60,7 @@ runs:
 
     - name: Run Codespell
       if: inputs.run-codespell == 'true'
-      uses: codespell-project/actions-codespell@406322ec52dd7b488e48c1c4b82e2a8b3a1bf630  # v2
+      uses: codespell-project/actions-codespell@e3258cca84ce02b0bb36a3d41f2c18f719a0cc1a # v2.4.3
       with:
         skip: ${{ inputs.codespell-skip }}
         ignore_words_file: ${{ inputs.codespell-ignore-words-file }}
