@@ -29,6 +29,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `notify-failure` | Send failure notification to Google Chat webhook |
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
 | `changeset-policy` | Require valid release intent for caller-declared package paths |
+| `ci-plan` | Plan a CI run: suite depth, merge-group trust, and the areas a change selects |
 | `npm-publish-hardened` | Publish pre-packed npm tarballs through trusted publishing |
 | `sync-cargo-workspace-lock` | Synchronize inherited Cargo workspace versions in Cargo.lock |
 | `signed-commit` | Commit working-tree changes through the GitHub API (signed by GitHub) and keep one refresh pull request open |
@@ -373,6 +374,69 @@ allowlist:
 The action discovers root workspace members with locked Cargo metadata, changes only
 members that explicitly inherit `[workspace.package].version`, and leaves explicitly
 versioned and registry packages untouched.
+
+### CI plan
+
+`ci-plan` decides, in one job, what a CI run has to check. The calling repository
+owns the rules in `.github/ci-plan.json`; the action owns the event semantics.
+
+```yaml
+jobs:
+  ci-plan:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # live `ci:full` label
+      actions: read # merge-group trust check
+    outputs:
+      suite_depth: ${{ steps.plan.outputs.suite-depth }}
+      trusted: ${{ steps.plan.outputs.trusted }}
+      kernel_required: ${{ fromJSON(steps.plan.outputs.areas).kernel }}
+    steps:
+      - id: plan
+        uses: stella/.github/.github/actions/ci-plan@<commit-sha>
+
+  kernel:
+    needs: ci-plan
+    if: needs.ci-plan.outputs.kernel_required == 'true'
+```
+
+```json
+{
+  "runAll": [".github/workflows/**", ".github/ci-plan.json", "bun.lock"],
+  "fullDepth": "all",
+  "areas": {
+    "code": { "paths": ["**", "!**/*.md"] },
+    "kernel": { "paths": ["crates/**", "Cargo.{toml,lock}"] },
+    "web_build": { "paths": ["apps/web/**"], "with": ["e2e"] },
+    "e2e": { "paths": ["apps/**", "!apps/web/e2e/marketing/**"] },
+    "release": { "paths": ["VERSION"], "runAll": "exclude" }
+  }
+}
+```
+
+- **Suite depth** is `full` on `merge_group`, `workflow_dispatch`, `push` and
+  `schedule`, and on a pull request carrying `full-label` (default `ci:full`), read
+  live so re-running a run after labelling plans full depth. Otherwise `fast`.
+- **Trust**: a merge group is trusted when its queued pull request comes from the
+  same repository, or when that pull request's head already passed a
+  `pull_request` run of the calling workflow. Depth and trust are decided before
+  the action checks out the repository (`fetch-depth: 0`); an untrusted group is
+  never fetched, selects no area, and reports why.
+- **Areas**: a pull request or merge group diffs `origin/<base>...HEAD` without
+  rename pairing, so both sides of a move count. Patterns use GitHub's `paths`
+  syntax, including `!` exclusions where the last matching pattern decides. `with`
+  also selects an area whenever one it lists is selected.
+- **Run all**: an event without a pull request diff, a path matching `runAll`, or
+  full depth under `"fullDepth": "all"` selects every area, except areas marked
+  `"runAll": "exclude"`. Under `"fullDepth": "scoped"` a full-depth run keeps path
+  scopes, and callers gate their heavy suites on `suite-depth`.
+
+Outputs: `suite-depth`, `trusted`, `run-all`, and `areas` (a JSON object of area to
+boolean). A skipped job reports success to branch protection, so gate jobs with
+`needs` and `if:` rather than a workflow-level `paths:` filter, and make `ci-plan`
+itself a required check.
 
 ### Independent npm package releases
 

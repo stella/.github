@@ -1,0 +1,70 @@
+name: CI plan
+description: >-
+  Plan a CI run from its event and changed paths: suite depth, merge-group
+  trust, and which caller-declared areas the change selects.
+
+inputs:
+  policy-file:
+    description: Repository-relative JSON policy naming the areas and their path patterns.
+    required: false
+    default: .github/ci-plan.json
+  full-label:
+    description: Pull request label that plans full suite depth.
+    required: false
+    default: "ci:full"
+  github-token:
+    description: Token that reads pull request labels, and a queued pull request and its runs for the merge-group trust check.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  suite-depth:
+    description: "`full` on merge_group, workflow_dispatch, push, schedule and a labelled pull request; `fast` otherwise."
+    value: ${{ steps.context.outputs.suite-depth }}
+  trusted:
+    description: "`false` only for a merge group whose queued pull request failed the trust check."
+    value: ${{ steps.context.outputs.trusted }}
+  run-all:
+    description: "`true` when the plan selects every area rather than scoping by path."
+    value: ${{ steps.scope.outputs.run-all }}
+  areas:
+    description: JSON object mapping each policy area to whether this run selects it.
+    value: ${{ steps.scope.outputs.areas }}
+
+runs:
+  using: composite
+  steps:
+    # Decide depth and trust before checkout, so an untrusted merge group
+    # never has its tree fetched.
+    - name: Resolve suite depth and trust
+      id: context
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        FULL_LABEL: ${{ inputs.full-label }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPOSITORY: ${{ github.repository }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+      run: node "$GITHUB_ACTION_PATH/plan.mjs" context
+
+    - name: Checkout
+      if: steps.context.outputs.trusted == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Plan changed-path scopes
+      id: scope
+      shell: bash
+      env:
+        BASE_REF: ${{ github.base_ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        EVENT_NAME: ${{ github.event_name }}
+        MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+        POLICY_FILE: ${{ inputs.policy-file }}
+        SUITE_DEPTH: ${{ steps.context.outputs.suite-depth }}
+        TRUSTED: ${{ steps.context.outputs.trusted }}
+      run: node "$GITHUB_ACTION_PATH/plan.mjs" scope
