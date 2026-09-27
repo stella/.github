@@ -4,16 +4,18 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "saturday"
-      time: "09:00"
+      interval: "daily"
+      time: "03:00"
       timezone: "Europe/Prague"
     cooldown:
       default-days: 5
     groups:
-      actions:
+      minor-and-patch:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     labels:
       - "📦 dependencies"
     commit-message:
