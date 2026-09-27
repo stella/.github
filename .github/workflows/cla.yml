@@ -12,7 +12,7 @@ on:
         description: "Comma-separated list of GitHub usernames or bot patterns to skip CLA check"
         required: false
         type: string
-        default: "dependabot[bot],renovate[bot],github-actions[bot]"
+        default: "dependabot[bot],renovate[bot],github-actions[bot],stella-provenance-updater[bot]"
     secrets:
       CLA_APP_PRIVATE_KEY:
         required: true
