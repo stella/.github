@@ -32,6 +32,6 @@ jobs:
       )
     uses: ./.github/workflows/cla.yml
     with:
-      allowlist: dependabot[bot],renovate[bot],github-actions[bot]
+      allowlist: dependabot[bot],renovate[bot],github-actions[bot],stella-provenance-updater[bot]
     secrets:
       CLA_APP_PRIVATE_KEY: ${{ secrets.CLA_APP_PRIVATE_KEY }}
