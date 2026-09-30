@@ -50,7 +50,7 @@ test("defaults the npm visibility timeout when unset", () => {
 });
 
 test("parses an explicit npm visibility timeout", () => {
-  assert.equal(resolveNpmVisibilityTimeoutMinutes("25"), 25);
+  assert.equal(resolveNpmVisibilityTimeoutMinutes("45"), 45);
   assert.equal(
     resolveNpmVisibilityTimeoutMinutes(
       String(MAX_NPM_VISIBILITY_TIMEOUT_MINUTES),
@@ -80,11 +80,11 @@ test("rejects a timeout the fixed job budget cannot honor", () => {
       resolveNpmVisibilityTimeoutMinutes(
         String(MAX_NPM_VISIBILITY_TIMEOUT_MINUTES + 1),
       ),
-    /no greater than 25/,
+    /no greater than 45/,
   );
   assert.throws(
-    () => resolveNpmVisibilityTimeoutMinutes("45"),
-    /no greater than 25/,
+    () => resolveNpmVisibilityTimeoutMinutes("46"),
+    /no greater than 45/,
   );
 });
 
