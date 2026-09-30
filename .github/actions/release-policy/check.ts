@@ -24,6 +24,19 @@ const RELEASE_SECRETS = new Set([
   "RELEASE_APP_ID",
   "RELEASE_APP_PRIVATE_KEY",
 ]);
+// The App allowed to bypass release tag rulesets is also provisioned under its
+// CHANGELOG_APP_* names; a finalizer may receive either pair, never a mix.
+const RELEASE_SECRET_SOURCES = [
+  { RELEASE_APP_ID: "RELEASE_APP_ID", RELEASE_APP_PRIVATE_KEY: "RELEASE_APP_PRIVATE_KEY" },
+  { RELEASE_APP_ID: "CHANGELOG_APP_ID", RELEASE_APP_PRIVATE_KEY: "CHANGELOG_APP_PRIVATE_KEY" },
+] as const;
+
+const releaseSecretSource = (name: string, expression: unknown) =>
+  RELEASE_SECRET_SOURCES.findIndex(
+    (source) =>
+      (name === "RELEASE_APP_ID" || name === "RELEASE_APP_PRIVATE_KEY") &&
+      expression === `\${{ secrets.${source[name]} }}`,
+  );
 const DOWNLOAD_ARTIFACT_USE =
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
@@ -433,7 +446,7 @@ const walkSecretReferences = (
     !expected ||
     !allowedPaths.has(path) ||
     !RELEASE_SECRETS.has(expected) ||
-    value !== `\${{ secrets.${expected} }}`
+    releaseSecretSource(expected, value) === -1
   ) {
     fail(`${path} contains a secret reference outside an approved finalizer mapping`);
   }
@@ -557,6 +570,13 @@ const validateSecretPairs = (secrets: JsonObject, label: string) => {
   if (hasId !== hasKey) {
     fail(`${label} must map both RELEASE_APP credential fields or neither`);
   }
+  if (
+    hasId &&
+    releaseSecretSource("RELEASE_APP_ID", secrets.RELEASE_APP_ID) !==
+      releaseSecretSource("RELEASE_APP_PRIVATE_KEY", secrets.RELEASE_APP_PRIVATE_KEY)
+  ) {
+    fail(`${label} must map both RELEASE_APP credential fields from the same App`);
+  }
 };
 
 const REUSABLE_JOB_KEYS = new Set(["name", "needs", "if", "uses", "with", "permissions", "secrets"]);
@@ -644,7 +664,7 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
   }
   const secrets = object(job.secrets ?? {}, `${label}.secrets`);
   for (const [name, expression] of Object.entries(secrets)) {
-    if (!RELEASE_SECRETS.has(name) || expression !== `\${{ secrets.${name} }}`) {
+    if (releaseSecretSource(name, expression) === -1) {
       fail(`${label}.secrets contains an unsupported mapping for ${name}`);
     }
   }
@@ -737,10 +757,7 @@ const validateIndependentNpmPublisher = (job: JsonObject, ref: string, label: st
   );
   const secrets = object(job.secrets ?? {}, `${label}.secrets`);
   for (const [name, expression] of Object.entries(secrets)) {
-    if (
-      (name !== "RELEASE_APP_ID" && name !== "RELEASE_APP_PRIVATE_KEY") ||
-      expression !== `\${{ secrets.${name} }}`
-    ) {
+    if (releaseSecretSource(name, expression) === -1) {
       fail(`${label}.secrets contains an unsupported mapping for ${name}`);
     }
   }
