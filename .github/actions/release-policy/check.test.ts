@@ -64,6 +64,13 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
   });
 
+  test("accepts the tag-bypass App credentials under their changelog names", () => {
+    const workflow = base
+      .replace("\${{ secrets.RELEASE_APP_ID }}", "\${{ secrets.CHANGELOG_APP_ID }}")
+      .replace("\${{ secrets.RELEASE_APP_PRIVATE_KEY }}", "\${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}");
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
   test("accepts additional explicit release inputs", () => {
     const workflow = base.replace(
       "  workflow_dispatch:\n",
@@ -473,6 +480,8 @@ jobs:
     ["finalizer package path escape", base.replace("package-files: package.json", "package-files: ../package.json")],
     ["embedded changelog mutation", base.replace("      package-files: package.json", "      package-files: package.json\n      update-changelog: false")],
     ["changelog credentials", base.replace("      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "      CHANGELOG_APP_ID: \${{ secrets.CHANGELOG_APP_ID }}\n      CHANGELOG_APP_PRIVATE_KEY: \${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}")],
+    ["release secrets from two Apps", base.replace("\${{ secrets.RELEASE_APP_PRIVATE_KEY }}", "\${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}")],
+    ["swapped changelog secrets", base.replace("\${{ secrets.RELEASE_APP_ID }}", "\${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}").replace("\${{ secrets.RELEASE_APP_PRIVATE_KEY }}", "\${{ secrets.CHANGELOG_APP_ID }}")],
     ["unpaired release secret", base.replace("      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n", "")],
     ["secret inheritance", base.replace("    secrets:\n      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}", "    secrets: inherit")],
     ["unexpected secret", base.replace("RELEASE_APP_ID }}", "NPM_TOKEN }}")],
