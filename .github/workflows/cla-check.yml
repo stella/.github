@@ -6,6 +6,10 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request_target') && format('pr-{0}', github.event.pull_request.number || github.ref) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 permissions:
   actions: write
   contents: read
@@ -15,9 +19,6 @@ permissions:
 
 jobs:
   cla:
-    concurrency:
-      group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
-      cancel-in-progress: false
     # The main ruleset requires the `cla / cla` context on every pull request.
     # A skipped caller job never reports it, so bot pull requests run the
     # reusable workflow too; its allowlist waives the signature for them.
