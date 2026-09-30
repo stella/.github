@@ -23,6 +23,8 @@ test("npm artifact publication validates caller-declared identity", () => {
 test("npm idempotency is bound to exact registry bytes", () => {
   assert.match(publisher, /createHash\("sha512"\)/);
   assert.match(publisher, /npm view .* dist\.integrity/);
+  assert.match(publisher, /registry\.npmjs\.org\/\$\{package_name\}\/\$\{package_version\}/);
+  assert.match(publisher, /cannot publish over the previously published versions/);
   assert.match(publisher, /registry_integrity.*local_integrity/);
   assert.match(publisher, /return 2/);
 });

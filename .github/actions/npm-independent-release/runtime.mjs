@@ -53,12 +53,12 @@ export const resolveSourceSha = ({ githubSha, sourceSha }) => {
 
 // GitHub Actions cannot derive a job's `timeout-minutes` from an input, so
 // the release job in npm-independent-release.yml carries a fixed budget
-// (35) for checkout, staging, npm publish, and this wait combined. Cap the
+// (55) for checkout, staging, npm publish, and this wait combined. Cap the
 // input below that fixed budget, with margin for the earlier steps, so an
 // over-large request fails fast here instead of getting silently cut off
 // mid-poll when the runner kills the job. Keep this in sync with that
 // workflow's `timeout-minutes`.
-export const MAX_NPM_VISIBILITY_TIMEOUT_MINUTES = 25;
+export const MAX_NPM_VISIBILITY_TIMEOUT_MINUTES = 45;
 
 export const resolveNpmVisibilityTimeoutMinutes = (value) => {
   if (value === undefined || value === "") {
@@ -125,8 +125,34 @@ const tagTarget = (repository, tag) => {
   return object.sha;
 };
 
+// The per-version document is served before the package document lists a new
+// version, which can lag a publish by about 30 minutes. Treat a 200 there as
+// proof the version exists; anything else falls back to `npm view`.
+const npmVersionDocumentState = (name, version) => {
+  const result = attempt("curl", [
+    "-sS",
+    "--max-time",
+    "30",
+    "-w",
+    "\n%{http_code}",
+    `https://registry.npmjs.org/${name}/${version}`,
+  ]);
+  if (result.status !== 0) return null;
+  const split = result.stdout.lastIndexOf("\n");
+  if (result.stdout.slice(split + 1) !== "200") return null;
+  const metadata = JSON.parse(result.stdout.slice(0, split));
+  if (metadata.version !== version) return null;
+  return {
+    exists: true,
+    integrity: metadata.dist?.integrity ?? null,
+    tarball: metadata.dist?.tarball ?? null,
+  };
+};
+
 const npmState = (name, version) => {
   const spec = `${name}@${version}`;
+  const versionDocument = npmVersionDocumentState(name, version);
+  if (versionDocument) return versionDocument;
   const result = attempt("npm", [
     "view",
     spec,
