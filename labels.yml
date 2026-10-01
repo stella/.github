@@ -52,6 +52,14 @@
   color: "e97234"
   description: "Performance work"
 
+- name: "test"
+  color: "c5def5"
+  description: "Test-only changes"
+
+- name: "ci"
+  color: "1d76db"
+  description: "CI and workflow changes"
+
 # CI and governance
 - name: "run-ci"
   color: "0E8A16"
