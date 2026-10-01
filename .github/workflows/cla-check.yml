@@ -19,6 +19,11 @@ permissions:
 
 jobs:
   cla:
+    # Serializes signing, recheck and pull request runs for one PR. Job level, so
+    # unrelated comments (skipped by `if`) never replace a pending check.
+    concurrency:
+      group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     # The main ruleset requires the `cla / cla` context on every pull request.
     # A skipped caller job never reports it, so bot pull requests run the
     # reusable workflow too; its allowlist waives the signature for them.
