@@ -185,9 +185,22 @@ publish_one() {
 
   # Idempotency is byte-bound: an immutable version is reusable only when
   # npm's registry integrity matches the exact prepared tarball.
+  #
+  # The per-version document is served before the package document lists a
+  # new version (which can lag by about 30 minutes), so ask it first and
+  # fall back to `npm view`.
   published_state() {
     local registry_integrity
-    registry_integrity=$(npm view "${package_name}@${package_version}" dist.integrity 2>/dev/null) || return 1
+    # shellcheck disable=SC2016  # JS template literals do not need shell expansion.
+    registry_integrity=$(curl -fsS --max-time 30 \
+      "https://registry.npmjs.org/${package_name}/${package_version}" 2>/dev/null \
+      | node -e '
+        const j = JSON.parse(require("fs").readFileSync(0, "utf8"));
+        if (!j.dist?.integrity) process.exit(1);
+        console.log(j.dist.integrity);
+      ' 2>/dev/null) \
+      || registry_integrity=$(npm view "${package_name}@${package_version}" dist.integrity 2>/dev/null) \
+      || return 1
     if [[ "${registry_integrity}" != "${local_integrity}" ]]; then
       printf '::error::npm has %s@%s with integrity %s; prepared artifact is %s.\n' \
         "${package_name}" "${package_version}" "${registry_integrity}" "${local_integrity}"
@@ -230,6 +243,14 @@ publish_one() {
     fi
 
     cat "${publish_log}" >&2
+
+    # E403 "cannot publish over the previously published versions" means
+    # the version exists; published_state below accepts it only when the
+    # registry integrity matches the prepared tarball, and fails otherwise.
+    if grep -q 'cannot publish over the previously published versions' "${publish_log}"; then
+      printf '::notice::npm reports %s@%s is already published; verifying integrity.\n' \
+        "${package_name}" "${package_version}"
+    fi
 
     state=0
     published_state || state=$?

@@ -8,6 +8,10 @@ inputs:
       the latest Bun instead of the pinned version.
     required: false
     default: package.json
+  save:
+    description: Save the install cache after the job; false restores only
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -21,7 +25,17 @@ runs:
       # Caches downloaded package tarballs (~/.bun/install/cache), not
       # node_modules, so `bun ci` still resolves against the frozen lockfile
       # and only skips re-downloading unchanged packages.
+      if: inputs.save != 'false'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.bun/install/cache
+        key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          bun-install-${{ runner.os }}-
+
+    - name: Restore Bun install cache without saving
+      if: inputs.save == 'false'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
         key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock') }}
