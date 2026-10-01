@@ -6,6 +6,10 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request_target') && format('pr-{0}', github.event.pull_request.number || github.ref) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 permissions:
   actions: write
   contents: read
@@ -15,6 +19,8 @@ permissions:
 
 jobs:
   cla:
+    # Serializes signing, recheck and pull request runs for one PR. Job level, so
+    # unrelated comments (skipped by `if`) never replace a pending check.
     concurrency:
       group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: false
