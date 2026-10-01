@@ -6,6 +6,7 @@ on:
 
 permissions:
   actions: write
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.run_id }}
@@ -41,7 +42,8 @@ jobs:
             });
             const reasonFor = run => {
               if (run.status !== "queued" || !prEvents.has(run.event)) return null;
-              if (heads !== null && !heads.has(run.head_sha)) return "superseded head";
+              // A pull_request_target run's head_sha is the base commit, not the PR head.
+              if (run.event === "pull_request" && heads !== null && !heads.has(run.head_sha)) return "superseded head";
               if (Date.parse(run.created_at) < cutoff) return "queued over six hours";
               return null;
             };
