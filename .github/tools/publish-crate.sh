@@ -26,7 +26,8 @@ upload_sha="$(jq -er '.uploadSha256' "${manifest}")"
 echo "${crate_sha}  ${CRATE_DIRECTORY}/${crate_file}" | sha256sum --check --strict
 echo "${upload_sha}  ${upload}" | sha256sum --check --strict
 
-readonly user_agent="stella-shared-crate-publisher"
+# crates.io rejects requests whose User-Agent does not identify the client and a contact.
+readonly user_agent="stella-release/1.0 (github.com/stella)"
 
 exact_archive_is_visible() {
   local prefix="$1"
@@ -71,10 +72,30 @@ case "${version_status}" in
 esac
 
 : "${CRATES_IO_TOKEN:?}"
+
+# Responses never contain the request token; redact it anyway before printing.
+report_publish_response() {
+  printf 'crates.io upload returned HTTP %s.\n' "${publish_status}"
+  if [[ -f "${publish_headers}" ]]; then
+    grep -iE '^(content-type|server|via|x-cache|x-amz-cf-pop):' "${publish_headers}" | tr -d '\r' || true
+  fi
+  [[ -s "${publish_response}" ]] || return 0
+  local body
+  if jq -e '.errors | type == "array"' "${publish_response}" >/dev/null 2>&1; then
+    body="$(jq -r '.errors[] | "crates.io error: \(.detail // .)"' "${publish_response}")"
+  else
+    body="crates.io response body: $(head -c 2000 "${publish_response}" | tr -cd '[:print:]\n\t')"
+  fi
+  printf '%s\n' "${body//"${CRATES_IO_TOKEN}"/***}"
+}
+
 publish_response="${RUNNER_TEMP}/crate-publish-response.json"
+publish_headers="${RUNNER_TEMP}/crate-publish-headers.txt"
 # Do not retry this immutable PUT. A failed response can still mean the upload committed.
 publish_status="$(curl --proto '=https' --tlsv1.2 -sS \
   --connect-timeout 30 --max-time 300 --request PUT \
+  --user-agent "${user_agent}" \
+  --dump-header "${publish_headers}" \
   --header 'Accept: application/json' \
   --header "Authorization: ${CRATES_IO_TOKEN}" \
   --header 'Content-Type: application/octet-stream' \
@@ -85,6 +106,7 @@ if [[ "${publish_status}" == 2* ]] &&
   jq -e '(.errors // []) | length == 0' "${publish_response}" >/dev/null; then
   :
 else
+  report_publish_response
   for attempt in {1..12}; do
     if exact_archive_is_visible ambiguous; then
       printf '::notice::The ambiguous upload committed %s %s.\n' "${name}" "${version}"
@@ -92,7 +114,6 @@ else
     fi
     sleep 5
   done
-  jq -r '.errors[]?.detail // empty' "${publish_response}" 2>/dev/null || true
   printf '::error::crates.io upload returned HTTP %s; exact bytes are not visible.\n' "${publish_status}"
   exit 1
 fi
