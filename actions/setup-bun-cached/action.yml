@@ -17,6 +17,7 @@ runs:
   using: composite
   steps:
     - name: Setup Bun
+      id: setup-bun
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version-file: ${{ inputs.bun-version-file }}
@@ -29,15 +30,15 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
-        key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        key: bun-install-${{ runner.os }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
         restore-keys: |
-          bun-install-${{ runner.os }}-
+          bun-install-${{ runner.os }}-${{ steps.setup-bun.outputs.bun-version }}-
 
     - name: Restore Bun install cache without saving
       if: inputs.save == 'false'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
-        key: bun-install-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        key: bun-install-${{ runner.os }}-${{ steps.setup-bun.outputs.bun-version }}-${{ hashFiles('bun.lock') }}
         restore-keys: |
-          bun-install-${{ runner.os }}-
+          bun-install-${{ runner.os }}-${{ steps.setup-bun.outputs.bun-version }}-
