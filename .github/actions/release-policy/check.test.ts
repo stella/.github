@@ -64,6 +64,96 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
   });
 
+  const fileSelectors = [
+    { runtime: "node", file: ".node-version", version: "24.15.0" },
+    { runtime: "node", file: ".nvmrc", version: "24.15.0" },
+    { runtime: "python", file: ".python-version", version: "3.13" },
+    { runtime: "python", file: "tools/.python-version", version: "3.13.7" },
+  ];
+  const withFileSelector = (runtime: string, file: string) => {
+    if (runtime === "node")
+      return base.replace("node-version: 22.21.1", `node-version-file: ${file}`);
+    return base.replace(
+      "      - run: npm pack",
+      `      - uses: actions/setup-python@${"5".repeat(40)}
+        with:
+          python-version-file: ${file}
+      - run: npm pack`,
+    );
+  };
+
+  test.each(fileSelectors)("accepts $runtime selector $file", ({ runtime, file, version }) => {
+    expect(() =>
+      validateReleaseWorkflow(withFileSelector(runtime, file), ref, (path) => {
+        expect(path).toBe(file);
+        return `${version}\n`;
+      }),
+    ).not.toThrow();
+  });
+
+  test.each(fileSelectors)(
+    "rejects mutations of $runtime selector $file",
+    ({ runtime, file, version }) => {
+      const workflow = withFileSelector(runtime, file);
+      const mutations = [
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: ../${file}`),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: /${file}`),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: 'C:/outside/${file}'`),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: '..\\${file}'`),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: '\\\\server\\${file}'`),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: other.txt`),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: '\${{ inputs.file }}'`,
+        ),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: ${file}\n          ${runtime}-version: ${version}`,
+        ),
+        workflow.replace(
+          `      - uses: actions/setup-${runtime}@`,
+          `      - if: true\n        uses: actions/setup-${runtime}@`,
+        ),
+        workflow.replace(
+          `      - uses: actions/setup-${runtime}@`,
+          `      - run: echo mutate\n      - uses: actions/setup-${runtime}@`,
+        ),
+        workflow.replace(
+          "          persist-credentials: false",
+          "          persist-credentials: false\n          ref: other",
+        ),
+      ];
+      for (const mutated of mutations) {
+        expect(() => validateReleaseWorkflow(mutated, ref, () => version)).toThrow();
+      }
+      for (const content of [
+        "latest",
+        "3",
+        "24.15",
+        "v24.15.0",
+        `${version}\n${version}`,
+        "^3.13",
+        "3.13rc1",
+      ]) {
+        if (runtime === "python" && content === "24.15") continue;
+        expect(() => validateReleaseWorkflow(workflow, ref, () => content)).toThrow();
+      }
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () => {
+          throw new Error("missing");
+        }),
+      ).toThrow();
+    },
+  );
+
+  test("retains Python literal handling", () => {
+    const workflow = withFileSelector("python", ".python-version").replace(
+      "python-version-file: .python-version",
+      "python-version: '3.13'",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
   test("accepts the tag-bypass App credentials under their changelog names", () => {
     const workflow = base
       .replace("\${{ secrets.RELEASE_APP_ID }}", "\${{ secrets.CHANGELOG_APP_ID }}")
