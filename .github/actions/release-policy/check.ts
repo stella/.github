@@ -8,7 +8,13 @@ type ReadRepositoryFile = (path: string) => string;
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
-const NODE_SETUP_INPUTS = new Set(["node-version", "registry-url"]);
+const NODE_SETUP_INPUTS = new Set(["node-version", "node-version-file", "registry-url"]);
+const PYTHON_FILE_SETUP_INPUTS = new Set(["python-version", "python-version-file"]);
+export const FILE_SELECTOR_ACTIONS = new Set([
+  "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
+  "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
 const HOSTED_RUNTIME_RUNNERS = new Set([
@@ -251,6 +257,50 @@ const validateRuntimeRunner = (job: JsonObject, path: string) => {
   }
 };
 
+const validateRuntimeVersionFile = (
+  inputs: JsonObject,
+  runtime: "node" | "python",
+  readRepositoryFile: ReadRepositoryFile,
+  path: string,
+) => {
+  const versionKey = `${runtime}-version`;
+  const fileKey = `${runtime}-version-file`;
+  if (versionKey in inputs === fileKey in inputs) {
+    fail(`${path}.with must set exactly one ${runtime} version source`);
+  }
+  if (!(fileKey in inputs)) {
+    return;
+  }
+  const label = `${path}.with.${fileKey}`;
+  const versionFile = staticString(inputs[fileKey], label);
+  validateRepositoryPath(versionFile, label);
+  const allowedNames = runtime === "node" ? [".node-version", ".nvmrc"] : [".python-version"];
+  if (!allowedNames.includes(versionFile.split("/").at(-1) ?? "")) {
+    fail(`${label} must identify ${allowedNames.join(" or ")}`);
+  }
+  let version: string;
+  try {
+    version = readRepositoryFile(versionFile).trim();
+  } catch {
+    fail(`${label} must be readable within the repository`);
+  }
+  const versionPattern =
+    runtime === "node" ? EXACT_RUNTIME_VERSION : /^[0-9]+\.[0-9]+(?:\.[0-9]+)?$/;
+  if (!versionPattern.test(version)) {
+    fail(`${label} must select a ${runtime === "node" ? "patch" : "minor or patch"} release`);
+  }
+};
+
+// File selectors must read the original checkout, before mutable build steps.
+// Python literals retain the existing release-policy behavior.
+const runtimeSetupType = (entry: JsonObject, path: string) => {
+  const action = typeof entry.uses === "string" ? entry.uses.toLowerCase() : "";
+  if (action.startsWith("oven-sh/setup-bun@")) return "bun";
+  if (action.startsWith("actions/setup-node@")) return "node";
+  if (!action.startsWith("actions/setup-python@") || entry.with === undefined) return null;
+  return "python-version-file" in object(entry.with, `${path}.with`) ? "python" : null;
+};
+
 const validateRuntimeSetups = (
   value: unknown,
   readRepositoryFile: ReadRepositoryFile,
@@ -264,14 +314,8 @@ const validateRuntimeSetups = (
       return rawStep as JsonObject;
     });
     const runtimeSteps = steps.flatMap((step, index) => {
-      const action = typeof step?.uses === "string" ? step.uses.toLowerCase() : "";
-      if (action.startsWith("oven-sh/setup-bun@")) {
-        return [{ index, type: "bun" as const }];
-      }
-      if (action.startsWith("actions/setup-node@")) {
-        return [{ index, type: "node" as const }];
-      }
-      return [];
+      const type = step === null ? null : runtimeSetupType(step, `${path}[${index}]`);
+      return type === null ? [] : [{ index, type }];
     });
     if (runtimeSteps.length > 0) {
       const checkoutIndexes = steps.flatMap((step, index) => {
@@ -286,12 +330,14 @@ const validateRuntimeSetups = (
         fail(`${path} must set up runtimes before mutable steps`);
       }
       const runtimeOrder = runtimeSteps.map(({ type }) => type);
-      const expectedOrder = runtimeOrder.includes("bun") ? ["bun", "node"] : ["node"];
+      const expectedOrder = ["bun", "node", "python"].filter((type) =>
+        runtimeOrder.some((selected) => selected === type),
+      );
       if (
         new Set(runtimeOrder).size !== runtimeOrder.length ||
         runtimeOrder.some((type, index) => type !== expectedOrder[index])
       ) {
-        fail(`${path} must set up Bun once before Node.js once`);
+        fail(`${path} must set up each runtime once in Bun, Node.js, Python order`);
       }
       const checkoutInputs =
         checkout.with === undefined ? {} : object(checkout.with, `${path}[0].with`);
@@ -325,12 +371,7 @@ const validateRuntimeSetups = (
       if (rawStep === null || typeof rawStep !== "object" || Array.isArray(rawStep)) {
         return false;
       }
-      const action = (rawStep as JsonObject).uses;
-      return (
-        typeof action === "string" &&
-        (action.toLowerCase().startsWith("actions/setup-node@") ||
-          action.toLowerCase().startsWith("oven-sh/setup-bun@"))
-      );
+      return runtimeSetupType(rawStep as JsonObject, `${path}.steps`) !== null;
     })
   ) {
     validateRuntimeRunner(entry, path);
@@ -348,7 +389,16 @@ const validateRuntimeSetups = (
     const inputs = entry.with === undefined ? {} : object(entry.with, `${path}.with`);
     const action = entry.uses.toLowerCase();
     if (
-      (action.startsWith("actions/setup-node@") || action.startsWith("oven-sh/setup-bun@")) &&
+      runtimeSetupType(entry, path) !== null &&
+      ["bun-version-file", "node-version-file", "python-version-file"].some(
+        (key) => key in inputs,
+      ) &&
+      !FILE_SELECTOR_ACTIONS.has(action)
+    ) {
+      fail(`${path}.uses must support the approved runtime file selector`);
+    }
+    if (
+      runtimeSetupType(entry, path) !== null &&
       ("if" in entry || "continue-on-error" in entry || "env" in entry)
     ) {
       fail(`${path} must be an unconditional, fail-closed runtime setup`);
@@ -359,9 +409,12 @@ const validateRuntimeSetups = (
           fail(`${path}.with.${key} is not an approved Node.js setup input`);
         }
       }
-      const version = staticString(inputs["node-version"], `${path}.with.node-version`);
-      if (!EXACT_RUNTIME_VERSION.test(version)) {
-        fail(`${path}.with.node-version must be an exact Node.js release`);
+      validateRuntimeVersionFile(inputs, "node", readRepositoryFile, path);
+      if ("node-version" in inputs) {
+        const version = staticString(inputs["node-version"], `${path}.with.node-version`);
+        if (!EXACT_RUNTIME_VERSION.test(version)) {
+          fail(`${path}.with.node-version must be an exact Node.js release`);
+        }
       }
       if (
         "registry-url" in inputs &&
@@ -370,6 +423,14 @@ const validateRuntimeSetups = (
       ) {
         fail(`${path}.with.registry-url must use the canonical npm registry`);
       }
+    }
+    if (action.startsWith("actions/setup-python@") && "python-version-file" in inputs) {
+      for (const key of Object.keys(inputs)) {
+        if (!PYTHON_FILE_SETUP_INPUTS.has(key)) {
+          fail(`${path}.with.${key} is not an approved Python file setup input`);
+        }
+      }
+      validateRuntimeVersionFile(inputs, "python", readRepositoryFile, path);
     }
     if (action.startsWith("oven-sh/setup-bun@")) {
       for (const key of Object.keys(inputs)) {
@@ -488,7 +549,16 @@ const staticString = (value: unknown, label: string) => {
 
 const validateRepositoryPath = (value: unknown, label: string) => {
   const path = staticString(value, label);
-  if (path.startsWith("/") || path.split("/").includes("..")) {
+  const firstComponent = path.split("/").find((component) => component !== "" && component !== ".");
+  if (firstComponent === ".release-policy") {
+    fail(`${label} must not use the reserved release-policy directory`);
+  }
+  if (
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    /^[a-z]:/i.test(path) ||
+    path.split("/").includes("..")
+  ) {
     fail(`${label} must be repository-relative and must not escape the repository`);
   }
 };

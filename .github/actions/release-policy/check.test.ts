@@ -59,9 +59,191 @@ jobs:
       RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 `;
 
+const approvedBun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6";
+const approvedNode = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
+const approvedPython = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97";
+const bunFileBase = base.replace(`oven-sh/setup-bun@${"4".repeat(40)}`, approvedBun);
+
 describe("release policy", () => {
   test("accepts artifact-only publishers and unprivileged builds", () => {
     expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
+  });
+
+  const fileSelectors = [
+    { runtime: "node", file: ".node-version", version: "24.15.0" },
+    { runtime: "node", file: ".nvmrc", version: "24.15.0" },
+    { runtime: "python", file: ".python-version", version: "3.13" },
+    { runtime: "python", file: "tools/.python-version", version: "3.13.7" },
+  ];
+  const withFileSelector = (runtime: string, file: string) => {
+    if (runtime === "node")
+      return base
+        .replace(`actions/setup-node@${"3".repeat(40)}`, approvedNode)
+        .replace("node-version: 22.21.1", `node-version-file: ${file}`);
+    return base.replace(
+      "      - run: npm pack",
+      `      - uses: ${approvedPython}
+        with:
+          python-version-file: ${file}
+      - run: npm pack`,
+    );
+  };
+
+  test.each(fileSelectors)("accepts $runtime selector $file", ({ runtime, file, version }) => {
+    expect(() =>
+      validateReleaseWorkflow(withFileSelector(runtime, file), ref, (path) => {
+        expect(path).toBe(file);
+        return `${version}\n`;
+      }),
+    ).not.toThrow();
+  });
+
+  test.each(fileSelectors)(
+    "rejects mutations of $runtime selector $file",
+    ({ runtime, file, version }) => {
+      const workflow = withFileSelector(runtime, file);
+      const mutations = [
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: ../${file}`),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: /${file}`),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: 'C:/outside/${file}'`,
+        ),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: '..\\${file}'`,
+        ),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: '\\\\server\\${file}'`,
+        ),
+        workflow.replace(`${runtime}-version-file: ${file}`, `${runtime}-version-file: other.txt`),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: '\${{ inputs.file }}'`,
+        ),
+        workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: ${file}\n          ${runtime}-version: ${version}`,
+        ),
+        workflow.replace(
+          `      - uses: actions/setup-${runtime}@`,
+          `      - if: true\n        uses: actions/setup-${runtime}@`,
+        ),
+        workflow.replace(
+          `      - uses: actions/setup-${runtime}@`,
+          `      - run: echo mutate\n      - uses: actions/setup-${runtime}@`,
+        ),
+        workflow.replace(
+          "          persist-credentials: false",
+          "          persist-credentials: false\n          ref: other",
+        ),
+      ];
+      for (const mutated of mutations) {
+        expect(() => validateReleaseWorkflow(mutated, ref, () => version)).toThrow();
+      }
+      for (const content of [
+        "latest",
+        "3",
+        "24.15",
+        "v24.15.0",
+        `${version}\n${version}`,
+        "^3.13",
+        "3.13rc1",
+      ]) {
+        if (runtime === "python" && content === "24.15") continue;
+        expect(() => validateReleaseWorkflow(workflow, ref, () => content)).toThrow();
+      }
+      expect(() =>
+        validateReleaseWorkflow(workflow, ref, () => {
+          throw new Error("missing");
+        }),
+      ).toThrow();
+    },
+  );
+
+  const selectorCapabilities = [
+    {
+      runtime: "node",
+      file: ".node-version",
+      action: approvedNode,
+      workflow: withFileSelector("node", ".node-version"),
+      content: "24.15.0",
+    },
+    {
+      runtime: "python",
+      file: ".python-version",
+      action: approvedPython,
+      workflow: withFileSelector("python", ".python-version"),
+      content: "3.13",
+    },
+    {
+      runtime: "bun",
+      file: "package.json",
+      action: approvedBun,
+      workflow: bunFileBase.replace("bun-version: 1.4.0", "bun-version-file: package.json"),
+      content: JSON.stringify({ packageManager: "bun@1.4.0" }),
+    },
+  ];
+
+  test.each(selectorCapabilities)(
+    "$runtime file mode requires its supporting action ref",
+    ({ action, workflow, content }) => {
+      expect(() => validateReleaseWorkflow(workflow, ref, () => content)).not.toThrow();
+      for (const replacement of [
+        action.replace(/@[a-f0-9]+$/, `@${"6".repeat(40)}`),
+        action.replace(/@[a-f0-9]+$/, "@v1"),
+      ]) {
+        expect(() =>
+          validateReleaseWorkflow(workflow.replace(action, replacement), ref, () => content),
+        ).toThrow();
+      }
+    },
+  );
+
+  test.each(selectorCapabilities)(
+    "$runtime file mode keeps the policy directory reserved",
+    ({ runtime, file, workflow, content }) => {
+      for (const prefix of [".release-policy/", "./.release-policy/", "././.release-policy/"]) {
+        const mutated = workflow.replace(
+          `${runtime}-version-file: ${file}`,
+          `${runtime}-version-file: ${prefix}${file}`,
+        );
+        expect(() => validateReleaseWorkflow(mutated, ref, () => content)).toThrow(
+          "reserved release-policy directory",
+        );
+      }
+    },
+  );
+
+  test("Python file mode accepts only its two selector inputs", () => {
+    const workflow = withFileSelector("python", ".python-version");
+    for (const input of [
+      "mirror",
+      "python-version-mirror",
+      "architecture",
+      "cache",
+      "allow-prereleases",
+    ]) {
+      expect(() =>
+        validateReleaseWorkflow(
+          workflow.replace(
+            "python-version-file: .python-version",
+            `python-version-file: .python-version\n          ${input}: altered`,
+          ),
+          ref,
+          () => "3.13",
+        ),
+      ).toThrow("approved Python file setup input");
+    }
+  });
+
+  test("retains Python literal handling", () => {
+    const workflow = withFileSelector("python", ".python-version").replace(
+      "python-version-file: .python-version",
+      "python-version: '3.13'",
+    );
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
   });
 
   test("accepts the tag-bypass App credentials under their changelog names", () => {
@@ -80,7 +262,7 @@ describe("release policy", () => {
   });
 
   test("accepts an exact Bun packageManager as the version source", () => {
-    const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
+    const workflow = bunFileBase.replace("bun-version: 1.4.0", "bun-version-file: package.json");
     expect(() =>
       validateReleaseWorkflow(workflow, ref, (path) => {
         expect(path).toBe("package.json");
@@ -98,7 +280,7 @@ describe("release policy", () => {
   ])(
     "rejects non-exact packageManager %s",
     (packageManager) => {
-      const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: package.json");
+      const workflow = bunFileBase.replace("bun-version: 1.4.0", "bun-version-file: package.json");
       expect(() =>
         validateReleaseWorkflow(workflow, ref, () => JSON.stringify({ packageManager })),
       ).toThrow();
@@ -106,7 +288,7 @@ describe("release policy", () => {
   );
 
   test("rejects Bun manifests that escape the repository", () => {
-    const workflow = base.replace("bun-version: 1.4.0", "bun-version-file: ../package.json");
+    const workflow = bunFileBase.replace("bun-version: 1.4.0", "bun-version-file: ../package.json");
     expect(() =>
       validateReleaseWorkflow(workflow, ref, () =>
         JSON.stringify({ packageManager: "bun@1.4.0" }),
@@ -121,7 +303,7 @@ describe("release policy", () => {
     `      - uses: ./mutable-local-action\n`,
     `      - uses: owner/mutable-composite@${"5".repeat(40)}\n`,
   ])("rejects a Bun version file without one immediately preceding checkout", (step) => {
-    const workflow = base
+    const workflow = bunFileBase
       .replace("bun-version: 1.4.0", "bun-version-file: package.json")
       .replace(
         `      - uses: actions/checkout@${"2".repeat(40)}\n        with:\n          persist-credentials: false\n`,
@@ -137,7 +319,7 @@ describe("release policy", () => {
   test.each(["repository", "ref", "path", "github-server-url"])(
     "rejects checkout input %s before a Bun version file",
     (input) => {
-      const workflow = base
+      const workflow = bunFileBase
         .replace("bun-version: 1.4.0", "bun-version-file: package.json")
         .replace(
           "          persist-credentials: false",
@@ -158,7 +340,7 @@ describe("release policy", () => {
   ])(
     "rejects checkout metadata that can weaken source binding",
     (metadata) => {
-      const workflow = base
+      const workflow = bunFileBase
         .replace("bun-version: 1.4.0", "bun-version-file: package.json")
         .replace(
           `      - uses: actions/checkout@${"2".repeat(40)}\n`,
@@ -173,7 +355,7 @@ describe("release policy", () => {
   );
 
   test("rejects a checkout after package.json selects Bun", () => {
-    const workflow = base
+    const workflow = bunFileBase
       .replace("bun-version: 1.4.0", "bun-version-file: package.json")
       .replace(
         `      - uses: actions/setup-node@${"3".repeat(40)}\n`,
@@ -464,7 +646,7 @@ jobs:
     ["floating Bun runtime", base.replace("bun-version: 1.4.0", "bun-version: latest")],
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
-    ["dual Bun version sources", base.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
+    ["dual Bun version sources", bunFileBase.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
     ["publisher command", base.replace(`      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33`, "      - run: npm install")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)", "    if: true")],
