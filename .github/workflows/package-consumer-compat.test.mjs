@@ -6,6 +6,71 @@ import { runInNewContext } from "node:vm";
 import path from "node:path";
 
 const workflow = readFileSync(new URL("./package-consumer-compat.yml", import.meta.url), "utf8");
+// This workflow uses canonical block mappings; unsupported field forms fail closed.
+const workflowFields = (text, name) => {
+  const fields = [];
+  let literalIndent;
+  for (const [index, original] of text.split("\n").entries()) {
+    const indent = original.length - original.trimStart().length;
+    if (literalIndent !== undefined) {
+      if (original.trim() === "" || indent > literalIndent) continue;
+      literalIndent = undefined;
+    }
+    const line = original.replace(/\s+#.*$/, "");
+    if (/^\s*#/.test(line) || line.trim() === "") continue;
+    const field = /^\s*(?:-\s+)?([a-z][a-z0-9-]*):(?:\s+(.*))?$/.exec(line);
+    if (field?.[1] === name) fields.push({ line: index, indent, value: field[2]?.trim() ?? "" });
+    else
+      assert.doesNotMatch(
+        line,
+        new RegExp(`(?:^|[{,\\s])['"]?${name}['"]?:`),
+        `Unsupported ${name} field form at line ${index + 1}`,
+      );
+    if (field && /^[|>][-+0-9]*$/.test(field[2]?.trim() ?? "")) literalIndent = indent;
+  }
+  return fields;
+};
+const scalar = (value) => {
+  if (value.startsWith('"')) return JSON.parse(value);
+  if (value.startsWith("'")) {
+    assert.ok(value.endsWith("'"));
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  return value;
+};
+const actionReferences = (text) =>
+  workflowFields(text, "uses").flatMap(({ value }) => {
+    const uses = scalar(value);
+    assert.equal(typeof uses, "string");
+    if (uses.startsWith("./")) return [];
+    const match = /^([^\s@]+\/[^\s@]+)@([a-f0-9]{40})$/.exec(uses);
+    assert.ok(match, `External action requires a full commit SHA: ${uses}`);
+    return [[match[1].toLowerCase(), match[2]]];
+  });
+const assertReadOnlyPermissions = (text) => {
+  const lines = text.split("\n");
+  const permissions = workflowFields(text, "permissions");
+  assert.ok(permissions.length > 0, "Missing explicit permissions");
+  for (const block of permissions) {
+    if (block.value !== "") {
+      assert.ok(
+        ["{}", "read-all"].includes(scalar(block.value)),
+        "Permissions must be read-only or empty",
+      );
+      continue;
+    }
+    let scopes = 0;
+    for (const line of lines.slice(block.line + 1)) {
+      if (line.trim() === "" || /^\s*#/.test(line)) continue;
+      const indent = line.length - line.trimStart().length;
+      if (indent <= block.indent) break;
+      const scope = /^\s*([a-z][a-z0-9-]*):\s*(read|none)(?:\s+#.*)?$/.exec(line);
+      assert.ok(scope, `Permission scopes must be read or none: ${line.trim()}`);
+      scopes += 1;
+    }
+    assert.ok(scopes > 0, "Permission mapping must be explicit");
+  }
+};
 const runBlock = (name) => {
   const start = workflow.indexOf(`      - name: ${name}\n`);
   assert.ok(start >= 0, `Missing step: ${name}`);
@@ -22,7 +87,8 @@ const runBlock = (name) => {
 
 test("consumer checks use a read-only hosted runner and published tooling input", () => {
   assert.match(workflow, /permissions:\n  contents: read\n/);
-  assert.doesNotMatch(workflow, /secrets:|write-all|issues: write|id-token: write/);
+  assertReadOnlyPermissions(workflow);
+  assert.doesNotMatch(workflow, /secrets:/);
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   for (const name of ["packages", "consumer-node", "tooling-version", "fixture-path"])
     assert.match(
@@ -124,13 +190,31 @@ test("all action references use the shared immutable SHA pins", () => {
     new URL("./changeset-release-pr.yml", import.meta.url),
     "utf8",
   );
-  const approved = new Map(
-    [...sharedWorkflow.matchAll(/uses: ([\w/-]+)@([a-f0-9]{40})\b/g)].map(([, action, sha]) => [
-      action,
-      sha,
-    ]),
+  const approved = new Map(actionReferences(sharedWorkflow));
+  const checkReferences = (text) => {
+    const references = actionReferences(text);
+    assert.ok(references.length > 0);
+    for (const [action, sha] of references)
+      assert.equal(sha, approved.get(action), `Unapproved action: ${action}`);
+  };
+  checkReferences(workflow);
+  assert.throws(
+    () => checkReferences(`${workflow}\n      - uses: actions/checkout@main\n`),
+    /full commit SHA/,
   );
-  const references = [...workflow.matchAll(/uses: ([\w/-]+)@([a-f0-9]{40})\b/g)];
-  assert.equal(references.length, 3);
-  for (const [, action, sha] of references) assert.equal(sha, approved.get(action));
+});
+
+test("every permission block rejects writes, including effective job overrides", () => {
+  assertReadOnlyPermissions(workflow);
+  for (const scope of ["contents", "custom-scope"])
+    assert.throws(
+      () =>
+        assertReadOnlyPermissions(
+          workflow.replace(
+            "    runs-on: ubuntu-24.04\n",
+            `    permissions:\n      ${scope}: write\n    runs-on: ubuntu-24.04\n`,
+          ),
+        ),
+      /read or none/,
+    );
 });
