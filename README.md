@@ -20,6 +20,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `pypi-publish-hardened` | Prepare and verify an exact wheel matrix around top-level PyPI trusted publishing |
 | `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
 | `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
+| `package-consumer-compat.yml` | Check packed packages on the consumer toolchain nightly |
 
 ### Composite Actions
 
@@ -46,6 +47,52 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 ---
 
 ## Usage
+
+### Package Consumer Compatibility
+
+Call `package-consumer-compat.yml` from a scheduled or manually dispatched
+workflow. It builds the caller once with its tracked Node 26 selector and Bun
+version, then uses a published `@stll/oxlint-config` release to check packed
+packages in isolated Node 22 projects with both npm and pnpm. The runner verifies
+the official Node archive checksum and uses the consumer package-manager and
+TypeScript versions from the published tooling policy.
+
+Required inputs are `packages` (a JSON array of package directories),
+`consumer-node` (the exact patch in that policy), `tooling-version` (an exact
+published release containing `stll-consumer-compat`), and `fixture-path` (a
+directory containing `consumer-compat.json`). Pin the reusable workflow to a
+reviewed commit. Adoption requires the tooling release to be published first;
+development branch names and pull-request heads are not tooling versions.
+
+Each fixture declaration names a package directory, fixture directory, kind
+(`node` or `react`), and explicit build and smoke command argument arrays:
+
+```json
+{
+  "packages": [
+    {
+      "package": "packages/library",
+      "fixture": "library",
+      "kind": "node",
+      "build": ["npm", "run", "build"],
+      "smoke": ["node", "smoke.mjs"]
+    }
+  ]
+}
+```
+
+Fixture directories contain their own `package.json`, TypeScript configuration,
+and usage/build/smoke files. Commands run inside the copied fixture; they must use
+`node` or a declared `npm run`/`pnpm run` script. The runner supplies artifact
+dependencies and consumer pins. Fixture dependency-manager configuration and
+overrides are unsupported. React fixtures use the oldest published version
+satisfying the package's React peer range; their smoke must render the declared
+component. Node fixtures must import and call the declared public entry.
+
+This reusable workflow has read-only permissions and accepts no secrets. The
+calling repository owns nightly failure alerts: open or update one failure issue
+and use its existing notification workflow. Consumer checks are separate from
+the cheap static publish-contract check required on pull requests.
 
 ### Dependabot Bun Dedupe
 
