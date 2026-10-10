@@ -72,6 +72,9 @@ describe("release policy", () => {
   const fileSelectors = [
     { runtime: "node", file: ".node-version", version: "24.15.0" },
     { runtime: "node", file: ".nvmrc", version: "24.15.0" },
+    { runtime: "node", file: ".node-version", version: "26.x" },
+    { runtime: "node", file: ".nvmrc", version: "26" },
+    { runtime: "node", file: "tools/.node-version", version: "26.0" },
     { runtime: "python", file: ".python-version", version: "3.13" },
     { runtime: "python", file: "tools/.python-version", version: "3.13.7" },
   ];
@@ -144,14 +147,11 @@ describe("release policy", () => {
       }
       for (const content of [
         "latest",
-        "3",
-        "24.15",
         "v24.15.0",
         `${version}\n${version}`,
         "^3.13",
         "3.13rc1",
       ]) {
-        if (runtime === "python" && content === "24.15") continue;
         expect(() => validateReleaseWorkflow(workflow, ref, () => content)).toThrow();
       }
       expect(() =>
@@ -161,6 +161,34 @@ describe("release policy", () => {
       ).toThrow();
     },
   );
+
+  test("Node file selectors accept canonical numeric release classes and reject other syntax", () => {
+    for (const file of [".node-version", ".nvmrc"]) {
+      const workflow = withFileSelector("node", file);
+      for (const major of [1, 22, 26, 100]) {
+        for (const version of [
+          String(major), `${major}.x`, `${major}.0`, `${major}.12`, `${major}.0.0`, `${major}.12.3`,
+        ]) {
+          expect(() => validateReleaseWorkflow(workflow, ref, () => `${version}\n`)).not.toThrow();
+        }
+      }
+      for (const version of [
+        "9007199254740991.x", "26.9007199254740991", "26.0.9007199254740991",
+      ]) {
+        expect(() => validateReleaseWorkflow(workflow, ref, () => version)).not.toThrow();
+      }
+      for (const version of [
+        "", "0", "0.x", "026", "026.x", "26.01", "26.1.00", "26.1.x", "26.X", "26.*",
+        "*", "^26", ">=26", "26 || 28", "latest", "lts/*", "lts/jod", "v26",
+        "26.0.0-rc.1", "26.0.0+build", "${{ inputs.node }}", "26\n28",
+        "9007199254740992.x", "26.9007199254740992", "26.0.9007199254740992",
+      ]) {
+        expect(() => validateReleaseWorkflow(workflow, ref, () => version)).toThrow();
+      }
+    }
+    for (const content of ["26", "26.x"])
+      expect(() => validateReleaseWorkflow(withFileSelector("python", ".python-version"), ref, () => content)).toThrow();
+  });
 
   const selectorCapabilities = [
     {

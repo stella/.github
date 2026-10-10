@@ -7,6 +7,7 @@ type ReadRepositoryFile = (path: string) => string;
 
 const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const NODE_FILE_VERSION = /^[1-9][0-9]*(?:\.x|\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?)?$/;
 const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
 const NODE_SETUP_INPUTS = new Set(["node-version", "node-version-file", "registry-url"]);
 const PYTHON_FILE_SETUP_INPUTS = new Set(["python-version", "python-version-file"]);
@@ -285,9 +286,12 @@ const validateRuntimeVersionFile = (
     fail(`${label} must be readable within the repository`);
   }
   const versionPattern =
-    runtime === "node" ? EXACT_RUNTIME_VERSION : /^[0-9]+\.[0-9]+(?:\.[0-9]+)?$/;
-  if (!versionPattern.test(version)) {
-    fail(`${label} must select a ${runtime === "node" ? "patch" : "minor or patch"} release`);
+    runtime === "node" ? NODE_FILE_VERSION : /^[0-9]+\.[0-9]+(?:\.[0-9]+)?$/;
+  const safeNodeComponents = runtime !== "node" || version.split(".").every((part) =>
+    part === "x" || (Number.isSafeInteger(Number(part)) && Number(part) >= 0),
+  );
+  if (!versionPattern.test(version) || !safeNodeComponents) {
+    fail(`${label} must select a ${runtime === "node" ? "stable numeric major, major.x, minor, or patch" : "minor or patch"} release`);
   }
 };
 
