@@ -10,7 +10,7 @@ const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
 const NODE_SETUP_INPUTS = new Set(["node-version", "node-version-file", "registry-url"]);
 const PYTHON_FILE_SETUP_INPUTS = new Set(["python-version", "python-version-file"]);
-const FILE_SELECTOR_ACTIONS = new Set([
+export const FILE_SELECTOR_ACTIONS = new Set([
   "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
   "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
   "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
