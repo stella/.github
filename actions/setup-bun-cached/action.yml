@@ -25,8 +25,10 @@ runs:
     - name: Restore Bun install cache
       # Caches downloaded package tarballs (~/.bun/install/cache), not
       # node_modules, so `bun ci` still resolves against the frozen lockfile
-      # and only skips re-downloading unchanged packages.
-      if: inputs.save != 'false'
+      # and only skips re-downloading unchanged packages. Self-hosted runners
+      # keep that directory between jobs, so moving it through the Actions
+      # cache only adds transfer time.
+      if: runner.environment == 'github-hosted' && inputs.save != 'false'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
@@ -35,7 +37,7 @@ runs:
           bun-install-${{ runner.os }}-${{ steps.setup-bun.outputs.bun-version }}-
 
     - name: Restore Bun install cache without saving
-      if: inputs.save == 'false'
+      if: runner.environment == 'github-hosted' && inputs.save == 'false'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
