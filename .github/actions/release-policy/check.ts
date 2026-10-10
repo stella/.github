@@ -9,6 +9,12 @@ const SHA = /^[0-9a-f]{40}$/;
 const EXACT_RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credentials"]);
 const NODE_SETUP_INPUTS = new Set(["node-version", "node-version-file", "registry-url"]);
+const PYTHON_FILE_SETUP_INPUTS = new Set(["python-version", "python-version-file"]);
+const FILE_SELECTOR_ACTIONS = new Set([
+  "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
+  "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
 const HOSTED_RUNTIME_RUNNERS = new Set([
@@ -384,6 +390,15 @@ const validateRuntimeSetups = (
     const action = entry.uses.toLowerCase();
     if (
       runtimeSetupType(entry, path) !== null &&
+      ["bun-version-file", "node-version-file", "python-version-file"].some(
+        (key) => key in inputs,
+      ) &&
+      !FILE_SELECTOR_ACTIONS.has(action)
+    ) {
+      fail(`${path}.uses must support the approved runtime file selector`);
+    }
+    if (
+      runtimeSetupType(entry, path) !== null &&
       ("if" in entry || "continue-on-error" in entry || "env" in entry)
     ) {
       fail(`${path} must be an unconditional, fail-closed runtime setup`);
@@ -410,6 +425,11 @@ const validateRuntimeSetups = (
       }
     }
     if (action.startsWith("actions/setup-python@") && "python-version-file" in inputs) {
+      for (const key of Object.keys(inputs)) {
+        if (!PYTHON_FILE_SETUP_INPUTS.has(key)) {
+          fail(`${path}.with.${key} is not an approved Python file setup input`);
+        }
+      }
       validateRuntimeVersionFile(inputs, "python", readRepositoryFile, path);
     }
     if (action.startsWith("oven-sh/setup-bun@")) {
@@ -529,7 +549,16 @@ const staticString = (value: unknown, label: string) => {
 
 const validateRepositoryPath = (value: unknown, label: string) => {
   const path = staticString(value, label);
-  if (path.startsWith("/") || path.includes("\\") || /^[a-z]:/i.test(path) || path.split("/").includes("..")) {
+  const firstComponent = path.split("/").find((component) => component !== "" && component !== ".");
+  if (firstComponent === ".release-policy") {
+    fail(`${label} must not use the reserved release-policy directory`);
+  }
+  if (
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    /^[a-z]:/i.test(path) ||
+    path.split("/").includes("..")
+  ) {
     fail(`${label} must be repository-relative and must not escape the repository`);
   }
 };

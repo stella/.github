@@ -545,8 +545,9 @@ use the same immutable shared commit as the policy.
 Prefer repository version files for release builds: `node-version-file` referencing
 `.node-version` or `.nvmrc`, `bun-version-file` referencing a `package.json` with an
 exact `packageManager`, and `python-version-file` referencing `.python-version`.
-Node files select an exact patch release; Python files select a minor or patch
-release. Select exactly one source per runtime. The files must resolve inside the
+File selectors require a reviewed setup-action revision that implements the
+input; Python file setup accepts version inputs only. Node files select an
+exact patch release; Python files select a minor or patch release. Select exactly one source per runtime. The files must resolve inside the
 repository, without symlinks, and runtime setup must follow the sole unconditional
 checkout before mutable steps. Use Bun, Node.js, then Python order when combining
 setups. Literal Node.js and Bun inputs still require exact patch releases; Python
