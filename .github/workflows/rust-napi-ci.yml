@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: "bun install --frozen-lockfile --no-verify"
+      typecheck:
+        description: "Run typecheck, compiler parity, and a seeded-error rejection probe"
+        required: false
+        type: boolean
+        default: false
 
 env:
   CARGO_INCREMENTAL: 0
@@ -87,6 +92,38 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: ${{ inputs.install-command }}
       - run: bun run lint
+
+  typecheck:
+    name: Typecheck and parity
+    if: inputs.trusted == 'true' && inputs.typecheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: ${{ inputs.install-command }}
+      - run: bun run check:toolchain
+      - run: bun run typecheck
+      - run: bun run check:typecheck-parity
+      - name: Reject a seeded type error
+        shell: bash
+        run: |
+          probe=$(mktemp src/typecheck-rejection-XXXXXX.ts)
+          trap 'rm -f "$probe"' EXIT
+          printf 'export const typecheckRejectionProbe: string = 123;\n' > "$probe"
+          log="$RUNNER_TEMP/typecheck-rejection.log"
+          if bun run typecheck > "$log" 2>&1; then
+            cat "$log"
+            echo "::error::Typecheck accepted a seeded type error."
+            exit 1
+          fi
+          cat "$log"
+          grep -F "$(basename "$probe")" "$log" | grep -E 'TS2322([^0-9]|$)'
 
   runtime-compat:
     name: Runtime - ${{ matrix.runtime }} / ${{ matrix.os }}
