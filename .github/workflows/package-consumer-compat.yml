@@ -1,0 +1,127 @@
+name: Package consumer compatibility
+
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: JSON array of public package directories in the caller repository.
+        required: true
+        type: string
+      consumer-node:
+        description: Exact Node 22 patch from the published tooling consumer policy.
+        required: true
+        type: string
+      tooling-version:
+        description: Exact published @stll/oxlint-config release containing stll-consumer-compat.
+        required: true
+        type: string
+      fixture-path:
+        description: Repository-relative directory containing consumer-compat.json and declared fixtures.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  consumer-compat:
+    name: Published package consumer compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Validate nightly invocation
+        shell: bash
+        env:
+          CONSUMER_NODE: ${{ inputs.consumer-node }}
+          TOOLING_VERSION: ${{ inputs.tooling-version }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            schedule|workflow_dispatch) ;;
+            *) echo '::error::Consumer compatibility runs only on schedule or manual dispatch.'; exit 1 ;;
+          esac
+          stable_release='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          [[ "$CONSUMER_NODE" =~ ^22\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo '::error::consumer-node must be an exact stable Node 22 patch.'
+            exit 1
+          }
+          [[ "$TOOLING_VERSION" =~ ^${stable_release}$ ]] || {
+            echo '::error::tooling-version must be an exact published stable release.'
+            exit 1
+          }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Validate caller runtime and fixture inputs
+        shell: bash
+        env:
+          PACKAGE_PATHS: ${{ inputs.packages }}
+          FIXTURE_PATH: ${{ inputs.fixture-path }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import path from 'node:path';
+          assert.equal(process.versions.node.split('.')[0], '26', 'Caller build must use Node 26.');
+          const relative = (value) => {
+            assert.equal(typeof value, 'string', 'Package and fixture paths must be strings.');
+            assert.ok(value && !value.includes('\0') && !value.includes('\\') && !path.posix.isAbsolute(value), 'Paths must be repository-relative.');
+            assert.ok(value.split('/').every((part) => part && part !== '..'), 'Paths must stay inside the repository.');
+            return path.posix.normalize(value);
+          };
+          const packages = JSON.parse(process.env.PACKAGE_PATHS);
+          assert.ok(Array.isArray(packages) && packages.length > 0, 'packages must be a nonempty JSON array.');
+          const normalized = packages.map(relative);
+          assert.equal(new Set(normalized).size, normalized.length, 'Package paths must be unique.');
+          relative(process.env.FIXTURE_PATH);
+          NODE
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Build caller packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Install published consumer runner
+        id: tooling
+        shell: bash
+        env:
+          TOOLING_VERSION: ${{ inputs.tooling-version }}
+          npm_config_userconfig: /dev/null
+          npm_config_registry: https://registry.npmjs.org/
+        run: |
+          set -euo pipefail
+          tooling_dir="$(mktemp -d "$RUNNER_TEMP/package-consumer-tooling.XXXXXX")"
+          cd "$tooling_dir"
+          npm install --prefix "$tooling_dir" --ignore-scripts --omit=peer --package-lock=false --no-audit --no-fund "@stll/oxlint-config@$TOOLING_VERSION"
+          [[ -x "$tooling_dir/node_modules/.bin/stll-consumer-compat" ]] || {
+            echo '::error::Published tooling release does not contain stll-consumer-compat.'
+            exit 1
+          }
+          printf 'directory=%s\n' "$tooling_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Check packed consumers with npm and pnpm
+        shell: bash
+        env:
+          TOOLING_DIR: ${{ steps.tooling.outputs.directory }}
+          PACKAGE_PATHS: ${{ inputs.packages }}
+          CONSUMER_NODE: ${{ inputs.consumer-node }}
+          FIXTURE_PATH: ${{ inputs.fixture-path }}
+        run: |
+          set -euo pipefail
+          "$TOOLING_DIR/node_modules/.bin/stll-consumer-compat" \
+            --packages "$PACKAGE_PATHS" \
+            --consumer-node "$CONSUMER_NODE" \
+            --fixture-path "$FIXTURE_PATH"
