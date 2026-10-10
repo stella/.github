@@ -12,10 +12,26 @@ inputs:
     description: Save the install cache after the job; false restores only
     required: false
     default: "true"
+  install-cache:
+    description: >-
+      Where ~/.bun/install/cache lives between jobs: actions moves it through
+      the Actions cache; runner leaves it on a persistent self-hosted runner,
+      which already keeps it. Ephemeral runners need actions.
+    required: false
+    default: actions
 
 runs:
   using: composite
   steps:
+    - name: Check install cache mode
+      if: inputs.install-cache != 'actions' && inputs.install-cache != 'runner'
+      shell: bash
+      env:
+        INSTALL_CACHE: ${{ inputs.install-cache }}
+      run: |
+        echo "::error::install-cache must be actions or runner, got '$INSTALL_CACHE'"
+        exit 1
+
     - name: Setup Bun
       id: setup-bun
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -25,10 +41,8 @@ runs:
     - name: Restore Bun install cache
       # Caches downloaded package tarballs (~/.bun/install/cache), not
       # node_modules, so `bun ci` still resolves against the frozen lockfile
-      # and only skips re-downloading unchanged packages. Self-hosted runners
-      # keep that directory between jobs, so moving it through the Actions
-      # cache only adds transfer time.
-      if: runner.environment == 'github-hosted' && inputs.save != 'false'
+      # and only skips re-downloading unchanged packages.
+      if: inputs.install-cache == 'actions' && inputs.save != 'false'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
@@ -37,7 +51,7 @@ runs:
           bun-install-${{ runner.os }}-${{ steps.setup-bun.outputs.bun-version }}-
 
     - name: Restore Bun install cache without saving
-      if: runner.environment == 'github-hosted' && inputs.save == 'false'
+      if: inputs.install-cache == 'actions' && inputs.save == 'false'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
