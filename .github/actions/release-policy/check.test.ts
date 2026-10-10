@@ -59,6 +59,7 @@ jobs:
       RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 `;
 
+const approvedBun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6";
 const approvedNode = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
 const approvedPython = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97";
 const bunFileBase = base.replace(`oven-sh/setup-bun@${"4".repeat(40)}`, approvedBun);
