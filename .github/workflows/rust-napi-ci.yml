@@ -179,6 +179,8 @@ jobs:
     name: Runtime - ${{ matrix.runtime }} / ${{ matrix.os }}
     if: inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
     permissions:
       contents: read
       packages: read
@@ -227,6 +229,7 @@ jobs:
     permissions:
       contents: read
     env:
+      RUSTUP_TOOLCHAIN: 1.99.0
       STELLA_SOURCE_LINT_REV: a1bd81740ecb4b66999f56d1716e1190c4e7272f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
@@ -293,6 +296,8 @@ jobs:
     name: Build - ${{ matrix.settings.target }}
     if: inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ${{ matrix.settings.os }}
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
     permissions:
       contents: read
     strategy:
