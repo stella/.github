@@ -201,6 +201,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.99.0
           targets: wasm32-wasip1-threads
       - name: Ensure cargo on PATH
         # dtolnay/rust-toolchain only prepends $CARGO_HOME/bin to PATH when it
@@ -229,6 +230,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.99.0
           components: clippy, rustfmt
       - name: Ensure cargo on PATH
         # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
@@ -303,6 +305,7 @@ jobs:
       - if: inputs.build-changed == 'true'
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.99.0
           targets: ${{ matrix.settings.target }}
       - if: inputs.build-changed == 'true'
         name: Ensure cargo on PATH

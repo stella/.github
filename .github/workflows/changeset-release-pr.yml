@@ -101,6 +101,8 @@ jobs:
 
       - if: steps.lifecycle.outputs.may-update == 'true' && (inputs.sync-cargo-inherited-lock || inputs.prepare-rust-wasm)
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.99.0
 
       # rust-toolchain only prepends the toolchain when it installs one. Keep
       # Cargo available when the runner already has the requested toolchain.
@@ -115,7 +117,7 @@ jobs:
           CARGO_MANIFEST_PATH: ${{ inputs.cargo-manifest }}
         run: |
           set -euo pipefail
-          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown --toolchain 1.99.0
 
           mapfile -t versions < <(
             cargo metadata \

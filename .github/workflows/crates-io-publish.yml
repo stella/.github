@@ -20,7 +20,7 @@ on:
         description: Rust toolchain used to package the crate.
         required: false
         type: string
-        default: stable
+        default: 1.99.0
       environment:
         description: GitHub environment registered with crates.io.
         required: false
@@ -45,9 +45,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Validate Rust toolchain
+        env:
+          RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
+        run: |
+          if [ "$RUST_TOOLCHAIN" != "1.99.0" ]; then
+            echo "::error::rust-toolchain must be 1.99.0"
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          toolchain: ${{ inputs.rust-toolchain }}
+          toolchain: 1.99.0
       - name: Checkout immutable publisher tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

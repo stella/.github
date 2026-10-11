@@ -49,3 +49,14 @@ test("all privileged third-party actions are immutable", () => {
     assert.match(use[1], /@[0-9a-f]{40}$/);
   }
 });
+
+test("every shared Rust setup selects the exact stable toolchain", () => {
+  for (const file of ["crates-io-publish.yml", "rust-napi-ci.yml", "changeset-release-pr.yml"]) {
+    const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+    const setups = [...source.matchAll(/uses: dtolnay\/rust-toolchain@[^\n]+\n([\s\S]*?)(?=\n      -|$)/g)];
+    assert.ok(setups.length > 0, file);
+    for (const setup of setups) {
+      assert.match(setup[1], /\n?        with:\n          toolchain: 1\.99\.0(?:\n|$)/, file);
+    }
+  }
+});
