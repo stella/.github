@@ -35,6 +35,7 @@ runs:
       id: sync
       shell: bash
       env:
+        RUSTUP_TOOLCHAIN: 1.99.0
         SYNC_MODE: ${{ inputs.mode }}
         CARGO_MANIFEST_PATH: ${{ inputs.manifest }}
         CARGO_LOCKFILE_PATH: ${{ inputs.lockfile }}

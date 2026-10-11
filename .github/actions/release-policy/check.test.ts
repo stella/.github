@@ -576,6 +576,19 @@ jobs:
       id-token: write
 `;
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+    for (const toolchain of ["1.99.0", "stable", "nightly", "1.98.0", "1.99"]) {
+      const validate = () =>
+        validateReleaseWorkflow(
+          workflow.replace(
+            "      manifest-path: crates/core/Cargo.toml",
+            `      manifest-path: crates/core/Cargo.toml\n      rust-toolchain: "${toolchain}"`,
+          ),
+          ref,
+        );
+      if (toolchain === "1.99.0") expect(validate).not.toThrow();
+      else expect(validate).toThrow("rust-toolchain must be 1.99.0");
+    }
+
     expect(() =>
       validateReleaseWorkflow(
         workflow.replace(

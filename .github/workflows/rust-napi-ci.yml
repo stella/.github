@@ -179,6 +179,8 @@ jobs:
     name: Runtime - ${{ matrix.runtime }} / ${{ matrix.os }}
     if: inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
     permissions:
       contents: read
       packages: read
@@ -201,6 +203,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.99.0
           targets: wasm32-wasip1-threads
       - name: Ensure cargo on PATH
         # dtolnay/rust-toolchain only prepends $CARGO_HOME/bin to PATH when it
@@ -225,10 +228,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
+      STELLA_SOURCE_LINT_REV: a1bd81740ecb4b66999f56d1716e1190c4e7272f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.99.0
           components: clippy, rustfmt
       - name: Ensure cargo on PATH
         # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
@@ -237,6 +244,22 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: rust-checks
+      - name: Cache stable source checker
+        id: source-lint-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/stella-source-lint/bin
+          key: stella-source-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.STELLA_SOURCE_LINT_REV }}
+      - name: Install stable source checker
+        if: steps.source-lint-cache.outputs.cache-hit != 'true'
+        run: >-
+          cargo install --git https://github.com/stella/tooling
+          --rev "$STELLA_SOURCE_LINT_REV" --locked
+          --root "$RUNNER_TEMP/stella-source-lint" stella_source_lint
+      - name: Add stable source checker to PATH
+        run: echo "$RUNNER_TEMP/stella-source-lint/bin" >> "$GITHUB_PATH"
+      - name: Stable source lint
+        run: cargo stella-lint .
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -Dwarnings
       - name: Format
@@ -273,6 +296,8 @@ jobs:
     name: Build - ${{ matrix.settings.target }}
     if: inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ${{ matrix.settings.os }}
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
     permissions:
       contents: read
     strategy:
@@ -303,6 +328,7 @@ jobs:
       - if: inputs.build-changed == 'true'
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.99.0
           targets: ${{ matrix.settings.target }}
       - if: inputs.build-changed == 'true'
         name: Ensure cargo on PATH

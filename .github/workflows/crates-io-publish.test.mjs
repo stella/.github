@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 
 const workflow = readFileSync(new URL("./crates-io-publish.yml", import.meta.url), "utf8");
@@ -48,4 +48,46 @@ test("all privileged third-party actions are immutable", () => {
   for (const use of workflow.matchAll(/uses:\s*([^\s#]+)/g)) {
     assert.match(use[1], /@[0-9a-f]{40}$/);
   }
+});
+
+test("every shared Rust setup selects the exact stable toolchain", () => {
+  const root = new URL("../", import.meta.url);
+  let count = 0;
+  for (const file of readdirSync(root, { recursive: true })) {
+    if (!/\.ya?ml$/.test(file)) continue;
+    const source = readFileSync(new URL(file, root), "utf8");
+    const setups = source.matchAll(/uses: (?:dtolnay\/rust-toolchain|actions-rust-lang\/setup-rust-toolchain)@[^\n]+\n([\s\S]*?)(?=\n\s*-|$)/g);
+    for (const setup of setups) {
+      count++;
+      assert.match(setup[1], /with:\n\s+toolchain: 1\.99\.0(?:\n|$)/, file);
+    }
+  }
+  assert.ok(count > 0);
+});
+
+
+test("shared Rust execution contexts force the pin over caller toolchain files", () => {
+  const root = new URL("../", import.meta.url);
+  const usesRust = (source) => /uses:\s*(?:dtolnay\/rust-toolchain|actions-rust-lang\/setup-rust-toolchain)@|\bcargo\s+|\brustup\s+|\bCARGO_MANIFEST_PATH\b/.test(source);
+  let count = 0;
+  for (const file of readdirSync(root, { recursive: true })) {
+    if (!/\.ya?ml$/.test(file)) continue;
+    const source = readFileSync(new URL(file, root), "utf8");
+    const jobs = source.match(/^jobs:\n([\s\S]*)/m);
+    const contexts = jobs
+      ? jobs[1].matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:|$(?![\s\S]))/gm)
+      : source.matchAll(/^    - ([\s\S]*?)(?=^    - |$(?![\s\S]))/gm);
+    for (const context of contexts) {
+      const body = jobs ? context[2] : context[1];
+      if (!usesRust(body)) continue;
+      count++;
+      const indent = jobs ? "    " : "      ";
+      const env = body.match(new RegExp(`^${indent}env:\n((?:${indent}  [^\n]*\n)+)`, "m"));
+      assert.ok(env, `${file}: Rust context must declare env`);
+      assert.match(env[1], /^\s+RUSTUP_TOOLCHAIN: 1\.99\.0(?:\n|$)/m, file);
+      for (const override of body.matchAll(/RUSTUP_TOOLCHAIN:\s*([^\n]+)/g))
+        assert.equal(override[1], "1.99.0", `${file}: Rust pin override`);
+    }
+  }
+  assert.ok(count > 0);
 });

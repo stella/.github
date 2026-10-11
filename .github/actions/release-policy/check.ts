@@ -771,8 +771,8 @@ const validateCratesPublisher = (job: JsonObject, ref: string, label: string) =>
   }
   if ("rust-toolchain" in inputs) {
     const toolchain = staticString(inputs["rust-toolchain"], `${label}.with.rust-toolchain`);
-    if (!/^(?:stable|[0-9]+\.[0-9]+(?:\.[0-9]+)?)$/.test(toolchain)) {
-      fail(`${label}.with.rust-toolchain must be stable or a numeric Rust release`);
+    if (toolchain !== "1.99.0") {
+      fail(`${label}.with.rust-toolchain must be 1.99.0`);
     }
   }
   if ("environment" in inputs && inputs.environment !== "crates-io") {
