@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 
 const workflow = readFileSync(new URL("./crates-io-publish.yml", import.meta.url), "utf8");
@@ -51,12 +51,16 @@ test("all privileged third-party actions are immutable", () => {
 });
 
 test("every shared Rust setup selects the exact stable toolchain", () => {
-  for (const file of ["crates-io-publish.yml", "rust-napi-ci.yml", "changeset-release-pr.yml"]) {
-    const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
-    const setups = [...source.matchAll(/uses: dtolnay\/rust-toolchain@[^\n]+\n([\s\S]*?)(?=\n      -|$)/g)];
-    assert.ok(setups.length > 0, file);
+  const root = new URL("../", import.meta.url);
+  let count = 0;
+  for (const file of readdirSync(root, { recursive: true })) {
+    if (!/\.ya?ml$/.test(file)) continue;
+    const source = readFileSync(new URL(file, root), "utf8");
+    const setups = source.matchAll(/uses: (?:dtolnay\/rust-toolchain|actions-rust-lang\/setup-rust-toolchain)@[^\n]+\n([\s\S]*?)(?=\n\s*-|$)/g);
     for (const setup of setups) {
-      assert.match(setup[1], /\n?        with:\n          toolchain: 1\.99\.0(?:\n|$)/, file);
+      count++;
+      assert.match(setup[1], /with:\n\s+toolchain: 1\.99\.0(?:\n|$)/, file);
     }
   }
+  assert.ok(count > 0);
 });
