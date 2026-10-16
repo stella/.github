@@ -94,3 +94,92 @@ for (const [scenario, output, status, accepted] of [
     }
   });
 }
+
+const sectionFor = (name) => workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][\w-]*:\n/u)[0];
+const detect = sectionFor("detect");
+const build = sectionFor("build");
+const artifactTest = sectionFor("test");
+const detectScript = detect.split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+
+for (const value of ["true", "false", "", "TRUE", "true\n", "$(exit 1)"]) {
+  test(`build selection normalizes the caller flag ${JSON.stringify(value)}`, () => {
+    const root = mkdtempSync(join(tmpdir(), "napi-build-selection-"));
+    try {
+      const output = join(root, "output");
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", detectScript], {
+        env: { ...process.env, BUILD_CHANGED: value, GITHUB_OUTPUT: output },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(output, "utf8"), `build-changed=${value === "true"}\n`);
+      assert.equal(result.stdout.includes("::notice::"), value !== "true");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+const buildJobs = [...workflow.matchAll(/^  ([\w-]+):\n    name: Build - ([^\n]+)/gmu)].map((match) => ({ id: match[1], target: match[2], section: sectionFor(match[1]) }));
+const testJobs = [...workflow.matchAll(/^  ([\w-]+):\n    name: Test \(([^)]+)\)/gmu)].map((match) => ({ id: match[1], os: match[2], section: sectionFor(match[1]) }));
+
+test("static required check names survive skipping before runner allocation", () => {
+  // Effective main-branch rules in aho-corasick, regex-set and fuzzy-search
+  // require these names under the caller's `napi-ci / ` prefix.
+  const required = [
+    "Build - x86_64-apple-darwin", "Build - aarch64-apple-darwin",
+    "Build - x86_64-unknown-linux-gnu", "Build - aarch64-unknown-linux-gnu",
+    "Build - wasm32-wasip1-threads", "Test (ubuntu-latest)", "Test (macos-15)",
+  ];
+  const declared = [...buildJobs, ...testJobs].map(({ section }) => section.match(/    name: ([^\n]+)/u)[1]);
+  assert.deepEqual(declared.toSorted(), required.toSorted());
+  for (const { section } of [...buildJobs, ...testJobs]) {
+    assert.doesNotMatch(section, /matrix|strategy:|always\(|!cancelled\(/u);
+    assert.match(section, /if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'\n/u);
+    assert.doesNotMatch(section, /inputs.build-changed|Skip /u);
+  }
+});
+
+test("one permission-free selection job gates all build and test jobs", () => {
+  assert.match(workflow, /      build-changed:\n[^]*?        type: string\n        default: "true"/u);
+  assert.match(detect, /if: inputs.trusted == 'true' && !inputs.typecheck-only\n/u);
+  assert.match(detect, /permissions: \{\}/u);
+  assert.match(detect, /build-changed: \$\{\{ steps.select.outputs.build-changed \}\}/u);
+  assert.match(detect, /BUILD_CHANGED: \$\{\{ inputs.build-changed \}\}/u);
+  assert.doesNotMatch(detect, /uses:|matrix:|checkout|install-command/u);
+  for (const { section } of buildJobs) assert.match(section, /needs: \[detect\]/u);
+  for (const { section } of testJobs) {
+    const needs = section.match(/needs: \[([^\]]+)\]/u)[1].split(", ");
+    assert.deepEqual(needs.toSorted(), ["detect", ...buildJobs.map(({ id }) => id)].toSorted());
+  }
+});
+
+test("build jobs share steps and keep target, runner and build kind consistent", () => {
+  assert.match(build, /steps: &build-steps/u);
+  for (const { id, target, section } of buildJobs) {
+    const envTarget = section.match(/BUILD_TARGET: ([^\n]+)/u)[1];
+    assert.equal(envTarget, target, "artifact target must match the required check");
+    const kind = section.match(/BUILD_KIND: ([^\n]+)/u)[1];
+    assert.equal(kind, target.startsWith("wasm") ? "wasm" : target === "aarch64-unknown-linux-gnu" ? "cross" : "native");
+    assert.match(section, /RUSTUP_TOOLCHAIN: 1\.99\.0/u);
+    assert.equal(section.match(/runs-on: ([^\n]+)/u)[1], target.includes("apple") ? "macos-15" : "ubuntu-latest");
+    if (id !== "build") assert.match(section, /steps: \*build-steps/u);
+  }
+  assert.match(build, /targets: \$\{\{ env.BUILD_TARGET \}\}/u);
+  assert.match(build, /shared-key: build-\$\{\{ env.BUILD_TARGET \}\}/u);
+  assert.match(build, /if: >-\n          env.BUILD_KIND == 'native'/u);
+  assert.match(build, /if: env.BUILD_KIND == 'cross'\n[^]*?--use-napi-cross/u);
+  assert.match(build, /if: env.BUILD_KIND == 'wasm'\n        run: bun run build:wasm/u);
+  assert.match(build, /name: bindings-\$\{\{ env.BUILD_TARGET \}\}/u);
+  assert.match(build, /path: \|\n            \*\.node\n            \*\.wasm\n            !\*\.debug.wasm\n            \*\.cjs\n            \*\.wasi-browser.js\n            wasi-worker\*\.mjs\n          if-no-files-found: error/u);
+});
+
+test("test jobs share artifact handling and run extra property tests only on Linux", () => {
+  assert.match(artifactTest, /steps: &test-steps/u);
+  for (const { id, os, section } of testJobs) {
+    assert.equal(section.match(/runs-on: ([^\n]+)/u)[1], os);
+    if (id !== "test") assert.match(section, /steps: \*test-steps/u);
+  }
+  assert.match(artifactTest, /uses: actions\/download-artifact@[0-9a-f]{40}[^]*?path: artifacts/u);
+  assert.match(artifactTest, /for dir in artifacts\/bindings-\*; do/u);
+  assert.match(artifactTest, /- run: bun test/u);
+  assert.match(artifactTest, /if: >-\n          runner.os == 'Linux'\n          && inputs.property-test-command != ''/u);
+  assert.match(artifactTest, /run: \$PROPERTY_TEST_CMD\n        env:\n          PROPERTY_TEST_CMD: \$\{\{ inputs.property-test-command \}\}/u);
+});
