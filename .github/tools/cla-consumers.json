@@ -1,0 +1,16 @@
+{
+  "maxPinAgeDays": 30,
+  "repositories": [
+    "aho-corasick",
+    "ai-shared",
+    "anonymize",
+    "folio",
+    "fuzzy-search",
+    "provenance",
+    "regex-set",
+    "skillguard",
+    "stdnum",
+    "text-search",
+    "tooling"
+  ]
+}

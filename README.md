@@ -182,6 +182,19 @@ jobs:
     secrets: inherit
 ```
 
+### CLA callers
+
+Call `.github/workflows/cla.yml` for every `pull_request_target` event,
+including bot pull requests. Skipping a caller job leaves the required
+`cla / cla` check unreported. Use the reusable workflow's `allowlist` input
+to waive signatures for bots, and keep the `issue_comment` signing and
+`recheck` triggers. Callers must pin a full commit SHA from this repository
+that is at most 30 days old. The existing workflow-contract CI checks the
+package callers listed in `.github/tools/cla-consumers.json`; update that
+list when adding a package repository. Repositories requiring the literal
+`cla` context also need a job named `cla` that reflects the reusable job's
+result.
+
 ### PR Lint
 
 ```yaml
