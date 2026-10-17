@@ -7,7 +7,8 @@ import {
 } from "./check";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
-const lockfile = '"@stll/native": ["@stll/native@1.0.0", "", {}, "sha512-x"]';
+const emptyLockfile = JSON.stringify({ packages: {} });
+const lockfile = JSON.stringify({ packages: { "@stll/native": ["@stll/native@1.0.0", "", {}, "sha512-x"] } });
 const bunfig = (entries: string) => `[install]
 minimumReleaseAge = 432_000
 minimumReleaseAgeExcludes = [
@@ -58,7 +59,7 @@ describe("quarantine policy", () => {
   test("accepts annotated first-party and active temporary excludes", () => {
     const result = checkQuarantinePolicy({
       bunfig: bunfig(`  "@stll/native", # quarantine-excluded-since: 2026-08-20T00:00:00.000Z
-  "third-party", # quarantine-expires: 2026-08-30T00:00:00.000Z`),
+  "third-party", # quarantine-expires: 2026-09-01T00:00:00.000Z`),
       lockfile,
       now: NOW,
     });
@@ -78,7 +79,7 @@ describe("quarantine policy", () => {
   test("rejects floating policy and unannotated excludes", () => {
     const result = checkQuarantinePolicy({
       bunfig: `[install]\nminimumReleaseAge = 0\nminimumReleaseAgeExcludes = ["third-party"]`,
-      lockfile: "",
+      lockfile: emptyLockfile,
       now: NOW,
     });
     expect(result.errors.join("\n")).toContain("minimumReleaseAge = 432000");
@@ -87,13 +88,13 @@ describe("quarantine policy", () => {
   test("rejects registry configuration that can bypass npm publication age", () => {
     const alternateRegistry = checkQuarantinePolicy({
       bunfig: `${bunfig("")}registry = "https://registry.example.com"\n`,
-      lockfile: "",
+      lockfile: emptyLockfile,
       now: NOW,
     });
     expect(alternateRegistry.errors.join("\n")).toContain("canonical npm registry");
     const npmrc = checkQuarantinePolicy({
       bunfig: bunfig(""),
-      lockfile: "",
+      lockfile: emptyLockfile,
       npmrcPresent: true,
       now: NOW,
     });
@@ -114,11 +115,11 @@ describe("quarantine policy", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-29T11:00:00.000Z',
     );
-    expect(checkQuarantinePolicy({ bunfig: candidate, lockfile: "", now: NOW }).warnings).toHaveLength(1);
+    expect(checkQuarantinePolicy({ bunfig: candidate, lockfile: emptyLockfile, now: NOW }).warnings).toHaveLength(1);
     expect(
       checkQuarantinePolicy({
         bunfig: candidate,
-        lockfile: "",
+        lockfile: emptyLockfile,
         now: new Date("2026-08-30T12:00:00.001Z"),
       }).errors.join("\n"),
     ).toContain("expired");
@@ -147,7 +148,7 @@ describe("quarantine policy", () => {
     for (const source of localSources) {
       const result = checkQuarantinePolicy({
         bunfig: bunfig(""),
-        lockfile: `"@stll/local": ["@stll/local@${source}", "", {}, ""]`,
+        lockfile: JSON.stringify({ packages: { "@stll/local": [`@stll/local@${source}`, "", {}, ""] } }),
         now: NOW,
       });
       expect(result.errors).toEqual([]);
@@ -370,5 +371,55 @@ describe("quarantine policy", () => {
     expect(lockAge?.run).toContain(".quarantine-base/bun.lock");
     expect(lockAge?.run).toContain(".quarantine-base/bunfig.toml");
     expect(lockAge?.run).toContain(".quarantine-base/.npmrc");
+  });
+});
+
+
+describe("tooling policy ownership", () => {
+  test("delegates permanent exact first-party exemptions and temporary third-party validation", () => {
+    expect(checkQuarantinePolicy({ bunfig: bunfig('  "@stll/native",'), lockfile, now: NOW })).toEqual({ errors: [], warnings: [] });
+    for (const entry of ['  "third-party",', '  "@stll/*",']) {
+      expect(checkQuarantinePolicy({ bunfig: bunfig(entry), lockfile: emptyLockfile, now: NOW }).errors.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("warns during the 48 hours before a temporary exemption expires", () => {
+    const input = bunfig('  "third-party", # quarantine-expires: 2026-08-31T11:00:00.000Z');
+    expect(checkQuarantinePolicy({ bunfig: input, lockfile: emptyLockfile, now: NOW }).warnings).toHaveLength(1);
+    expect(checkQuarantinePolicy({ bunfig: input, lockfile: emptyLockfile, now: new Date("2026-08-29T10:59:59.999Z") }).warnings).toHaveLength(0);
+  });
+
+  test("pruning validates the entire TOML input before removing anything", () => {
+    const malformed = `${bunfig('  "third-party", # quarantine-expires: 2026-08-29T11:00:00.000Z')}broken = [\n`;
+    expect(() => pruneExpiredExcludes({ bunfig: malformed, now: NOW })).toThrow();
+  });
+
+  test("loads one exact tooling source revision before enforcement, pruning, validation and integration tests", () => {
+    const readWorkflow = (file: string) => Bun.YAML.parse(readFileSync(`.github/workflows/${file}`, "utf8"));
+    const enforcement = readWorkflow("quarantine-policy.yml").jobs.enforce.steps;
+    const pruning = readWorkflow("quarantine-prune.yml").jobs;
+    const testing = readWorkflow("ai-sync.yml").jobs["workflow-contracts"].steps;
+    const refs = new Set<string>();
+    for (const steps of [enforcement, pruning.prepare.steps, pruning.propose.steps, testing]) {
+      const checkouts = steps.filter((step: { with?: { repository?: string } }) => step.with?.repository === "stella/tooling");
+      expect(checkouts).toHaveLength(1);
+      const checkout = checkouts.at(0);
+      expect(checkout.with.ref).toMatch(/^[0-9a-f]{40}$/u);
+      refs.add(checkout.with.ref);
+      expect(checkout.with.path).toBe(".quarantine-tooling");
+      expect(checkout.with["persist-credentials"]).toBe(false);
+      expect(checkout.with["sparse-checkout"]).toBe("packages/oxlint-config/src");
+      const index = steps.indexOf(checkout);
+      const executions = steps.filter((step: { run?: string; name?: string }) => step.run?.includes("quarantine-policy/") || step.name === "Validate exact removal");
+      expect(executions.length).toBeGreaterThan(0);
+      for (const execution of executions) expect(steps.indexOf(execution)).toBeGreaterThan(index);
+    }
+    expect(refs.size).toBe(1);
+    const source = testing.find((step: { name?: string }) => step.name === "Checkout action test source");
+    expect(source.with.path).toBe(".quarantine-policy");
+    expect(source.with.ref).toBe("${{ github.sha }}");
+    expect(source.with["persist-credentials"]).toBe(false);
+    const run = testing.find((step: { name?: string }) => step.name === "Test shared quarantine policy integration");
+    expect(run["working-directory"]).toBe(".quarantine-policy");
   });
 });

@@ -77,7 +77,7 @@ describe("locked package release age", () => {
     const result = await checkNewLockedRegistryReleaseAges({
       baseLockfile: lockfile("fresh@1.0.0"),
       bunfig: bunfig(`  "allowed", # quarantine-expires: 2026-08-30T00:00:00.000Z
-  "exact@2.0.0", # quarantine-expires: 2026-08-30T00:00:00.000Z
+  "exact", # quarantine-expires: 2026-08-30T00:00:00.000Z
   "@stll/internal", # quarantine-excluded-since: 2026-08-20T00:00:00.000Z`),
       loadMetadata: async (name) => {
         const value = metadata.get(name);
