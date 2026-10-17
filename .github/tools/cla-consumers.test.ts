@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { auditConsumers, checkPinAge, inspectCaller, REQUIRED_BOTS } from "./cla-consumers";
 
 const sha = "a".repeat(40);
-const caller = (condition = "github.event_name == 'pull_request_target' || (github.event_name == 'issue_comment')") => `
+const commentArm = "(github.event_name == 'issue_comment' && github.event.issue.pull_request && (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))";
+const caller = (condition = `github.event_name == 'pull_request_target' || ${commentArm}`) => `
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, closed]
@@ -17,8 +18,8 @@ jobs:
 
 test("accepts an unconditional PR arm, with or without parentheses", () => {
   expect(inspectCaller(caller())).toBe(sha);
-  expect(inspectCaller(caller("(github.event_name == 'pull_request_target') || (github.event_name == 'issue_comment')"))).toBe(sha);
-  expect(inspectCaller(caller("!github.event.repository.private && ((github.event_name == 'pull_request_target') || (github.event_name == 'issue_comment'))"))).toBe(sha);
+  expect(inspectCaller(caller(`(github.event_name == 'pull_request_target') || ${commentArm}`))).toBe(sha);
+  expect(inspectCaller(caller(`!github.event.repository.private && ((github.event_name == 'pull_request_target') || ${commentArm})`))).toBe(sha);
 });
 
 test("rejects filters in the PR arm for every allowlisted bot", () => {
@@ -27,6 +28,7 @@ test("rejects filters in the PR arm for every allowlisted bot", () => {
     expect(() => inspectCaller(caller().replace(bot, "other-user"))).toThrow("missing allowlisted bot");
   }
   expect(() => inspectCaller(caller("github.actor != 'dependabot[bot]'"))).toThrow("including bots");
+  expect(() => inspectCaller(caller(`(github.event_name == 'pull_request_target' || ${commentArm}) && github.actor != 'dependabot[bot]'`))).toThrow("including bots");
   expect(() => inspectCaller(caller().replace("types:", "branches-ignore: ['dependabot/**']\n    types:"))).toThrow("every pull request");
 });
 

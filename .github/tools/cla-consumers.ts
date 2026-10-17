@@ -28,11 +28,16 @@ export function inspectCaller(source: string): string {
   const callers = jobs.filter((job) => job.uses?.startsWith(CLA_WORKFLOW));
   if (callers.length !== 1) throw new Error("expected one shared CLA caller");
   const caller = callers[0]!;
-  const condition = String(caller.if ?? "").replace(/\s+/gu, " ").trim()
-    .replace(/^!github\.event\.repository\.private && \(\s*/u, "");
+  const folded = String(caller.if ?? "").replace(/\s+/gu, " ").trim();
+  const privateGuard = /^!github\.event\.repository\.private && \(\s*/u;
+  const condition = privateGuard.test(folded)
+    ? folded.replace(privateGuard, "").replace(/\s*\)$/u, "")
+    : folded;
   // Require the PR arm to be unconditional; signature/recheck filtering belongs
   // only in the issue_comment arm. Never evaluate repository expressions here.
-  if (!/^(?:\(\s*)?github\.event_name == 'pull_request_target'\s*\)?\s*\|\|\s*\(/u.test(condition)) {
+  const prArm = "(?:\\(\\s*github\\.event_name == 'pull_request_target'\\s*\\)|github\\.event_name == 'pull_request_target')";
+  const commentArm = "\\(\\s*github\\.event_name == 'issue_comment'\\s*&&\\s*github\\.event\\.issue\\.pull_request\\s*&&\\s*\\(\\s*github\\.event\\.comment\\.body == 'recheck'\\s*\\|\\|\\s*github\\.event\\.comment\\.body == 'I have read the CLA Document and I hereby sign the CLA'\\s*\\)\\s*\\)";
+  if (!new RegExp(`^${prArm}\\s*\\|\\|\\s*${commentArm}$`, "u").test(condition)) {
     throw new Error("CLA caller must run for every pull_request_target, including bots");
   }
   const allowlist = new Set(String(caller.with?.allowlist ?? "").split(",").map((name) => name.trim()));
