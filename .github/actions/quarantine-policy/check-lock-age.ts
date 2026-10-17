@@ -87,8 +87,7 @@ export const readNewLockedRegistryVersions = ({
   return readLockedRegistryVersions(lockfile).filter(
     (candidate) =>
       !base.has(registryKey(candidate)) ||
-      excludedAtBase.has(candidate.name) ||
-      excludedAtBase.has(registryKey(candidate)),
+      excludedAtBase.has(candidate.name),
   );
 };
 
@@ -169,8 +168,7 @@ export const checkNewLockedRegistryReleaseAges = async ({
     lockfile,
   })
     .filter(
-      ({ name, version }) =>
-        !excludes.has(name) && !excludes.has(`${name}@${version}`),
+      ({ name }) => !excludes.has(name),
     );
   const versionsByName = new Map<string, string[]>();
   for (const { name, version } of candidates) {
