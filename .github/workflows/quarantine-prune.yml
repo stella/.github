@@ -20,9 +20,16 @@ env:
   PRUNE_BRANCH: chore/prune-quarantine-excludes
 
 jobs:
+  # Enforcement can fail without preventing the independent removal PR jobs.
+  enforce:
+    if: github.repository_owner == 'stella' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    permissions:
+      contents: read
+    uses: ./.github/workflows/quarantine-policy.yml
+
   prepare:
     name: Prepare expired exception removal
-    if: github.repository_owner == 'stella' && github.event_name == 'schedule'
+    if: github.repository_owner == 'stella' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -73,7 +80,7 @@ jobs:
   propose:
     name: Propose expired exception removal
     needs: prepare
-    if: github.event_name == 'schedule' && needs.prepare.outputs.changed == 'true'
+    if: (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && needs.prepare.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

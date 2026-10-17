@@ -1,11 +1,17 @@
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { readNewLockedRegistryVersions } from "./lockfile";
+
+export const isChangeEvent = (eventName: string): boolean =>
+  eventName === "pull_request" || eventName === "merge_group";
+
+export const warningAnnotation = (message: string): string =>
+  `::warning::${message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`;
 
 const BUNFIG = "bunfig.toml";
 const LOCKFILE = "bun.lock";
 export const REQUIRED_RELEASE_AGE_SECONDS = 5 * 24 * 60 * 60;
 export const NPM_REGISTRY = "https://registry.npmjs.org";
-const NOTICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EXPIRY_MARKER = "quarantine-expires:";
 const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
 export const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
@@ -150,14 +156,22 @@ export type CheckResult = {
 
 export const checkQuarantinePolicy = ({
   bunfig,
+  baseBunfig,
+  baseLockfile,
+  baseNpmrcPresent = false,
+  eventName = "push",
   lockfile,
   npmrcPresent = false,
-  now = new Date(),
+  now,
 }: {
   bunfig: string;
+  baseBunfig?: string;
+  baseLockfile?: string;
+  baseNpmrcPresent?: boolean;
+  eventName?: string;
   lockfile: string;
   npmrcPresent?: boolean;
-  now?: Date;
+  now: Date;
 }): CheckResult => {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -201,6 +215,22 @@ export const checkQuarantinePolicy = ({
     errors.push(`${BUNFIG} must declare one annotated package per line`);
   }
 
+  // Only a complete trusted base can establish that an expired exception is inherited.
+  const inherited =
+    isChangeEvent(eventName) &&
+    baseBunfig === bunfig &&
+    baseLockfile !== undefined &&
+    !baseNpmrcPresent &&
+    !npmrcPresent;
+  const changedVersions = inherited
+    ? readNewLockedRegistryVersions({ baseLockfile, lockfile })
+    : [];
+  const temporalIssue = (entry: Entry, message: string) => {
+    const dependencyChanged = changedVersions.some(({ name, version }) =>
+      entry.name === name || entry.name === `${name}@${version}`,
+    );
+    (inherited && !dependencyChanged ? warnings : errors).push(message);
+  };
   const nowMs = now.getTime();
   for (const entry of entries) {
     if (!exactTimestamp(entry.timestamp)) {
@@ -212,7 +242,7 @@ export const checkQuarantinePolicy = ({
       if (entry.annotation !== "excluded-since") {
         errors.push(`${BUNFIG} first-party quarantine exclude "${entry.name}" must use ${EXCLUDED_SINCE_MARKER}`);
       } else if (timestampMs > nowMs) {
-        errors.push(`${BUNFIG} first-party quarantine exclude "${entry.name}" has a future exclusion date`);
+        temporalIssue(entry, `${BUNFIG} first-party quarantine exclude "${entry.name}" has a future exclusion date`);
       }
       continue;
     }
@@ -220,10 +250,8 @@ export const checkQuarantinePolicy = ({
       errors.push(`${BUNFIG} third-party quarantine exclude "${entry.name}" must use ${EXPIRY_MARKER}`);
       continue;
     }
-    if (nowMs >= timestampMs + NOTICE_WINDOW_MS) {
-      errors.push(`${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`);
-    } else if (nowMs >= timestampMs) {
-      warnings.push(`${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp}; its removal PR should be merged`);
+    if (nowMs >= timestampMs) {
+      temporalIssue(entry, `${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`);
     }
   }
 
@@ -239,10 +267,10 @@ export const checkQuarantinePolicy = ({
 
 export const pruneExpiredExcludes = ({
   bunfig,
-  now = new Date(),
+  now,
 }: {
   bunfig: string;
-  now?: Date;
+  now: Date;
 }): { bunfig: string; pruned: string[] } => {
   const range = findExcludeBlock(bunfig);
   if (range === undefined) return { bunfig, pruned: [] };
@@ -309,12 +337,17 @@ export const validateCallerWorkflowRefs = ({
     if (!("on" in parsed) || typeof parsed.on !== "object" || parsed.on === null) {
       return [`.github/workflows/${name} must declare required triggers`];
     }
-    const triggers = Object.keys(parsed.on).sort();
+    // Existing pinned callers remain valid; new callers can also enforce main pushes.
+    const { push, ...otherTriggers } = parsed.on as Record<string, unknown>;
+    if (push !== undefined && JSON.stringify(push) !== JSON.stringify({ branches: ["main"] })) {
+      return [`.github/workflows/${name} must restrict push to main`];
+    }
+    const triggers = Object.keys(otherTriggers).sort();
     if (triggers.join(",") !== [...expectedTriggers].sort().join(",")) {
       return [`.github/workflows/${name} must declare only ${expectedTriggers.join(" and ")}`];
     }
     if (name === "quarantine-policy.yml") {
-      const invalidTrigger = Object.values(parsed.on).some(
+      const invalidTrigger = Object.values(otherTriggers).some(
         (value) =>
           value !== null &&
           (typeof value !== "object" || Object.keys(value).length !== 0),
@@ -402,14 +435,24 @@ const run = () => {
   const bunfigPath = path.join(root, BUNFIG);
   const bunfig = readFileSync(bunfigPath, "utf8");
   if (process.argv.includes("--prune")) {
-    const result = pruneExpiredExcludes({ bunfig });
+    const result = pruneExpiredExcludes({ bunfig, now: new Date() });
     if (result.pruned.length > 0) writeFileSync(bunfigPath, result.bunfig);
     console.log(`${BUNFIG}: removed ${result.pruned.length} expired quarantine exclude(s)`);
     return;
   }
 
+  const eventName = process.env.GITHUB_EVENT_NAME ?? "push";
+  const readBase = (name: string): string | undefined => {
+    const file = path.join(root, ".quarantine-base", name);
+    return pathEntryExists(file) ? readFileSync(file, "utf8") : undefined;
+  };
   const result = checkQuarantinePolicy({
     bunfig,
+    eventName,
+    now: new Date(),
+    baseBunfig: isChangeEvent(eventName) ? readBase(BUNFIG) : undefined,
+    baseLockfile: isChangeEvent(eventName) ? readBase(LOCKFILE) : undefined,
+    baseNpmrcPresent: isChangeEvent(eventName) && pathEntryExists(path.join(root, ".quarantine-base", ".npmrc")),
     lockfile: readFileSync(path.join(root, LOCKFILE), "utf8"),
     npmrcPresent: pathEntryExists(path.join(root, ".npmrc")),
   });
@@ -434,7 +477,7 @@ const run = () => {
       }),
     );
   }
-  if (result.warnings.length > 0) console.warn(result.warnings.join("\n"));
+  for (const warning of result.warnings) console.warn(warningAnnotation(warning));
   if (result.errors.length > 0) fail(result.errors.join("\n\n"));
   console.log(`${BUNFIG}: package quarantine policy validated`);
 };
