@@ -20,6 +20,8 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `pypi-publish-hardened` | Prepare and verify an exact wheel matrix around top-level PyPI trusted publishing |
 | `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
 | `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
+| `quarantine-policy.yml` | Check quarantine policy and newly locked package ages |
+| `quarantine-prune.yml` | Maintain one scheduled PR removing expired quarantine exceptions |
 | `package-consumer-compat.yml` | Check packed packages on the consumer toolchain nightly |
 
 ### Composite Actions
@@ -81,6 +83,27 @@ jobs:
       typecheck-only: true
       parity: always
       install-command: bun install --frozen-lockfile
+```
+
+### Package Quarantine Policy
+
+The quarantine workflows load their parser and pruning implementation from one
+immutable `stella/tooling` revision in `.quarantine-tooling`. The shared action
+supplies Bun's TOML parser and retains caller workflow validation; consumer
+package dependencies are not installed to load policy. Both pruning jobs use the
+same source revision, preserving validation before the signed removal PR.
+
+The policy permits permanent exact-name first-party exclusions and requires
+expiry timestamps for third-party exceptions. Upcoming expiry warnings begin
+48 hours before expiry. Scheduled pruning removes expired temporary exceptions
+and maintains the existing single removal PR.
+
+For local quarantine integration tests, check out this repository as
+`.quarantine-policy` and the tooling revision pinned by the workflow as its
+sibling `.quarantine-tooling`. Run from `.quarantine-policy`:
+
+```bash
+bun test .github/actions/quarantine-policy/check.test.ts .github/actions/quarantine-policy/check-lock-age.test.ts
 ```
 
 ### Package Consumer Compatibility

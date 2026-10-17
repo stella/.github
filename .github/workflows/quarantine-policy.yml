@@ -42,6 +42,14 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: .quarantine-policy
           persist-credentials: false
+      - name: Checkout immutable tooling policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stella/tooling
+          ref: 38ab4ae39fe2492523a31976777e470aca70e9b0
+          path: .quarantine-tooling
+          sparse-checkout: packages/oxlint-config/src
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.1"

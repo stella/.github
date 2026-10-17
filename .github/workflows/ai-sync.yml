@@ -24,13 +24,30 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.1"
+      - name: Checkout action test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .quarantine-policy
+          persist-credentials: false
+      - name: Checkout immutable tooling policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stella/tooling
+          ref: 38ab4ae39fe2492523a31976777e470aca70e9b0
+          path: .quarantine-tooling
+          sparse-checkout: packages/oxlint-config/src
+          persist-credentials: false
       - name: Test shared actions and workflows
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           find .github -type f -name '*.test.mjs' -print0 | sort -z | xargs -0 node --test
-          bun test ./.github/actions/release-policy/check.test.ts ./.github/actions/quarantine-policy/check.test.ts ./.github/actions/quarantine-policy/check-lock-age.test.ts
+          bun test ./.github/actions/release-policy/check.test.ts
           find .github -type f -name '*_test.py' -print0 | sort -z | xargs -0 -n1 python3
+      - name: Test shared quarantine policy integration
+        working-directory: .quarantine-policy
+        run: bun test ./.github/actions/quarantine-policy/check.test.ts ./.github/actions/quarantine-policy/check-lock-age.test.ts
 
   sync-ai:
     name: Check generated AI instructions
