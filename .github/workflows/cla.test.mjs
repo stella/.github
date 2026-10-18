@@ -4,7 +4,9 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 
 const workflow = readFileSync(new URL("./cla.yml", import.meta.url), "utf8");
-const source = workflow.split("          script: |\n")[1].split("\n").map((line) => line.slice(12)).join("\n");
+const scriptFor = (name) => workflow.split(`      - name: ${name}\n`)[1].split("          script: |\n")[1].split(/\n      - name:/u)[0].split("\n").map((line) => line.slice(12)).join("\n");
+const source = scriptFor("Verify contributor signatures");
+const credentialsSource = scriptFor("Select signature credentials");
 const sha = (letter) => letter.repeat(40);
 const BASE = sha("b"), HEAD = sha("a"), SECOND = sha("c"), GROUP = sha("9"), PREVIOUS = sha("8");
 const author = { id: 101, login: "contributor", type: "User" };
@@ -183,4 +185,21 @@ test("privileged verifier stays API-only and keeps the reusable contract", () =>
   const caller = readFileSync(new URL("./cla-check.yml", import.meta.url), "utf8");
   assert.match(caller, /merge_group:\n    types: \[checks_requested\]/u);
   assert.match(caller, /group: cla-\$\{\{ github.event.pull_request.number \|\| github.event.issue.number \|\| github.run_id \}\}/u);
+});
+
+test("bot-only pull requests need no signature-store secret; human coauthors require it", async () => {
+  const bot = { ...author, type: "Bot", login: "service[bot]" };
+  for (const [user, coauthor, needsStore] of [[bot, bot, "false"], [bot, other, "true"], [author, author, "true"]]) {
+    const outputs = {};
+    await runInNewContext(`(async () => {${credentialsSource}\n})()`, {
+      context: { repo: { owner: "fixture", repo: "repository" }, eventName: "pull_request_target", payload: { pull_request: { number: 17 } } },
+      github: {
+        request: async () => ({ data: pull(17, user) }),
+        paginate: async () => [{ sha: HEAD }],
+        graphql: async () => ({ repository: { object: { oid: HEAD, authors: { nodes: [{ user: { databaseId: coauthor.id, login: coauthor.login } }], pageInfo: { hasNextPage: false } } } } }),
+      },
+      core: { setOutput: (key, value) => { outputs[key] = value; } },
+    });
+    assert.equal(outputs.store_required, needsStore);
+  }
 });

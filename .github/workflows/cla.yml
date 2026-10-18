@@ -35,8 +35,46 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Select signature credentials
+        id: credentials
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            if (context.eventName !== "pull_request_target") {
+              core.setOutput("store_required", "true");
+              return;
+            }
+            const pulls = [(await github.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+              owner, repo, pull_number: context.payload.pull_request.number,
+            })).data];
+            const candidates = pulls.filter((pull) => pull.state === "open" &&
+              pull.base.repo.full_name === `${owner}/${repo}`);
+            let storeRequired = false;
+            for (const listed of candidates) {
+              const pull = listed;
+              if (pull.user.type !== "Bot") storeRequired = true;
+              const commits = await github.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", {
+                owner, repo, pull_number: pull.number, per_page: 100,
+              });
+              if (!commits.length || commits.length > 250 || commits.length !== pull.commits) throw new Error("CLA_INCOMPLETE_COMMIT_LIST");
+              for (const commit of commits) {
+                const response = await github.graphql(`query($owner:String!, $repo:String!, $oid:GitObjectID!) {
+                  repository(owner:$owner,name:$repo) { object(oid:$oid) { ... on Commit {
+                    oid authors(first:100) { nodes { user { databaseId login } } pageInfo { hasNextPage } }
+                  } } }
+                }`, { owner, repo, oid: commit.sha });
+                const object = response.repository?.object;
+                if (object?.oid !== commit.sha || !Array.isArray(object.authors?.nodes)) throw new Error("CLA_INVALID_AUTHOR_LIST");
+                if (object.authors.pageInfo?.hasNextPage || object.authors.nodes.some(({ user }) =>
+                  !user || user.databaseId !== pull.user.id || pull.user.type !== "Bot")) storeRequired = true;
+              }
+            }
+            core.setOutput("store_required", String(storeRequired));
+
       - name: Signature store token
         id: store-token
+        if: steps.credentials.outputs.store_required == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v2
         with:
           app-id: ${{ inputs.app-id }}
