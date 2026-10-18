@@ -1,0 +1,58 @@
+name: NAPI Rust checks
+description: Run source lint, Clippy, formatting, tests, license audit, and docs
+inputs:
+  toolchain:
+    required: false
+    default: 1.99.0
+  rust-format-command:
+    required: false
+    default: cargo fmt --all -- --check
+  source-lint-rev:
+    required: false
+    default: a1bd81740ecb4b66999f56d1716e1190c4e7272f
+  cache:
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: clippy, rustfmt
+    - run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      shell: bash
+    - if: inputs.cache == 'true'
+      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
+      with:
+        shared-key: rust-checks-${{ inputs.toolchain }}
+    - name: Cache stable source checker
+      id: source-lint-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ runner.temp }}/stella-source-lint/bin
+        key: stella-source-lint-${{ runner.os }}-${{ runner.arch }}-${{ inputs.source-lint-rev }}
+    - name: Install stable source checker
+      if: steps.source-lint-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SOURCE_LINT_REV: ${{ inputs.source-lint-rev }}
+      run: cargo install --git https://github.com/stella/tooling --rev "$SOURCE_LINT_REV" --locked --root "$RUNNER_TEMP/stella-source-lint" stella_source_lint
+    - run: echo "$RUNNER_TEMP/stella-source-lint/bin" >> "$GITHUB_PATH"
+      shell: bash
+    - run: cargo stella-lint .
+      shell: bash
+    - run: cargo clippy --all-targets --all-features -- -Dwarnings
+      shell: bash
+    - shell: bash
+      env:
+        RUST_FORMAT_CMD: ${{ inputs.rust-format-command }}
+      run: $RUST_FORMAT_CMD
+    - run: cargo test --all-targets --all-features
+      shell: bash
+    - run: cargo install cargo-deny --locked && cargo deny check
+      shell: bash
+    - run: cargo doc --no-deps
+      shell: bash
+      env:
+        RUSTDOCFLAGS: -Dwarnings
