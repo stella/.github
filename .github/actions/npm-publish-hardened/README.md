@@ -113,7 +113,38 @@ publish time with a 401.
 
 ## Inputs
 
-| Name      | Required | Default  | Description                                                          |
-| --------- | -------- | -------- | -------------------------------------------------------------------- |
-| `tarball` | yes      | —        | Path to a pre-packed `.tgz` to publish                               |
-| `tag`     | no       | `latest` | npm dist-tag for the publish                                         |
+| Name | Required | Default | Description |
+| ---- | -------- | ------- | ----------- |
+| `tarball` | one of `tarball` / `tarballs` | — | One packed `.tgz` |
+| `tarballs` | one of `tarball` / `tarballs` | — | Newline-separated packed `.tgz` paths, in publication order |
+| `tag` | no | `latest` | npm dist-tag |
+| `expected-name` / `expected-version` | no | — | Exact identity required for a single tarball; set together |
+| `publish-plan` | no | — | Ordered JSON plan for `tarballs`, described below |
+| `npm-visibility-timeout-minutes` | no | `20` | Total visibility budget for the plan, greater than zero and at most 45 minutes |
+
+## Dependency-aware plans
+
+`publish-plan` contains one entry for each path in `tarballs`, in the same order:
+
+```json
+[
+  {"name":"@example/core","version":"1.2.3","path":"core.tgz","dependencies":[]},
+  {"name":"@example/ui","version":"2.0.0","path":"ui.tgz","dependencies":["@example/core"]}
+]
+```
+
+`dependencies` lists packages in this plan; each must appear before its dependent.
+The action validates the entire plan and checks every path before publication.
+It passes each tarball and its expected identity to the hardened publisher, then
+waits for that exact version to be visible on npm before continuing. All entries
+share the configured visibility budget. The publisher
+retains its token checks, provenance, retries, and integrity-bound idempotency.
+
+Publication or visibility failure stops the plan. The failure message and
+`skipped-dependents` output (a JSON array) name all remaining transitive dependents.
+A rerun can reuse the plan: already published versions are checked for exact
+integrity and skipped by the publisher before the visibility check.
+
+The independent-release workflow builds the plan from packed manifests and checks
+same-scope and planned dependency versions before creating tags or release drafts.
+It omits versions already visible on npm when building a recovery plan.

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-const DEPENDENCY_SECTIONS = [
+export const DEPENDENCY_SECTIONS = [
   "dependencies",
   "optionalDependencies",
   "peerDependencies",
@@ -208,13 +208,7 @@ export const topologicalPackageNames = (artifactsByName) => {
   }
 
   for (const [name, { manifest }] of artifactsByName) {
-    const internalDependencies = new Set();
-    for (const section of DEPENDENCY_SECTIONS) {
-      for (const dependencyName of Object.keys(manifest[section] ?? {})) {
-        if (artifactsByName.has(dependencyName))
-          internalDependencies.add(dependencyName);
-      }
-    }
+    const internalDependencies = plannedDependencyNames(manifest, artifactsByName);
     incoming.set(name, internalDependencies.size);
     for (const dependencyName of internalDependencies) {
       dependants.get(dependencyName).add(name);
@@ -247,6 +241,16 @@ export const topologicalPackageNames = (artifactsByName) => {
     fail(`Release packages contain an internal dependency cycle: ${cycle}.`);
   }
   return ordered;
+};
+
+export const plannedDependencyNames = (manifest, packagesByName) => {
+  const dependencies = new Set();
+  for (const section of DEPENDENCY_SECTIONS) {
+    for (const name of Object.keys(manifest[section] ?? {})) {
+      if (packagesByName.has(name)) dependencies.add(name);
+    }
+  }
+  return dependencies;
 };
 
 export const changelogSection = (text, version, path) => {

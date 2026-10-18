@@ -567,15 +567,22 @@ jobs:
 
 The shared job validates an exact one-to-one mapping between the declared public
 manifests and packed tarballs. It rejects unresolved `workspace:`, `catalog:`,
-`link:`, and `file:` dependency specifiers, orders internal dependencies before
-dependants, stages one draft release per `<name>@<version>`, publishes only versions
-missing from npm, verifies the release asset against npm `dist.integrity`, then makes
-the draft releases public. Before publishing GitHub releases, it polls the registry
-for every package to become visible, up to `npm-visibility-timeout-minutes` (default
-20, capped at 25 by the job's fixed `timeout-minutes` budget); npm's read replicas can
-lag a successful publish by several minutes, and a rerun after a timeout resumes from
-whatever already reached the registry. Existing complete
-versions are immutable no-ops. Safe partial runs resume; registry-only versions are
+`link:`, and `file:` dependency specifiers. Before creating any tag or draft,
+it checks dependencies, optional dependencies, and peer dependencies in the same npm
+scope or release plan: each semantic version or range must be satisfiable by a
+published npm version or a version produced by the plan. Cycles fail validation.
+
+The job orders internal dependencies before dependants, stages one draft release per
+`<name>@<version>`, and publishes only versions missing from npm through the hardened
+publisher. After each publication, it waits for that exact version to become visible
+before starting the next entry. A publication or visibility failure stops the plan
+and names the skipped transitive dependants. The ordered plan shares the
+`npm-visibility-timeout-minutes` budget (default 20, capped at 45 by the job's fixed
+`timeout-minutes` budget). Before making GitHub releases public, the job verifies
+registry visibility and checks release assets against npm `dist.integrity`.
+
+npm's read replicas can lag a successful publish by several minutes. A rerun resumes
+from versions already visible on npm; existing complete versions are immutable no-ops. Safe partial runs resume; registry-only versions are
 repaired with the registry artifact and release notes that do not claim a local
 rebuild was the originally uploaded file.
 Package releases preserve the repository's existing GitHub Latest pointer by default.

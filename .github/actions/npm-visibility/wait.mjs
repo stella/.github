@@ -8,6 +8,32 @@ const NPM_VISIBILITY_INITIAL_DELAYS_MILLISECONDS = [
 const NPM_VISIBILITY_POLL_INTERVAL_MILLISECONDS = 60_000;
 export const NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES = 20;
 
+// GitHub Actions cannot derive a job's `timeout-minutes` from an input, so
+// the release job in npm-independent-release.yml carries a fixed budget
+// (55) for checkout, staging, npm publish, and this wait combined. Cap the
+// input below that fixed budget, with margin for the earlier steps, so an
+// over-large request fails fast here instead of getting silently cut off
+// mid-poll when the runner kills the job. Keep this in sync with that
+// workflow's `timeout-minutes`.
+export const MAX_NPM_VISIBILITY_TIMEOUT_MINUTES = 45;
+
+export const resolveNpmVisibilityTimeoutMinutes = (value) => {
+  if (value === undefined || value === "") {
+    return NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES;
+  }
+  const minutes = Number(value);
+  if (
+    !Number.isFinite(minutes) ||
+    minutes <= 0 ||
+    minutes > MAX_NPM_VISIBILITY_TIMEOUT_MINUTES
+  ) {
+    throw new Error(
+      `npm-visibility-timeout-minutes must be a positive number no greater than ${MAX_NPM_VISIBILITY_TIMEOUT_MINUTES}; got '${value}'.`,
+    );
+  }
+  return minutes;
+};
+
 // Builds a bounded backoff schedule that never waits past `timeoutMinutes`
 // in total: the short initial ramp-up (trimmed if the budget is smaller
 // than it), then a flat 60s poll for whatever budget remains.

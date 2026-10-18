@@ -188,6 +188,53 @@ describe("locked package release age", () => {
     });
   });
 
+  test("admits versions exactly at the injected five-day cutoff", async () => {
+    const result = await checkNewLockedRegistryReleaseAges({
+      bunfig: bunfig(""),
+      lockfile: lockfile("boundary@1.0.0", "boundary@2.0.0"),
+      now: NOW,
+      loadMetadata: async () => ({ time: {
+        "1.0.0": "2026-08-24T12:00:00.000Z",
+        "2.0.0": "2026-08-24T12:00:00.001Z",
+      } }),
+    });
+    expect(result.checked).toBe(2);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toStartWith("boundary@2.0.0:");
+  });
+
+  test("inherited expired exclusions do not trigger registry lookups on unrelated PRs", async () => {
+    const config = bunfig('  "allowed", # quarantine-expires: 2026-08-20T00:00:00.000Z');
+    for (const eventName of ["pull_request", "merge_group"]) {
+      const result = await checkNewLockedRegistryReleaseAges({
+        baseBunfig: config,
+        bunfig: config,
+        baseLockfile: lockfile("allowed@1.0.0", "stable@1.0.0"),
+        lockfile: lockfile("allowed@1.0.0", "stable@1.0.0"),
+        eventName,
+        now: NOW,
+        loadMetadata: async () => { throw new Error("unexpected lookup"); },
+      });
+      expect(result).toEqual({ checked: 0, errors: [] });
+    }
+  });
+
+  test("config changes and maintenance events recheck existing non-excluded versions", async () => {
+    for (const eventName of ["pull_request", "merge_group", "push", "schedule"]) {
+      const result = await checkNewLockedRegistryReleaseAges({
+        baseBunfig: bunfig(""),
+        bunfig: bunfig("") + (eventName === "pull_request" || eventName === "merge_group" ? "# changed\n" : ""),
+        baseLockfile: lockfile("fresh@1.0.0"),
+        lockfile: lockfile("fresh@1.0.0"),
+        eventName,
+        now: NOW,
+        loadMetadata: async () => ({ time: { "1.0.0": "2026-08-28T12:00:00.000Z" } }),
+      });
+      expect(result.checked).toBe(1);
+      expect(result.errors.join("\n")).toContain("younger than");
+    }
+  });
+
   test("does not query the registry when the lockfile adds no versions", async () => {
     const unchanged = lockfile("stable@1.0.0");
     const result = await checkNewLockedRegistryReleaseAges({
