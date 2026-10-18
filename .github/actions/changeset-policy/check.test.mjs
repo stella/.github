@@ -9,6 +9,7 @@ import {
   generatedExclusions,
   isGeneratedVersionPullRequest,
   main,
+  validateRootPackageWorkspaces,
   validateChangeset,
   validateChangesetVersionCommand,
 } from "./check.mjs";
@@ -140,6 +141,46 @@ test("rejects Bun lockfile regeneration during changeset versioning", () => {
   );
 });
 
+test("rejects a publishable root package with array workspaces", () => {
+  assert.throws(
+    () =>
+      validateRootPackageWorkspaces("package.json", {
+        name: "native-library",
+        workspaces: ["__bench__"],
+      }),
+    /package\.json declares a non-empty 'workspaces' field.*Changesets cannot version a root package inside a workspace monorepo.*Move the extra package out of 'workspaces', or publish from a workspace package instead\./,
+  );
+});
+
+test("accepts a private root package with workspaces", () => {
+  validateRootPackageWorkspaces("package.json", {
+    private: true,
+    workspaces: ["packages/*"],
+  });
+});
+
+test("accepts a publishable root package without workspaces", () => {
+  validateRootPackageWorkspaces("package.json", { name: "native-library" });
+});
+
+test("accepts empty root workspaces", () => {
+  validateRootPackageWorkspaces("package.json", { workspaces: [] });
+  validateRootPackageWorkspaces("package.json", {
+    workspaces: { packages: [] },
+  });
+});
+
+test("rejects a publishable root package with object workspaces", () => {
+  assert.throws(
+    () =>
+      validateRootPackageWorkspaces("package.json", {
+        name: "native-library",
+        workspaces: { packages: ["__bench__"] },
+      }),
+    /'workspaces' field.*Changesets cannot version a root package inside a workspace monorepo/,
+  );
+});
+
 const roots = [];
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -252,4 +293,46 @@ test("counts a renamed empty changeset as a newly added entry", () => {
     () => check(releaseFixture({ renameChangeset: false })),
     /require a newly added changeset/,
   );
+});
+
+test("checks root workspaces when a pull request has no runtime changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "changeset-policy-"));
+  roots.push(root);
+  git(root, "init", "-q", "-b", "main");
+  write(
+    root,
+    "package.json",
+    '{"name":"native-library","workspaces":["__bench__"]}\n',
+  );
+  write(root, "README.md", "before\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "base");
+  const baseRef = git(root, "rev-parse", "HEAD");
+  write(root, "README.md", "after\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "docs");
+
+  const previous = process.cwd();
+  process.chdir(root);
+  try {
+    assert.throws(
+      () =>
+        main({
+          BASE_REF: baseRef,
+          GENERATED_PATHS: "VERSION",
+          HEAD_REF: "docs/readme",
+          HEAD_REPOSITORY: "stella/example",
+          PACKAGE_FILES: "package.json",
+          PR_AUTHOR: "maintainer",
+          RELEASE_PATHS: "src/**",
+          REPOSITORY: "stella/example",
+          VERSION_BRANCH: "changeset-release/main",
+          VERSION_FILE: "VERSION",
+          VERSION_PR_AUTHOR: "stella-provenance-updater[bot]",
+        }),
+      /Changesets cannot version a root package inside a workspace monorepo/,
+    );
+  } finally {
+    process.chdir(previous);
+  }
 });
