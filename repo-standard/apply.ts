@@ -13,7 +13,7 @@ export type Toolchain = { bun: string; node: string; rust: string };
 export type ToolObservation =
   | { status: "pinned"; pin: string }
   | { status: "not-pinned" }
-  | { status: "malformed"; value: string };
+  | { status: "malformed"; reason: string };
 export type ToolchainObservation = { repo: string; tools: Record<Tool, ToolObservation> };
 export type ToolchainAudit = { lines: string[]; failures: string[] };
 export class ToolchainParseError extends Error {
@@ -54,9 +54,13 @@ function validDate(value: string): boolean {
   return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
 }
 
-function pinned(pin: unknown, prefix = ""): ToolObservation {
+// Diagnostics may describe a pin but never echo file contents: private
+// repositories' manifests must not reach the audit log.
+const SHOWN_PIN = /^[\w.@+-]{1,40}$/u;
+function pinned(pin: unknown, field: string, prefix = ""): ToolObservation {
   if (typeof pin !== "string" || !pin.startsWith(prefix) || !VERSION.test(pin.slice(prefix.length))) {
-    return { status: "malformed", value: typeof pin === "string" ? pin : (JSON.stringify(pin) ?? String(pin)) };
+    const shown = typeof pin === "string" && SHOWN_PIN.test(pin) ? ` ${JSON.stringify(pin)}` : "";
+    return { status: "malformed", reason: `${field}${shown} is not ${prefix}<major.minor.patch>` };
   }
   return { status: "pinned", pin: pin.slice(prefix.length) };
 }
@@ -66,15 +70,21 @@ export function parseToolObservations(repo: string, files: Record<Tool, string |
   if (files.bun !== null) {
     try {
       const manifest: unknown = JSON.parse(files.bun);
-      bun = object(manifest) ? pinned(manifest.packageManager, "bun@") : { status: "malformed", value: files.bun };
-    } catch { bun = { status: "malformed", value: files.bun }; }
+      bun = object(manifest)
+        ? pinned(manifest.packageManager, "package.json packageManager", "bun@")
+        : { status: "malformed", reason: "package.json is not a JSON object" };
+    } catch { bun = { status: "malformed", reason: "package.json is not valid JSON" }; }
   }
-  const node = files.node === null ? { status: "not-pinned" } as const : pinned(files.node.trim());
+  const node = files.node === null ? { status: "not-pinned" } as const : pinned(files.node.trim(), ".node-version");
   let rust: ToolObservation = { status: "not-pinned" };
   if (files.rust !== null) {
-    const section = /^\s*\[toolchain\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/mu.exec(files.rust)?.[1];
-    const channel = section && /^\s*channel\s*=\s*["']([^"']+)["']\s*(?:#.*)?$/mu.exec(section)?.[1];
-    rust = channel ? pinned(channel) : { status: "malformed", value: files.rust };
+    try {
+      const parsed: unknown = Bun.TOML.parse(files.rust);
+      const toolchain = object(parsed) ? parsed.toolchain : undefined;
+      rust = object(toolchain)
+        ? pinned(toolchain.channel, "rust-toolchain.toml [toolchain] channel")
+        : { status: "malformed", reason: "rust-toolchain.toml has no [toolchain] table" };
+    } catch { rust = { status: "malformed", reason: "rust-toolchain.toml is not valid TOML" }; }
   }
   return { repo, tools: { bun, node, rust } };
 }
@@ -91,7 +101,12 @@ export function parseToolchain(value: unknown): Toolchain {
 /** Exceptions name repositories, so they come from the caller's private inventory, never this public file. */
 export function parseToolchainExceptions(value: unknown): ToolchainException[] {
   if (!Array.isArray(value)) throw new ToolchainParseError("Invalid toolchain exceptions");
+  const seen = new Set<string>();
   for (const exception of value) {
+    // One entry per repository, tool and pin, so the outcome never depends on order.
+    const key = object(exception) ? `${String(exception.repo ?? "").toLowerCase()}\0${String(exception.tool)}\0${String(exception.pin)}` : "";
+    if (seen.has(key)) throw new ToolchainParseError("Duplicate toolchain exception");
+    seen.add(key);
     if (!object(exception) || Object.keys(exception).some((key) => !["repo", "tool", "pin", "reason", "expires"].includes(key)) ||
       !REPO.test(String(exception.repo ?? "")) || !["bun", "node", "rust"].includes(String(exception.tool ?? "")) ||
       !VERSION.test(String(exception.pin ?? "")) || typeof exception.reason !== "string" || !exception.reason.trim() ||
@@ -113,7 +128,7 @@ export function auditToolchain(standard: Toolchain, exceptions: ToolchainExcepti
         continue;
       }
       if (seen.status === "malformed") {
-        const line = `${observation.repo}: ${tool} pin has unsupported format: ${JSON.stringify(seen.value)}`;
+        const line = `${observation.repo}: ${tool} pin has unsupported format: ${seen.reason}`;
         lines.push(line); failures.push(line); continue;
       }
       if (seen.pin === standard[tool]) continue;
@@ -286,8 +301,8 @@ function readRepositories(owner: string): { repos: string[]; observations: Toolc
   const repos: string[] = [], observations: ToolchainObservation[] = [];
   let cursor: string | null = null;
   do {
-    const args = ["graphql", "-f", `query=${REPOSITORY_TOOLCHAINS_QUERY}`, "-F", `owner=${owner}`];
-    if (cursor) args.push("-F", `cursor=${cursor}`);
+    const args = ["graphql", "-f", `query=${REPOSITORY_TOOLCHAINS_QUERY}`, "-f", `owner=${owner}`];
+    if (cursor) args.push("-f", `cursor=${cursor}`);
     const response = gh(args);
     const organization = object(response) && object(response.data) ? response.data.organization : undefined;
     const connection = object(organization) ? organization.repositories : undefined;

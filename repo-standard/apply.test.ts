@@ -218,6 +218,26 @@ describe("toolchain standard", () => {
       catch (error) { expect(error).toHaveProperty("name", "ToolchainParseError"); }
     }
   });
+  test("rust pins are read as TOML, so comments and spacing do not matter", () => {
+    const observation = parseToolObservations("fixture/project", {
+      bun: null, node: null, rust: "[toolchain] # pinned for the workspace\nchannel = \"1.99.0\" # stable\n",
+    });
+    expect(observation.tools.rust).toEqual({ status: "pinned", pin: "1.99.0" });
+  });
+  test("malformed manifests are described without echoing their contents", () => {
+    const secret = "private-dependency-name";
+    const observation = parseToolObservations("fixture/project", {
+      bun: `{"packageManager": "npm@11.0.0", "dependencies": {"${secret}": "1.0.0"}`, node: null, rust: `[tool\nchannel = "${secret}"`,
+    });
+    const result = auditToolchain(toolchain, [], [observation], "2026-10-18");
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures.join("\n")).not.toContain(secret);
+  });
+  test("duplicate exceptions for one repository, tool and pin are rejected", () => {
+    const [entry] = migration("2026-10-19");
+    try { parseToolchainExceptions([entry, { ...entry, repo: "FIXTURE/project", expires: "2026-10-30" }]); expect.unreachable(); }
+    catch (error) { expect(error).toHaveProperty("name", "ToolchainParseError"); }
+  });
   test("toolchain exceptions are accepted only with --check", () => {
     expect(parseArgs(["--inventory", "repos.json", "--check", "--toolchain-exceptions", "exceptions.json"]).toolchainExceptions).toBe("exceptions.json");
     expect(() => parseArgs(["--inventory", "repos.json", "--dry-run", "--toolchain-exceptions", "exceptions.json"])).toThrow();
