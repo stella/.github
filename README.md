@@ -218,6 +218,7 @@ jobs:
 
 Compares live GitHub rulesets against a checked-in expected config
 and uploads the result as a compliance artifact (365-day retention).
+
 Detects drift and fails if the live config diverges from the
 expected state.
 
@@ -773,7 +774,33 @@ entries too. Enable an entry only when its workflows handle merge groups.
 ```sh
 bun repo-standard/apply.ts --inventory /private/repos.json --dry-run
 bun repo-standard/apply.ts --inventory /private/repos.json --check
+bun repo-standard/apply.ts --inventory /private/repos.json --check --toolchain-exceptions /private/toolchain-exceptions.json
 bun repo-standard/apply.ts --inventory /private/repos.json apply organization/project --backup-dir /private/backups
+```
+
+#### Toolchain Standard
+
+Check also audits toolchain pins on each repository's default branch: the Bun
+`packageManager` in `package.json`, `.node-version`, and the `rust-toolchain.toml`
+channel. The shared versions live in `repo-standard/toolchain.json`. A missing
+file is reported as not pinned; a different or unparseable pin fails the check.
+Bump a toolchain by updating that file and every repository pin in the same
+rollout.
+
+Exceptions name repositories, so they belong in a private file passed with
+`--toolchain-exceptions`, not in this repository. Each entry covers one exact pin
+and must include a reason and an expiry date:
+
+```json
+[
+  {
+    "repo": "organization/project",
+    "tool": "bun",
+    "pin": "1.4.2",
+    "reason": "Waiting for a dependency release",
+    "expires": "2026-11-01"
+  }
+]
 ```
 
 Dry-run reads only inventory repositories and prints differences against their

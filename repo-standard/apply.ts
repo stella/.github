@@ -7,6 +7,18 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type ObjectValue = { [key: string]: Json };
 export type Entry = { gate: string; extraChecks: string[]; signatures: boolean; enabled: boolean };
 export type Inventory = Record<string, Entry>;
+export type Tool = "bun" | "node" | "rust";
+export type ToolchainException = { repo: string; tool: Tool; pin: string; reason: string; expires: string };
+export type Toolchain = { bun: string; node: string; rust: string };
+export type ToolObservation =
+  | { status: "pinned"; pin: string }
+  | { status: "not-pinned" }
+  | { status: "malformed"; value: string };
+export type ToolchainObservation = { repo: string; tools: Record<Tool, ToolObservation> };
+export type ToolchainAudit = { lines: string[]; failures: string[] };
+export class ToolchainParseError extends Error {
+  override name = "ToolchainParseError";
+}
 export type Rule = { type: string; parameters?: ObjectValue };
 export type Ruleset = {
   name: string; target: string; enforcement: string;
@@ -16,6 +28,8 @@ export type Ruleset = {
 const NAME = template.name;
 const BYPASS_VISIBILITY_ERROR = "INSUFFICIENT_PERMISSION: bypass_actors unavailable; GitHub requires write access to the ruleset to expose bypass actors";
 const REPO = /^[a-zA-Z0-9][a-zA-Z0-9-]*\/(?!\.{1,2}$)[a-zA-Z0-9_.-]+$/u;
+const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
 export function parseInventory(value: unknown): Inventory {
@@ -32,6 +46,88 @@ export function parseInventory(value: unknown): Inventory {
   const identities = Object.keys(value).map((repo) => repo.toLowerCase());
   if (new Set(identities).size !== identities.length) throw new Error("Duplicate repository identity");
   return value as Inventory;
+}
+
+function validDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+}
+
+function pinned(pin: unknown, prefix = ""): ToolObservation {
+  if (typeof pin !== "string" || !pin.startsWith(prefix) || !VERSION.test(pin.slice(prefix.length))) {
+    return { status: "malformed", value: typeof pin === "string" ? pin : (JSON.stringify(pin) ?? String(pin)) };
+  }
+  return { status: "pinned", pin: pin.slice(prefix.length) };
+}
+
+export function parseToolObservations(repo: string, files: Record<Tool, string | null>): ToolchainObservation {
+  let bun: ToolObservation = { status: "not-pinned" };
+  if (files.bun !== null) {
+    try {
+      const manifest: unknown = JSON.parse(files.bun);
+      bun = object(manifest) ? pinned(manifest.packageManager, "bun@") : { status: "malformed", value: files.bun };
+    } catch { bun = { status: "malformed", value: files.bun }; }
+  }
+  const node = files.node === null ? { status: "not-pinned" } as const : pinned(files.node.trim());
+  let rust: ToolObservation = { status: "not-pinned" };
+  if (files.rust !== null) {
+    const section = /^\s*\[toolchain\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/mu.exec(files.rust)?.[1];
+    const channel = section && /^\s*channel\s*=\s*["']([^"']+)["']\s*(?:#.*)?$/mu.exec(section)?.[1];
+    rust = channel ? pinned(channel) : { status: "malformed", value: files.rust };
+  }
+  return { repo, tools: { bun, node, rust } };
+}
+
+export function parseToolchain(value: unknown): Toolchain {
+  if (!object(value) || Object.keys(value).some((key) => !["bun", "node", "rust"].includes(key)) ||
+    typeof value.bun !== "string" || !VERSION.test(value.bun) || typeof value.node !== "string" || !VERSION.test(value.node) ||
+    typeof value.rust !== "string" || !VERSION.test(value.rust)) {
+    throw new ToolchainParseError("Invalid toolchain standard");
+  }
+  return value as Toolchain;
+}
+
+/** Exceptions name repositories, so they come from the caller's private inventory, never this public file. */
+export function parseToolchainExceptions(value: unknown): ToolchainException[] {
+  if (!Array.isArray(value)) throw new ToolchainParseError("Invalid toolchain exceptions");
+  for (const exception of value) {
+    if (!object(exception) || Object.keys(exception).some((key) => !["repo", "tool", "pin", "reason", "expires"].includes(key)) ||
+      !REPO.test(String(exception.repo ?? "")) || !["bun", "node", "rust"].includes(String(exception.tool ?? "")) ||
+      !VERSION.test(String(exception.pin ?? "")) || typeof exception.reason !== "string" || !exception.reason.trim() ||
+      exception.reason !== exception.reason.trim() || typeof exception.expires !== "string" || !validDate(exception.expires)) {
+      throw new ToolchainParseError("Invalid toolchain exception");
+    }
+  }
+  return value as ToolchainException[];
+}
+
+export function auditToolchain(standard: Toolchain, exceptions: ToolchainException[], observations: ToolchainObservation[], today: string): ToolchainAudit {
+  if (!validDate(today)) throw new Error("Invalid toolchain audit date");
+  const lines: string[] = [], failures: string[] = [];
+  for (const observation of observations) {
+    for (const tool of ["bun", "node", "rust"] as const) {
+      const seen = observation.tools[tool];
+      if (seen.status === "not-pinned") {
+        lines.push(`${observation.repo}: ${tool} not pinned`);
+        continue;
+      }
+      if (seen.status === "malformed") {
+        const line = `${observation.repo}: ${tool} pin has unsupported format: ${JSON.stringify(seen.value)}`;
+        lines.push(line); failures.push(line); continue;
+      }
+      if (seen.pin === standard[tool]) continue;
+      const exception = exceptions.find((item) => item.repo.toLowerCase() === observation.repo.toLowerCase() && item.tool === tool && item.pin === seen.pin);
+      const mismatch = `${observation.repo}: ${tool} pinned ${seen.pin}, standard ${standard[tool]}`;
+      if (exception && exception.expires >= today) {
+        lines.push(`${mismatch}; exception through ${exception.expires}: ${exception.reason}`);
+        continue;
+      }
+      const line = exception ? `${mismatch}; exception expired ${exception.expires}: ${exception.reason}` : mismatch;
+      lines.push(line); failures.push(line);
+    }
+  }
+  return { lines, failures };
 }
 
 export function render(entry: Entry): Ruleset {
@@ -123,9 +219,9 @@ export function checkInventory(inventory: Inventory, repositories: LiveRepositor
   return { lines, exitCode: lines.length ? 1 : 0 };
 }
 
-export type Options = { inventory: string; mode: "dry-run" | "check" | "apply"; repos: string[]; backupDir?: string };
+export type Options = { inventory: string; mode: "dry-run" | "check" | "apply"; repos: string[]; backupDir?: string; toolchainExceptions?: string };
 export function parseArgs(args: string[]): Options {
-  let inventory: string | undefined, backupDir: string | undefined, mode: Options["mode"] | undefined;
+  let inventory: string | undefined, backupDir: string | undefined, toolchainExceptions: string | undefined, mode: Options["mode"] | undefined;
   const repos: string[] = [];
   const selectMode = (next: Options["mode"]) => {
     if (mode) throw new Error("Choose exactly one of --dry-run, --check, or apply");
@@ -133,20 +229,23 @@ export function parseArgs(args: string[]): Options {
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--inventory" || arg === "--backup-dir") {
+    if (arg === "--inventory" || arg === "--backup-dir" || arg === "--toolchain-exceptions") {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
-      if (arg === "--inventory") inventory = value; else backupDir = value;
+      if (arg === "--inventory") inventory = value;
+      else if (arg === "--backup-dir") backupDir = value;
+      else toolchainExceptions = value;
     } else if (arg === "--dry-run") selectMode("dry-run");
     else if (arg === "--check") selectMode("check");
     else if (arg === "apply") selectMode("apply");
     else if (arg?.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
     else if (arg) repos.push(arg);
   }
-  if (!inventory || !mode || (mode === "apply" && (!repos.length || !backupDir)) || (mode !== "apply" && repos.length)) {
-    throw new Error("Usage: bun repo-standard/apply.ts --inventory <file> (--dry-run | --check | apply <owner/repo...> --backup-dir <dir>)");
+  if (!inventory || !mode || (mode === "apply" && (!repos.length || !backupDir)) || (mode !== "apply" && repos.length) ||
+    (toolchainExceptions !== undefined && mode !== "check")) {
+    throw new Error("Usage: bun repo-standard/apply.ts --inventory <file> (--dry-run | --check [--toolchain-exceptions <file>] | apply <owner/repo...> --backup-dir <dir>)");
   }
-  return { inventory, mode, repos, backupDir };
+  return { inventory, mode, repos, backupDir, ...(toolchainExceptions === undefined ? {} : { toolchainExceptions }) };
 }
 
 function gh(args: string[], input?: unknown): unknown {
@@ -168,21 +267,71 @@ function readRulesets(repo: string): Ruleset[] {
     return response as Ruleset;
   });
 }
+const REPOSITORY_TOOLCHAINS_QUERY = `
+  query($owner: String!, $cursor: String) {
+    organization(login: $owner) {
+      repositories(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          nameWithOwner
+          bun: object(expression: "HEAD:package.json") { ... on Blob { text } }
+          node: object(expression: "HEAD:.node-version") { ... on Blob { text } }
+          rust: object(expression: "HEAD:rust-toolchain.toml") { ... on Blob { text } }
+        }
+      }
+    }
+  }
+`;
+function readRepositories(owner: string): { repos: string[]; observations: ToolchainObservation[] } {
+  const repos: string[] = [], observations: ToolchainObservation[] = [];
+  let cursor: string | null = null;
+  do {
+    const args = ["graphql", "-f", `query=${REPOSITORY_TOOLCHAINS_QUERY}`, "-F", `owner=${owner}`];
+    if (cursor) args.push("-F", `cursor=${cursor}`);
+    const response = gh(args);
+    const organization = object(response) && object(response.data) ? response.data.organization : undefined;
+    const connection = object(organization) ? organization.repositories : undefined;
+    if (!object(connection) || !Array.isArray(connection.nodes) || !object(connection.pageInfo)) throw new Error(`Invalid organization repository response: ${owner}`);
+    for (const node of connection.nodes) {
+      if (!object(node) || typeof node.nameWithOwner !== "string" || !REPO.test(node.nameWithOwner)) throw new Error("Invalid organization repository");
+      const files = Object.fromEntries((["bun", "node", "rust"] as const).map((tool) => {
+        const blob = node[tool];
+        if (blob === null) return [tool, null];
+        if (!object(blob) || typeof blob.text !== "string") throw new Error(`Invalid ${tool} toolchain file response: ${node.nameWithOwner}`);
+        return [tool, blob.text];
+      })) as Record<Tool, string | null>;
+      repos.push(node.nameWithOwner);
+      observations.push(parseToolObservations(node.nameWithOwner, files));
+    }
+    if (connection.pageInfo.hasNextPage === false) cursor = null;
+    else if (connection.pageInfo.hasNextPage === true && typeof connection.pageInfo.endCursor === "string" && connection.pageInfo.endCursor) cursor = connection.pageInfo.endCursor;
+    else throw new Error(`Invalid organization repository pagination: ${owner}`);
+  } while (cursor);
+  return { repos, observations };
+}
 export function main(args: string[]): number {
   const options = parseArgs(args);
   const inventory = parseInventory(JSON.parse(readFileSync(options.inventory, "utf8")));
   if (options.mode === "check") {
+    const standard = parseToolchain(JSON.parse(readFileSync(new URL("./toolchain.json", import.meta.url), "utf8")));
+    const exceptions = options.toolchainExceptions === undefined
+      ? []
+      : parseToolchainExceptions(JSON.parse(readFileSync(options.toolchainExceptions, "utf8")));
     const owners = [...new Set(Object.keys(inventory).map((repo) => repo.split("/")[0]))];
     const repositories: LiveRepository[] = [];
+    const observations: ToolchainObservation[] = [];
     for (const owner of owners) {
-      for (const repo of pages(`orgs/${owner}/repos?type=all`)) {
-        if (typeof repo.full_name !== "string" || !REPO.test(repo.full_name)) throw new Error("Invalid organization repository");
-        repositories.push({ repo: repo.full_name, rulesets: readRulesets(repo.full_name) });
+      const organization = readRepositories(owner!);
+      observations.push(...organization.observations);
+      for (const repo of organization.repos) {
+        repositories.push({ repo, rulesets: readRulesets(repo) });
       }
     }
     const result = checkInventory(inventory, repositories);
+    const toolchains = auditToolchain(standard, exceptions, observations, new Date().toISOString().slice(0, 10));
     for (const line of result.lines) console.log(line);
-    return result.exitCode;
+    for (const line of toolchains.lines) console.log(line);
+    return result.exitCode || toolchains.failures.length ? 1 : 0;
   }
   const selected = options.mode === "apply" ? options.repos : Object.keys(inventory);
   // Validate every target before any write or backup.
