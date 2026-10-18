@@ -185,7 +185,8 @@ jobs:
 ### CLA callers
 
 Call `.github/workflows/cla.yml` for every `pull_request_target` event,
-including bot pull requests. Skipping a caller job leaves the required
+including bot pull requests. The caller job must not declare `needs`.
+Skipping a caller job leaves the required
 `cla / cla` check unreported. Use the reusable workflow's `allowlist` input
 to waive signatures for bots, and keep the `issue_comment` signing and
 `recheck` triggers. Callers must pin a full commit SHA from this repository

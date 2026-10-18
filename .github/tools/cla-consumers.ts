@@ -116,6 +116,7 @@ export function inspectCaller(source: string) {
   if (callers.length !== 1) throw new Error("expected one shared CLA caller");
   const caller = callers.at(0);
   if (!caller) throw new Error("missing shared CLA caller");
+  if (Object.hasOwn(caller, "needs")) throw new Error("CLA caller must not declare needs");
   const folded = String(caller["if"] ?? "")
     .replace(/\s+/gu, " ")
     .trim();

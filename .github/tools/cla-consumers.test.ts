@@ -50,6 +50,26 @@ test("accepts an unconditional PR arm, with or without parentheses", () => {
   ).toBe(sha);
 });
 
+test("rejects every caller needs declaration, including skipped or failing prerequisites", () => {
+  validate(caller());
+  for (const prerequisite of [
+    "    if: github.event.pull_request.user.login != 'dependabot[bot]'\n    runs-on: ubuntu-latest\n    steps:\n      - run: exit 0\n",
+    "    runs-on: ubuntu-latest\n    steps:\n      - run: exit 1\n",
+  ]) {
+    for (const needs of ["prerequisite", "[prerequisite]"]) {
+      const source = caller()
+        .replace("jobs:\n", `jobs:\n  prerequisite:\n${prerequisite}`)
+        .replace("  cla:\n", `  cla:\n    needs: ${needs}\n`);
+      expect(() => inspectCaller(source)).toThrow("CLA caller must not declare needs");
+    }
+  }
+  for (const needs of ["[]", "null", "''"]) {
+    expect(() =>
+      inspectCaller(caller().replace("  cla:\n", `  cla:\n    needs: ${needs}\n`)),
+    ).toThrow("CLA caller must not declare needs");
+  }
+});
+
 test("rejects filters in the PR arm for every allowlisted bot", () => {
   for (const bot of REQUIRED_BOTS) {
     expect(() =>
