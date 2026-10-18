@@ -760,3 +760,55 @@ steps:
 - `provenance-version` - GitHub release tag in `stella/provenance` to install (default: `v0.1.2`)
 - `provenance-repository` - Provenance repository slug (default: `stella/provenance`)
 - `show-diff-on-failure` - Print `provenance diff` output on failure (default: `true`)
+
+### Main Branch Ruleset Standard
+
+`repo-standard/ruleset.json` defines the main branch policy. The Bun CLI uses
+GitHub REST through an authenticated `gh` CLI; it adds no dependencies. Keep the
+inventory and ruleset backups in a private repository. The inventory is a JSON
+object keyed by `owner/repo`:
+
+```json
+{
+  "organization/project": {
+    "gate": "ci-result",
+    "extraChecks": ["dependency-review"],
+    "signatures": true,
+    "enabled": false
+  }
+}
+```
+
+The required checks are the gate, `cla`, and the extra checks, without duplicates.
+`enabled` authorizes explicit apply operations; read-only checks include disabled
+entries too. Enable an entry only when its workflows handle merge groups.
+
+```sh
+bun repo-standard/apply.ts --inventory /private/repos.json --dry-run
+bun repo-standard/apply.ts --inventory /private/repos.json --check
+bun repo-standard/apply.ts --inventory /private/repos.json apply organization/project --backup-dir /private/backups
+```
+
+Dry-run reads only inventory repositories and prints differences against their
+live `main-branch-protection` rulesets. Check enumerates every repository in each
+inventory organization (including private repositories visible to the token),
+reports one line per drifting rule, and exits 1 on drift or an unlisted repository
+with that ruleset name or a merge queue. Use a token that can read every repository
+in the organization so the enumeration covers the whole organization. API errors
+also exit 1. GitHub returns bypass actors only with write access to the ruleset.
+If that field is unavailable, the checker reports `INSUFFICIENT_PERMISSION` and
+exits 1; it cannot certify the full policy from a redacted response. Check and
+dry-run only read APIs, regardless of the token's permissions.
+
+Apply requires an enabled inventory entry and administration write access. Before
+each create or update it writes the full live response to a new private backup
+file named `<owner>-<repo>-<ruleset id>-<UTC timestamp>.json` (`new` and JSON `null`
+for a create). Existing matching rulesets produce no write. Inherited organization
+rulesets cannot be updated by this tool. Keep apply manual; scheduled CI should
+run `--check` only.
+
+The normalizer ignores response metadata, default empty review restrictions and
+null app bindings, while preserving additional restrictions and explicit app
+bindings. Reordered rules and required checks do not count as drift.
+
+Run the pure contract tests with `bun test repo-standard/apply.test.ts`.
