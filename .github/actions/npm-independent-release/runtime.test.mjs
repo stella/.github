@@ -4,11 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { publishReleaseEntries } from "../npm-publish-hardened/runtime.mjs";
+
 import {
   buildCreateReleaseArgs,
   buildMarkLatestArgs,
   buildPublishReleaseArgs,
   listTarballs,
+  releasePublishPlan,
+  validateReleaseDependencies,
   MAX_NPM_VISIBILITY_TIMEOUT_MINUTES,
   resolveNpmVisibilityTimeoutMinutes,
   resolveSourceSha,
@@ -115,6 +119,7 @@ test("missing npm namespaces stop before tag or draft creation", async () => {
   let releaseWrites = 0;
   const entry = {
     path: "package.tgz",
+    manifest: {},
     pkg: { name: "@stll/chat", version: "0.1.1" },
     registry: { exists: false },
     status: "stage-and-publish",
@@ -142,6 +147,7 @@ test("a later missing namespace prevents every draft write", async () => {
   const entries = [
     {
       path: "ui.tgz",
+      manifest: {},
       pkg: { name: "@stll/ui", version: "0.12.1" },
       registry: { exists: false },
       status: "stage-and-publish",
@@ -149,6 +155,7 @@ test("a later missing namespace prevents every draft write", async () => {
     },
     {
       path: "chat.tgz",
+      manifest: {},
       pkg: { name: "@stll/chat", version: "0.1.1" },
       registry: { exists: false },
       status: "stage-and-publish",
@@ -176,6 +183,7 @@ test("namespace lookup errors fail closed before draft creation", async () => {
   let releaseWrites = 0;
   const entry = {
     path: "package.tgz",
+    manifest: {},
     pkg: { name: "@stll/chat", version: "0.1.1" },
     registry: { exists: false },
     status: "stage-and-publish",
@@ -204,6 +212,7 @@ test("stages an unpublished version after namespace bootstrap", async () => {
   const writes = [];
   const entry = {
     path: "package.tgz",
+    manifest: {},
     pkg: { name: "@stll/chat", version: "0.1.1" },
     registry: { exists: false },
     status: "stage-and-publish",
@@ -518,4 +527,256 @@ test("keeps an unresolved staged release after bounded retries", async () => {
   assert.equal(result.plan.entries[0].status, "repair-release");
   assert.equal(reads, 3);
   assert.deepEqual(waits, [10, 20]);
+});
+
+const dependencyEntry = (name, manifest = {}, registry = { exists: false }) => ({
+  path: `${name.replace("/", "-")}.tgz`,
+  pkg: { name, version: "1.2.3" },
+  manifest: { name, version: "1.2.3", ...manifest },
+  registry,
+  status: registry.exists ? "complete" : "stage-and-publish",
+  tag: `${name}@1.2.3`,
+});
+
+for (const section of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+  test(`missing sibling ${section} refuses the entire release before any draft`, async () => {
+    const writes = [];
+    const lookups = [];
+    await assert.rejects(
+      stageReleaseEntries({
+        entries: [
+          dependencyEntry("@stll/independent"),
+          dependencyEntry("@stll/test-kit", { [section]: { "@stll/time": "0.4.0" } }),
+        ],
+        hasNpmNamespace: () => true,
+        readPublishedVersions: (name, version) => {
+          lookups.push([name, version]);
+          return [];
+        },
+        createNotes: () => "notes",
+        createDraftRelease: (args) => writes.push(args),
+      }),
+      new RegExp(`@stll/test-kit@1.2.3.*${section}.*@stll/time@0.4.0.*no tag or GitHub release draft`),
+    );
+    assert.deepEqual(lookups, [["@stll/time", "0.4.0"]]);
+    assert.deepEqual(writes, []);
+  });
+}
+
+test("planned sibling version satisfies preflight and is ordered before its dependent", async () => {
+  const entries = [
+    dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "1.2.3" } }),
+    dependencyEntry("@stll/time"),
+  ];
+  const writes = [];
+  await stageReleaseEntries({
+    entries,
+    hasNpmNamespace: () => true,
+    readPublishedVersions: () => assert.fail("planned version needs no registry lookup"),
+    createNotes: () => "notes",
+    createDraftRelease: ({ entry }) => writes.push(entry.pkg.name),
+  });
+  assert.equal(writes.length, 2);
+  assert.deepEqual(releasePublishPlan(entries), [
+    { name: "@stll/time", version: "1.2.3", path: "@stll-time.tgz", dependencies: [] },
+    { name: "@stll/test-kit", version: "1.2.3", path: "@stll-test-kit.tgz", dependencies: ["@stll/time"] },
+  ]);
+});
+
+test("a published exact sibling version satisfies preflight outside the plan", () => {
+  const lookups = [];
+  validateReleaseDependencies({
+    entries: [dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "0.4.0" } })],
+    readPublishedVersions: (name, specifier) => {
+      lookups.push([name, specifier]);
+      return ["0.4.0"];
+    },
+  });
+  assert.deepEqual(lookups, [["@stll/time", "0.4.0"]]);
+});
+
+test("a planned package at an incompatible version does not satisfy the dependency", () => {
+  assert.throws(() => validateReleaseDependencies({
+    entries: [
+      dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "0.4.0" } }),
+      dependencyEntry("@stll/time"),
+    ],
+    readPublishedVersions: () => [],
+  }), /@stll\/test-kit.*@stll\/time@0.4.0.*no matching version/);
+});
+
+test("a compatible published version may satisfy a dependency on a different planned version", () => {
+  validateReleaseDependencies({
+    entries: [
+      dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "0.4.0" } }),
+      dependencyEntry("@stll/time"),
+    ],
+    readPublishedVersions: () => ["0.4.0"],
+  });
+});
+
+test("same-plan dependencies are checked across scopes and for unscoped packages", () => {
+  for (const name of ["sibling", "@other/sibling"]) {
+    assert.throws(() => validateReleaseDependencies({
+      entries: [
+        dependencyEntry("@stll/test-kit", { dependencies: { [name]: "0.4.0" } }),
+        dependencyEntry(name),
+      ],
+      readPublishedVersions: () => [],
+    }), /no matching version/);
+  }
+});
+
+test("unrelated third-party dependencies are ignored", () => {
+  validateReleaseDependencies({
+    entries: [
+      dependencyEntry("@stll/test-kit", {
+        dependencies: { react: "^19.0.0", "@types/node": "*" },
+        optionalDependencies: { fsevents: "~2.3.0" },
+        peerDependencies: { vite: "^6 || ^7" },
+      }),
+      dependencyEntry("unscoped-package", { dependencies: { "other-package": "1.0.0" } }),
+    ],
+    readPublishedVersions: () => assert.fail("third-party dependencies must not be looked up"),
+  });
+});
+
+test("range preflight accepts a compatible published or planned version", () => {
+  for (const specifier of ["^1.0.0", "~1.2.0", ">=1 <2", "1.x", "^0.5.0 || ^1.0.0", "*", "1.2.0 - 1.3.0"]) {
+    validateReleaseDependencies({
+      entries: [
+        dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": specifier } }),
+        dependencyEntry("@stll/time"),
+      ],
+      readPublishedVersions: () => assert.fail("compatible planned range needs no lookup"),
+    });
+    validateReleaseDependencies({
+      entries: [dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": specifier } })],
+      readPublishedVersions: () => ["1.2.3"],
+    });
+  }
+});
+
+test("range preflight refuses incompatible and prerelease-only registry versions", () => {
+  for (const versions of [[], ["2.0.0"], ["1.2.3-rc.1"]]) {
+    assert.throws(() => validateReleaseDependencies({
+      entries: [dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "^1.0.0" } })],
+      readPublishedVersions: () => versions,
+    }), /no matching version/);
+  }
+});
+
+test("unsupported sibling specs fail closed", () => {
+  for (const specifier of ["latest", "npm:@other/time@1.2.3", "https://example.com/time.tgz"]) {
+    assert.throws(() => validateReleaseDependencies({
+      entries: [dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": specifier } })],
+      readPublishedVersions: () => assert.fail("unsupported spec must fail before registry lookup"),
+    }), /Unsupported npm dependency range/);
+  }
+});
+
+test("registry lookup failure prevents every draft", async () => {
+  const writes = [];
+  await assert.rejects(stageReleaseEntries({
+    entries: [dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "0.4.0" } })],
+    hasNpmNamespace: () => true,
+    readPublishedVersions: () => { throw new Error("registry unavailable"); },
+    createDraftRelease: (args) => writes.push(args),
+  }), /registry unavailable/);
+  assert.deepEqual(writes, []);
+});
+
+test("cycles name the packages and prevent every draft", async () => {
+  const writes = [];
+  await assert.rejects(stageReleaseEntries({
+    entries: [
+      dependencyEntry("@stll/a", { optionalDependencies: { "@stll/b": "1.2.3" } }),
+      dependencyEntry("@stll/b", { peerDependencies: { "@stll/a": "1.2.3" } }),
+    ],
+    hasNpmNamespace: () => true,
+    readPublishedVersions: () => assert.fail("cycle must fail before dependency lookup"),
+    createDraftRelease: (args) => writes.push(args),
+  }), /internal dependency cycle: @stll\/a, @stll\/b/);
+  assert.deepEqual(writes, []);
+});
+
+test("repeated sibling checks share a registry result across packages and sections", () => {
+  const lookups = [];
+  validateReleaseDependencies({
+    entries: [
+      dependencyEntry("@stll/a", {
+        dependencies: { "@stll/time": "0.4.0" },
+        peerDependencies: { "@stll/time": "0.4.0" },
+      }),
+      dependencyEntry("@stll/b", { optionalDependencies: { "@stll/time": "0.4.0" } }),
+    ],
+    readPublishedVersions: (name, version) => {
+      lookups.push([name, version]);
+      return ["0.4.0"];
+    },
+  });
+  assert.deepEqual(lookups, [["@stll/time", "0.4.0"]]);
+});
+
+test("published entries are not republished or dependency-checked on recovery", () => {
+  validateReleaseDependencies({
+    entries: [dependencyEntry("@stll/a", { dependencies: { "@stll/time": "0.4.0" } }, { exists: true })],
+    readPublishedVersions: () => assert.fail("published entries need no dependency lookup"),
+  });
+});
+
+
+test("failed sibling publication names skipped dependents and recovery publishes in dependency order", async () => {
+  const entries = [
+    dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "1.2.3" } }),
+    dependencyEntry("@stll/time"),
+    dependencyEntry("@stll/app", { peerDependencies: { "@stll/test-kit": "1.2.3" } }),
+  ];
+  const visible = new Set();
+  const attempts = [];
+  const writes = [];
+  let failTime = true;
+  const release = async () => {
+    const current = entries.map((entry) => ({ ...entry, registry: { exists: visible.has(entry.pkg.name) } }));
+    await stageReleaseEntries({
+      entries: current,
+      hasNpmNamespace: () => true,
+      readPublishedVersions: () => [],
+      createNotes: () => "notes",
+      createDraftRelease: () => {},
+    });
+    const plan = releasePublishPlan(current.filter((entry) => !entry.registry.exists));
+    await publishReleaseEntries({
+      env: { PUBLISH_PLAN: JSON.stringify(plan), TARBALLS: plan.map(({ path }) => path).join("\n") },
+      checkTarball: () => {},
+      publishTarball: ({ EXPECTED_NAME }) => {
+        attempts.push(EXPECTED_NAME);
+        if (EXPECTED_NAME === "@stll/time" && failTime) throw new Error("publish failed");
+        if (EXPECTED_NAME === "@stll/test-kit") assert.ok(visible.has("@stll/time"));
+        if (EXPECTED_NAME === "@stll/app") assert.ok(visible.has("@stll/test-kit"));
+        writes.push(EXPECTED_NAME);
+      },
+      waitForPackages: async ({ packages }) => { visible.add(packages[0].name); return []; },
+      writeOutput: () => {},
+    });
+  };
+  await assert.rejects(release(), /@stll\/time@1.2.3.*Skipped dependents: @stll\/test-kit, @stll\/app/);
+  assert.deepEqual(attempts, ["@stll/time"]);
+  assert.deepEqual(writes, []);
+  failTime = false;
+  await release();
+  assert.deepEqual(writes, ["@stll/time", "@stll/test-kit", "@stll/app"]);
+});
+
+test("recovery omits already visible sibling tarballs and derives remaining dependency edges", () => {
+  const entries = [
+    dependencyEntry("@stll/time", {}, { exists: true }),
+    dependencyEntry("@stll/test-kit", { dependencies: { "@stll/time": "1.2.3" } }),
+    dependencyEntry("@stll/app", { dependencies: { "@stll/test-kit": "1.2.3" } }),
+  ];
+  validateReleaseDependencies({ entries, readPublishedVersions: () => assert.fail("matching plan needs no lookup") });
+  assert.deepEqual(releasePublishPlan(entries.filter((entry) => !entry.registry.exists)), [
+    { name: "@stll/test-kit", version: "1.2.3", path: "@stll-test-kit.tgz", dependencies: [] },
+    { name: "@stll/app", version: "1.2.3", path: "@stll-app.tgz", dependencies: ["@stll/test-kit"] },
+  ]);
 });

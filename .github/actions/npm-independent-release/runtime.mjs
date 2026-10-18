@@ -8,24 +8,30 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import process from "node:process";
 
+import { readNpmState as npmState } from "../npm-visibility/registry.mjs";
 import {
-  NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES,
+  MAX_NPM_VISIBILITY_TIMEOUT_MINUTES,
+  resolveNpmVisibilityTimeoutMinutes,
   waitForNpmPackages,
 } from "../npm-visibility/wait.mjs";
 import {
   artifactReleaseName,
   changelogSection,
   createPlan,
+  DEPENDENCY_SECTIONS,
   hashBuffer,
   indexReleases,
   lines,
   mapArtifacts,
+  plannedDependencyNames,
   readPackages,
   releaseNotes,
   sha256File,
+  topologicalPackageNames,
   validateDistTag,
 } from "./state.mjs";
 
@@ -51,31 +57,7 @@ export const resolveSourceSha = ({ githubSha, sourceSha }) => {
   return resolved;
 };
 
-// GitHub Actions cannot derive a job's `timeout-minutes` from an input, so
-// the release job in npm-independent-release.yml carries a fixed budget
-// (55) for checkout, staging, npm publish, and this wait combined. Cap the
-// input below that fixed budget, with margin for the earlier steps, so an
-// over-large request fails fast here instead of getting silently cut off
-// mid-poll when the runner kills the job. Keep this in sync with that
-// workflow's `timeout-minutes`.
-export const MAX_NPM_VISIBILITY_TIMEOUT_MINUTES = 45;
-
-export const resolveNpmVisibilityTimeoutMinutes = (value) => {
-  if (value === undefined || value === "") {
-    return NPM_VISIBILITY_DEFAULT_TIMEOUT_MINUTES;
-  }
-  const minutes = Number(value);
-  if (
-    !Number.isFinite(minutes) ||
-    minutes <= 0 ||
-    minutes > MAX_NPM_VISIBILITY_TIMEOUT_MINUTES
-  ) {
-    fail(
-      `npm-visibility-timeout-minutes must be a positive number no greater than ${MAX_NPM_VISIBILITY_TIMEOUT_MINUTES}; got '${value}'.`,
-    );
-  }
-  return minutes;
-};
+export { MAX_NPM_VISIBILITY_TIMEOUT_MINUTES, resolveNpmVisibilityTimeoutMinutes };
 
 const run = (command, args, options = {}) =>
   execFileSync(command, args, {
@@ -123,58 +105,6 @@ const tagTarget = (repository, tag) => {
   if (object.type !== "commit")
     fail(`Tag ${tag} does not resolve to a commit.`);
   return object.sha;
-};
-
-// The per-version document is served before the package document lists a new
-// version, which can lag a publish by about 30 minutes. Treat a 200 there as
-// proof the version exists; anything else falls back to `npm view`.
-const npmVersionDocumentState = (name, version) => {
-  const result = attempt("curl", [
-    "-sS",
-    "--max-time",
-    "30",
-    "-w",
-    "\n%{http_code}",
-    `https://registry.npmjs.org/${name}/${version}`,
-  ]);
-  if (result.status !== 0) return null;
-  const split = result.stdout.lastIndexOf("\n");
-  if (result.stdout.slice(split + 1) !== "200") return null;
-  const metadata = JSON.parse(result.stdout.slice(0, split));
-  if (metadata.version !== version) return null;
-  return {
-    exists: true,
-    integrity: metadata.dist?.integrity ?? null,
-    tarball: metadata.dist?.tarball ?? null,
-  };
-};
-
-const npmState = (name, version) => {
-  const spec = `${name}@${version}`;
-  const versionDocument = npmVersionDocumentState(name, version);
-  if (versionDocument) return versionDocument;
-  const result = attempt("npm", [
-    "view",
-    spec,
-    "version",
-    "dist.integrity",
-    "dist.tarball",
-    "--json",
-  ]);
-  if (result.status !== 0) {
-    if (isNotFound(result))
-      return { exists: false, integrity: null, tarball: null };
-    fail(`npm registry lookup failed for ${spec}: ${result.stderr.trim()}`);
-  }
-  const metadata = JSON.parse(result.stdout);
-  if (metadata.version !== version) {
-    fail(`npm returned '${metadata.version}' for ${spec}.`);
-  }
-  return {
-    exists: true,
-    integrity: metadata["dist.integrity"] ?? metadata.dist?.integrity ?? null,
-    tarball: metadata["dist.tarball"] ?? metadata.dist?.tarball ?? null,
-  };
 };
 
 const npmNamespaceExists = (name) => {
@@ -524,6 +454,86 @@ const pendingStagingEntries = (state) =>
 const unpublishedEntries = (entries) =>
   entries.filter((entry) => !entry.registry.exists);
 
+let npmSemver;
+const dependencyRange = (specifier, context) => {
+  // The action installs a pinned global npm before preparing releases. Use
+  // its own semver implementation so registry and planned-version matching
+  // share npm's range semantics without installing another tool.
+  npmSemver ??= createRequire(
+    join(run("npm", ["root", "--global"]), "npm", "package.json"),
+  )("semver");
+  const range = npmSemver.validRange(specifier);
+  if (range === null) fail(`${context}: Unsupported npm dependency range '${specifier}'.`);
+  return (version) => npmSemver.satisfies(version, range);
+};
+
+const npmDependencyVersions = (name, specifier) => {
+  if (npmSemver.valid(specifier) === specifier) {
+    return npmState(name, specifier).exists ? [specifier] : [];
+  }
+  const result = attempt("npm", [
+    "view",
+    `${name}@${specifier}`,
+    "version",
+    "--json",
+  ]);
+  if (result.status !== 0) {
+    if (isNotFound(result)) return [];
+    fail(`npm dependency lookup failed for ${name}@${specifier}: ${result.stderr.trim()}`);
+  }
+  const versions = JSON.parse(result.stdout);
+  return Array.isArray(versions) ? versions : [versions];
+};
+
+const packageScope = (name) =>
+  name.startsWith("@") ? name.split("/")[0] : null;
+
+export const releasePublishPlan = (entries) => {
+  const byName = new Map(entries.map((entry) => [entry.pkg.name, entry]));
+  return topologicalPackageNames(byName).map((name) => {
+    const entry = byName.get(name);
+    return {
+      name,
+      version: entry.pkg.version,
+      path: entry.path,
+      dependencies: [...plannedDependencyNames(entry.manifest, byName)],
+    };
+  });
+};
+
+export const validateReleaseDependencies = ({
+  entries,
+  readPublishedVersions = npmDependencyVersions,
+  matchRange = dependencyRange,
+}) => {
+  // Validate the entire graph before registry checks or any release writes.
+  releasePublishPlan(entries);
+  const byName = new Map(entries.map((entry) => [entry.pkg.name, entry]));
+  const published = new Map();
+  for (const entry of unpublishedEntries(entries)) {
+    const scope = packageScope(entry.pkg.name);
+    for (const section of DEPENDENCY_SECTIONS) {
+      for (const [name, specifier] of Object.entries(entry.manifest[section] ?? {})) {
+        if (!byName.has(name) && (!scope || packageScope(name) !== scope)) continue;
+        const matches = matchRange(
+          specifier,
+          `${entry.pkg.name}@${entry.pkg.version} requires ${section} ${name}@${specifier}`,
+        );
+        const planned = byName.get(name);
+        if (planned && matches(planned.pkg.version)) continue;
+        const key = `${name}@${specifier}`;
+        if (!published.has(key)) {
+          published.set(key, readPublishedVersions(name, specifier));
+        }
+        if (published.get(key).some(matches)) continue;
+        fail(
+          `${entry.pkg.name}@${entry.pkg.version} requires ${section} ${name}@${specifier}, but no matching version is published on npm or produced by this release plan; no tag or GitHub release draft was created.`,
+        );
+      }
+    }
+  }
+};
+
 export const stageReleaseEntries = async ({
   createDraftRelease = createDraft,
   createNotes = notesFor,
@@ -533,6 +543,8 @@ export const stageReleaseEntries = async ({
   recoverRegistryAsset = registryAsset,
   repository,
   temporaryDirectory,
+  readPublishedVersions = npmDependencyVersions,
+  matchRange = dependencyRange,
 }) => {
   // A package's first npm publication needs an explicitly bootstrapped
   // namespace. Check every unpublished target before createDraft can create a
@@ -543,6 +555,8 @@ export const stageReleaseEntries = async ({
       `npm package namespace ${entry.pkg.name} does not exist. Bootstrap it and configure trusted publishing before releasing ${entry.tag}; no tag or GitHub release draft was created.`,
     );
   }
+
+  validateReleaseDependencies({ entries, readPublishedVersions, matchRange });
 
   const drafts = new Map();
   for (const entry of entries) {
@@ -601,6 +615,7 @@ export const waitForStagedState = async ({
 
 export const prepare = async () => {
   validateDistTag(process.env.DIST_TAG);
+  resolveNpmVisibilityTimeoutMinutes(process.env.NPM_VISIBILITY_TIMEOUT_MINUTES);
   validateGithubLatestConfiguration({
     packageName: process.env.GITHUB_LATEST_PACKAGE,
     policy: process.env.GITHUB_LATEST_POLICY,
@@ -631,7 +646,9 @@ export const prepare = async () => {
   for (const entry of pendingStagingEntries(staged)) {
     fail(`Failed to stage ${entry.tag}.`);
   }
-  appendOutput("tarballs", staged.plan.missingTarballs.join("\n"));
+  const publishPlan = releasePublishPlan(unpublishedEntries(staged.plan.entries));
+  appendOutput("tarballs", publishPlan.map(({ path }) => path).join("\n"));
+  appendOutput("publish-plan", JSON.stringify(publishPlan));
   appendOutput("changed", staged.plan.alreadyReleased ? "false" : "true");
 };
 

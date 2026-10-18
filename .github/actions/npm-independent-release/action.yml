@@ -77,15 +77,19 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         GITHUB_LATEST_PACKAGE: ${{ inputs.github-latest-package }}
         GITHUB_LATEST_POLICY: ${{ inputs.github-latest-policy }}
+        NPM_VISIBILITY_TIMEOUT_MINUTES: ${{ inputs.npm-visibility-timeout-minutes }}
         PACKAGE_FILES: ${{ inputs.package-files }}
         SOURCE_SHA: ${{ inputs.source-sha }}
       run: node "$GITHUB_ACTION_PATH/prepare.mjs"
 
     - name: Publish missing versions to npm
       if: steps.prepare.outputs.tarballs != ''
-      uses: stella/.github/.github/actions/npm-publish-hardened@42bd6a23099a2dc219dd1af9c55f8f0506fcfffd
+      # Use the hardened publisher from this immutable release-tooling checkout.
+      uses: ./.release-tooling/.github/actions/npm-publish-hardened
       with:
         tarballs: ${{ steps.prepare.outputs.tarballs }}
+        publish-plan: ${{ steps.prepare.outputs.publish-plan }}
+        npm-visibility-timeout-minutes: ${{ inputs.npm-visibility-timeout-minutes }}
         tag: ${{ inputs.dist-tag }}
 
     - name: Verify npm and publish GitHub releases

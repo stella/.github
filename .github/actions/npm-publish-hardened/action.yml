@@ -43,6 +43,13 @@ inputs:
     description: npm dist-tag for the publish (e.g. latest, next, rc)
     required: false
     default: latest
+  publish-plan:
+    description: Ordered JSON entries containing name, version, path and planned dependency names. Requires tarballs in the same order; waits for npm visibility after each entry.
+    required: false
+  npm-visibility-timeout-minutes:
+    description: Total visibility budget for the ordered plan in minutes, up to 45.
+    required: false
+    default: "20"
   expected-name:
     description: Optional exact package name required in a single tarball.
     required: false
@@ -50,10 +57,16 @@ inputs:
     description: Optional exact package version required in a single tarball.
     required: false
 
+outputs:
+  skipped-dependents:
+    description: JSON array of transitive dependents skipped after a planned publication or visibility failure.
+    value: ${{ steps.publish.outputs.skipped-dependents }}
+
 runs:
   using: composite
   steps:
     - name: Publish
+      id: publish
       shell: bash
       env:
         TARBALL: ${{ inputs.tarball }}
@@ -61,15 +74,8 @@ runs:
         DIST_TAG: ${{ inputs.tag }}
         EXPECTED_NAME: ${{ inputs.expected-name }}
         EXPECTED_VERSION: ${{ inputs.expected-version }}
-      # Invoke bash explicitly rather than running the path as a command.
-      # The GitHub Actions runner does not always preserve the file-mode
-      # exec bit on action checkouts, so `./publish.sh` can silently
-      # fail with "permission denied" while still surfacing as exit 1
-      # with no script output. `bash <path>` removes that dependency
-      # entirely — bash reads the file regardless of its mode.
-      #
-      # `-e -o pipefail` mirror the runner's default shell flags. The
-      # shebang's flags are ignored when invoked via `bash <path>`, so
-      # passing them explicitly here protects the empty window between
-      # bash startup and the script's own `set -euo pipefail` on line 2.
-      run: bash -eo pipefail "${{ github.action_path }}/publish.sh"
+        PUBLISH_PLAN: ${{ inputs.publish-plan }}
+        NPM_VISIBILITY_TIMEOUT_MINUTES: ${{ inputs.npm-visibility-timeout-minutes }}
+      # The action owns publication; its runtime invokes the unchanged hardened
+      # shell entrypoint with bash -eo pipefail for every planned tarball.
+      run: node "${{ github.action_path }}/publish.mjs"
