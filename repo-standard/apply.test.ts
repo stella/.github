@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import liveFixture from "./fixtures/live-ruleset.json";
 import template from "./ruleset.json";
-import { audit, checkInventory, diff, normalise, parseArgs, parseInventory, render, type Entry, type Ruleset } from "./apply";
+import { audit, auditToolchain, checkInventory, diff, normalise, parseArgs, parseInventory, parseToolchain, parseToolchainExceptions, parseToolObservations, render, type Entry, type Ruleset, type Toolchain, type ToolchainException, type ToolchainObservation } from "./apply";
 
 const entry: Entry = { gate: "ci-result", extraChecks: ["dependency-review"], signatures: true, enabled: true };
 const live = structuredClone(liveFixture) as Ruleset;
@@ -160,5 +160,86 @@ describe("input boundaries", () => {
     for (const invalid of [null, [], {}, { "fixture/project": { ...entry, gate: "" } }, { "fixture/project": { ...entry, extraChecks: [""] } }, { "fixture/project": { ...entry, signatures: "true" } }, { "fixture/project": { ...entry, enabled: 1 } }, { "fixture/project": { ...entry, extra: true } }, { "../project": entry }, { "fixture/project": entry, "FIXTURE/PROJECT": entry }]) {
       expect(() => parseInventory(invalid)).toThrow();
     }
+  });
+});
+
+const toolchain: Toolchain = { bun: "1.4.3", node: "26.10.0", rust: "1.99.0" };
+const migration = (expires: string): ToolchainException[] => [{ repo: "fixture/project", tool: "bun", pin: "1.4.2", reason: "Scheduled migration", expires }];
+const observed = (tool: "bun" | "node" | "rust", pin: string): ToolchainObservation => ({
+  repo: "fixture/project",
+  tools: {
+    bun: { status: "not-pinned" }, node: { status: "not-pinned" }, rust: { status: "not-pinned" },
+    [tool]: { status: "pinned", pin },
+  },
+});
+
+describe("toolchain standard", () => {
+  test("matching full versions pass", () => {
+    expect(auditToolchain(toolchain, [], [observed("bun", "1.4.3")], "2026-10-18").failures).toEqual([]);
+  });
+  test("a patch mismatch fails and reports both exact versions", () => {
+    expect(auditToolchain(toolchain, [], [observed("bun", "1.4.2")], "2026-10-18").failures).toEqual(["fixture/project: bun pinned 1.4.2, standard 1.4.3"]);
+  });
+  test("missing files are typed not-pinned summaries, not failures", () => {
+    const observation = parseToolObservations("fixture/project", { bun: null, node: null, rust: null });
+    expect(observation.tools).toEqual({ bun: { status: "not-pinned" }, node: { status: "not-pinned" }, rust: { status: "not-pinned" } });
+    expect(auditToolchain(toolchain, [], [observation], "2026-10-18")).toEqual({
+      lines: ["fixture/project: bun not pinned", "fixture/project: node not pinned", "fixture/project: rust not pinned"], failures: [],
+    });
+  });
+  test("an unexpired exact exception permits its pin", () => {
+    expect(auditToolchain(toolchain, migration("2026-10-19"), [observed("bun", "1.4.2")], "2026-10-18").failures).toEqual([]);
+  });
+  test("an exception only covers its exact pin", () => {
+    expect(auditToolchain(toolchain, migration("2026-10-19"), [observed("bun", "1.4.1")], "2026-10-18").failures).toEqual(["fixture/project: bun pinned 1.4.1, standard 1.4.3"]);
+  });
+  test("an expired exception fails with its reason", () => {
+    expect(auditToolchain(toolchain, migration("2026-10-17"), [observed("bun", "1.4.2")], "2026-10-18").failures[0]).toContain("exception expired 2026-10-17: Scheduled migration");
+  });
+  test("present malformed pins fail rather than being skipped", () => {
+    const observation = parseToolObservations("fixture/project", {
+      bun: JSON.stringify({ packageManager: "npm@11.0.0" }), node: "26", rust: "[toolchain]\nchannel = \"stable\"\n",
+    });
+    const result = auditToolchain(toolchain, [], [observation], "2026-10-18");
+    expect(result.failures).toHaveLength(3);
+    expect(result.failures.every((line) => line.includes("unsupported format"))).toBe(true);
+  });
+  test("the standard rejects unknown keys, exceptions and malformed versions with a named error", () => {
+    expect(parseToolchain(toolchain)).toEqual(toolchain);
+    for (const invalid of [{ ...toolchain, extra: true }, { ...toolchain, bun: "1.4" }, { ...toolchain, exceptions: [] }]) {
+      try { parseToolchain(invalid); expect.unreachable(); }
+      catch (error) { expect(error).toHaveProperty("name", "ToolchainParseError"); }
+    }
+  });
+  test("exceptions reject unknown keys, blank reasons and impossible ISO dates with a named error", () => {
+    expect(parseToolchainExceptions(migration("2026-10-19"))).toEqual(migration("2026-10-19"));
+    for (const invalid of [{}, [{ ...migration("2026-10-19")[0], extra: true }], [{ ...migration("2026-10-19")[0], reason: " " }], migration("2026-02-30")]) {
+      try { parseToolchainExceptions(invalid); expect.unreachable(); }
+      catch (error) { expect(error).toHaveProperty("name", "ToolchainParseError"); }
+    }
+  });
+  test("rust pins are read as TOML, so comments and spacing do not matter", () => {
+    const observation = parseToolObservations("fixture/project", {
+      bun: null, node: null, rust: "[toolchain] # pinned for the workspace\nchannel = \"1.99.0\" # stable\n",
+    });
+    expect(observation.tools.rust).toEqual({ status: "pinned", pin: "1.99.0" });
+  });
+  test("malformed manifests are described without echoing their contents", () => {
+    const secret = "private-dependency-name";
+    const observation = parseToolObservations("fixture/project", {
+      bun: `{"packageManager": "npm@11.0.0", "dependencies": {"${secret}": "1.0.0"}`, node: null, rust: `[tool\nchannel = "${secret}"`,
+    });
+    const result = auditToolchain(toolchain, [], [observation], "2026-10-18");
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures.join("\n")).not.toContain(secret);
+  });
+  test("duplicate exceptions for one repository, tool and pin are rejected", () => {
+    const [entry] = migration("2026-10-19");
+    try { parseToolchainExceptions([entry, { ...entry, repo: "FIXTURE/project", expires: "2026-10-30" }]); expect.unreachable(); }
+    catch (error) { expect(error).toHaveProperty("name", "ToolchainParseError"); }
+  });
+  test("toolchain exceptions are accepted only with --check", () => {
+    expect(parseArgs(["--inventory", "repos.json", "--check", "--toolchain-exceptions", "exceptions.json"]).toolchainExceptions).toBe("exceptions.json");
+    expect(() => parseArgs(["--inventory", "repos.json", "--dry-run", "--toolchain-exceptions", "exceptions.json"])).toThrow();
   });
 });
