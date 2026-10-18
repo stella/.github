@@ -3,7 +3,9 @@ import liveFixture from "./fixtures/live-ruleset.json";
 import { audit, diff, normalise, parseArgs, parseInventory, render, type Entry, type Ruleset } from "./apply";
 
 const entry: Entry = { gate: "ci-result", extraChecks: ["dependency-review"], signatures: true, enabled: true };
-const live = liveFixture as Ruleset;
+const live = structuredClone(liveFixture) as Ruleset;
+// The live fixture predates the explicit unattributed-change protection.
+live.rules.find((rule) => rule.type === "pull_request")!.parameters!.require_extra_approval_for_unattributed_changes = true;
 const inventory = { "fixture/project": entry };
 
 describe("render", () => {
@@ -22,7 +24,7 @@ describe("render", () => {
     expect(body.rules.find((rule) => rule.type === "pull_request")?.parameters).toEqual({
       required_approving_review_count: 0, dismiss_stale_reviews_on_push: true,
       require_code_owner_review: false, require_last_push_approval: false,
-      required_review_thread_resolution: true, allowed_merge_methods: ["squash"],
+      required_review_thread_resolution: true, require_extra_approval_for_unattributed_changes: true, allowed_merge_methods: ["squash"],
     });
     expect(body.rules.map((rule) => rule.type).sort()).toEqual([
       "deletion", "merge_queue", "non_fast_forward", "pull_request", "required_linear_history", "required_signatures", "required_status_checks",
@@ -42,6 +44,10 @@ describe("render", () => {
 });
 
 describe("normalise and diff", () => {
+  test("unattributed-change protection is required and an off live setting drifts", () => {
+    expect(render(entry).rules.find((rule) => rule.type === "pull_request")!.parameters!.require_extra_approval_for_unattributed_changes).toBe(true);
+    expect(diff(liveFixture as Ruleset, render(entry)).map((change) => change.rule)).toEqual(["rules.pull_request"]);
+  });
   test("the live response matches its rendered policy despite server metadata and defaults", () => {
     expect(diff(live, render(entry))).toEqual([]);
     expect(normalise(normalise(live))).toEqual(normalise(live));
@@ -66,7 +72,7 @@ describe("normalise and diff", () => {
   });
   test("preserves restrictive server fields and explicit app bindings", () => {
     const changed = structuredClone(live);
-    changed.rules.find((rule) => rule.type === "pull_request")!.parameters!.require_extra_approval_for_unattributed_changes = true;
+    changed.rules.find((rule) => rule.type === "pull_request")!.parameters!.dismissal_restriction = { enabled: true, allowed_actors: [] };
     const checks = changed.rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks as { context: string; integration_id?: number }[];
     checks[0]!.integration_id = 123;
     expect(diff(changed, render(entry)).map((change) => change.rule)).toEqual(["rules.pull_request", "rules.required_status_checks"]);
