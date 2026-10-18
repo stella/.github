@@ -1,0 +1,4 @@
+[test]
+# Bun ignores hidden directories during discovery unless the repository's GitHub
+# configuration directory is the explicit test root.
+root = ".github"
