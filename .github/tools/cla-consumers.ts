@@ -7,27 +7,60 @@ export const REQUIRED_BOTS = [
   "github-actions[bot]",
   "stella-provenance-updater[bot]",
 ];
+const REQUIRED_PR_EVENTS = ["opened", "synchronize", "reopened"];
 const DAY_MS = 86_400_000;
+export const REQUIRED_PERMISSIONS = {
+  actions: "write",
+  contents: "read",
+  issues: "write",
+  "pull-requests": "write",
+  statuses: "write",
+} as const;
 const CLA_WORKFLOW = "stella/.github/.github/workflows/cla.yml@";
 
-type Caller = { uses?: string; if?: string; with?: { allowlist?: string } };
+type Permissions = Record<string, string>;
+type Caller = {
+  uses?: string;
+  if?: string;
+  with?: { allowlist?: string };
+  permissions?: Permissions;
+  secrets?: Record<string, string> | "inherit";
+};
 type ApiResult = { content?: string; commit?: { committer: { date: string } } };
 type Config = { repositories: string[]; maxPinAgeDays: number };
 
 export function inspectCaller(source: string): string {
   const workflow: {
-    on?: { pull_request_target?: Record<string, unknown> | null };
+    on?: {
+      pull_request_target?: Record<string, unknown> | null;
+      issue_comment?: { types?: string[] } | null;
+    };
     jobs?: Record<string, Caller>;
+    permissions?: Permissions;
   } = YAML.parse(source);
   const trigger = workflow.on?.pull_request_target;
   if (trigger === undefined) throw new Error("missing pull_request_target trigger");
   if (trigger && ["branches", "branches-ignore", "paths", "paths-ignore"].some((key) => key in trigger)) {
     throw new Error("CLA trigger must cover every pull request");
   }
+  const types = trigger?.types;
+  if (types !== undefined && (!Array.isArray(types) || !REQUIRED_PR_EVENTS.every((event) => types.includes(event)))) {
+    throw new Error("CLA trigger must cover opened, synchronize and reopened pull requests");
+  }
+  if (workflow.on?.issue_comment === undefined || (workflow.on.issue_comment?.types && !workflow.on.issue_comment.types.includes("created"))) {
+    throw new Error("CLA trigger must cover created signing comments");
+  }
   const jobs = Object.values(workflow.jobs ?? {});
   const callers = jobs.filter((job) => job.uses?.startsWith(CLA_WORKFLOW));
   if (callers.length !== 1) throw new Error("expected one shared CLA caller");
   const caller = callers[0]!;
+  const permissions = caller.permissions ?? workflow.permissions ?? {};
+  for (const [scope, access] of Object.entries(REQUIRED_PERMISSIONS)) {
+    if (permissions[scope] !== access) throw new Error(`CLA caller requires ${scope}: ${access}`);
+  }
+  if (caller.secrets !== "inherit" && caller.secrets?.CLA_APP_PRIVATE_KEY !== "${{ secrets.CLA_APP_PRIVATE_KEY }}") {
+    throw new Error("CLA caller must forward CLA_APP_PRIVATE_KEY");
+  }
   const folded = String(caller.if ?? "").replace(/\s+/gu, " ").trim();
   const privateGuard = /^!github\.event\.repository\.private && \(\s*/u;
   const condition = privateGuard.test(folded)
@@ -49,6 +82,28 @@ export function inspectCaller(source: string): string {
   return sha;
 }
 
+export function inspectReusable(source: string): void {
+  const workflow = YAML.parse(source);
+  for (const [scope, access] of Object.entries(REQUIRED_PERMISSIONS)) {
+    if (workflow.permissions?.[scope] !== access) {
+      throw new Error(`pinned CLA workflow requires ${scope}: ${access}`);
+    }
+  }
+  const contract = workflow.on?.workflow_call;
+  if (contract?.inputs?.allowlist?.type !== "string" || contract?.secrets?.CLA_APP_PRIVATE_KEY?.required !== true) {
+    throw new Error("pinned CLA workflow must expose the shared caller contract");
+  }
+  const assistant = workflow.jobs?.cla?.steps?.find(
+    (step: { uses?: string }) => step.uses?.startsWith("contributor-assistant/github-action@"),
+  );
+  if (!assistant || !/^contributor-assistant\/github-action@[a-f0-9]{40}$/u.test(assistant.uses)) {
+    throw new Error("pinned CLA workflow must run the SHA-pinned contributor assistant");
+  }
+  if (assistant.with?.allowlist !== "${{ inputs.allowlist }}") {
+    throw new Error("pinned CLA workflow must forward the caller allowlist");
+  }
+}
+
 export function checkPinAge(date: string, maxPinAgeDays: number, now = Date.now()): void {
   const timestamp = Date.parse(date);
   if (!Number.isFinite(timestamp) || timestamp > now || now - timestamp > maxPinAgeDays * DAY_MS) {
@@ -67,6 +122,9 @@ export async function auditConsumers(config: Config, api: (path: string) => Prom
       let commit = commits.get(sha);
       if (!commit) {
         commit = await api(`repos/stella/.github/commits/${sha}`);
+        const reusable = await api(`repos/stella/.github/contents/.github/workflows/cla.yml?ref=${sha}`);
+        if (typeof reusable.content !== "string") throw new Error("missing pinned CLA workflow content");
+        inspectReusable(Buffer.from(reusable.content, "base64").toString("utf8"));
         commits.set(sha, commit);
       }
       if (!commit.commit?.committer.date) throw new Error("missing CLA commit date");
