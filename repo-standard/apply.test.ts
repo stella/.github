@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import liveFixture from "./fixtures/live-ruleset.json";
+import template from "./ruleset.json";
 import { audit, diff, normalise, parseArgs, parseInventory, render, type Entry, type Ruleset } from "./apply";
 
 const entry: Entry = { gate: "ci-result", extraChecks: ["dependency-review"], signatures: true, enabled: true };
@@ -9,6 +10,25 @@ live.rules.find((rule) => rule.type === "pull_request")!.parameters!.require_ext
 const inventory = { "fixture/project": entry };
 
 describe("render", () => {
+  test("each repository gets a deep copy independent of other renders and the template", () => {
+    const originalTemplate = structuredClone(template);
+    const firstEntry: Entry = { gate: "first-gate", extraChecks: ["first-extra"], signatures: true, enabled: true };
+    const secondEntry: Entry = { gate: "second-gate", extraChecks: ["second-extra"], signatures: false, enabled: true };
+    const first = render(firstEntry);
+    const second = render(secondEntry);
+    const originalSecond = structuredClone(second);
+    const checks = first.rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks as { context: string }[];
+    checks[0]!.context = "mutated-gate";
+    checks.push({ context: "mutated-extra" });
+    first.rules.find((rule) => rule.type === "merge_queue")!.parameters!.max_entries_to_build = 999;
+    (first.conditions.ref_name as { include: string[] }).include.push("refs/heads/mutated");
+    first.bypass_actors[0]!.actor_id = 999;
+    first.rules.push({ type: "mutated-rule" });
+    expect(second).toEqual(originalSecond);
+    expect(template).toEqual(originalTemplate);
+    expect(render(secondEntry)).toEqual(originalSecond);
+    expect(render(firstEntry).rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks).toEqual([{ context: "first-gate" }, { context: "cla" }, { context: "first-extra" }]);
+  });
   test("pins the complete queue and review policy", () => {
     const body = render(entry);
     expect(body.name).toBe("main-branch-protection");
