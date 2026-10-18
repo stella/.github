@@ -4,10 +4,14 @@ import {
   checkQuarantinePolicy,
   pruneExpiredExcludes,
   validateCallerWorkflowRefs,
+  warningAnnotation,
 } from "./check";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
 const lockfile = '"@stll/native": ["@stll/native@1.0.0", "", {}, "sha512-x"]';
+const registryLockfile = (...resolutions: string[]) => JSON.stringify({
+  packages: Object.fromEntries(resolutions.map((resolution, index) => [index, [resolution, ""]])),
+});
 const bunfig = (entries: string) => `[install]
 minimumReleaseAge = 432_000
 minimumReleaseAgeExcludes = [
@@ -110,18 +114,78 @@ describe("quarantine policy", () => {
     );
   });
 
-  test("warns briefly, then rejects an expired temporary exclude", () => {
+  test("scopes expired exceptions to the change on PR and merge queue events", () => {
     const candidate = bunfig(
-      '  "third-party", # quarantine-expires: 2026-08-29T11:00:00.000Z',
+      '  "third-party", # quarantine-expires: 2026-08-20T00:00:00.000Z',
     );
-    expect(checkQuarantinePolicy({ bunfig: candidate, lockfile: "", now: NOW }).warnings).toHaveLength(1);
-    expect(
-      checkQuarantinePolicy({
+    const baseLockfile = registryLockfile("third-party@1.0.0");
+    for (const eventName of ["pull_request", "merge_group"]) {
+      const input = {
         bunfig: candidate,
-        lockfile: "",
-        now: new Date("2026-08-30T12:00:00.001Z"),
-      }).errors.join("\n"),
-    ).toContain("expired");
+        baseBunfig: candidate,
+        baseLockfile,
+        lockfile: baseLockfile,
+        eventName,
+        now: NOW,
+      };
+      const result = checkQuarantinePolicy(input);
+      expect(result.errors).toEqual([]);
+      expect(result.warnings).toHaveLength(1);
+      expect(warningAnnotation(result.warnings[0]!)).toStartWith("::warning::");
+      const affectingChanges = [
+        { lockfile: registryLockfile("third-party@2.0.0") },
+        { baseLockfile: registryLockfile() },
+        { bunfig: candidate + "# changed config\n" },
+        { baseBunfig: undefined },
+        { baseNpmrcPresent: true },
+      ];
+      for (const change of affectingChanges) {
+        expect(checkQuarantinePolicy({ ...input, ...change }).errors).toHaveLength(1);
+      }
+      expect(checkQuarantinePolicy({
+        ...input,
+        lockfile: registryLockfile("third-party@1.0.0", "other@1.0.0"),
+      }).errors).toEqual([]);
+      expect(checkQuarantinePolicy({
+        ...input,
+        now: new Date("2027-08-29T12:00:00.000Z"),
+      }).errors).toEqual([]);
+    }
+  });
+
+  test("expiry fails immediately on main and schedule and can be pruned", () => {
+    const candidate = bunfig(
+      '  "third-party", # quarantine-expires: 2026-08-29T12:00:00.000Z',
+    );
+    for (const eventName of ["push", "schedule"]) {
+      const input = { bunfig: candidate, lockfile: "", eventName, now: NOW };
+      expect(checkQuarantinePolicy(input).errors.join("\n")).toContain("expired");
+      const pruned = pruneExpiredExcludes({ bunfig: candidate, now: NOW });
+      expect(pruned.pruned).toEqual(["third-party"]);
+      expect(checkQuarantinePolicy({ ...input, bunfig: pruned.bunfig }).errors).toEqual([]);
+    }
+  });
+
+  test("applies the same change scope to future first-party exclusion dates", () => {
+    const candidate = bunfig(
+      '  "@stll/native", # quarantine-excluded-since: 2026-08-30T00:00:00.000Z',
+    );
+    const input = {
+      bunfig: candidate,
+      baseBunfig: candidate,
+      baseLockfile: registryLockfile(),
+      lockfile: registryLockfile(),
+      now: NOW,
+    };
+    expect(checkQuarantinePolicy({ ...input, eventName: "pull_request" }).warnings).toHaveLength(1);
+    expect(checkQuarantinePolicy({ ...input, eventName: "schedule" }).errors).toHaveLength(1);
+    expect(checkQuarantinePolicy({
+      ...input, eventName: "pull_request", baseBunfig: bunfig(""),
+    }).errors).toHaveLength(1);
+  });
+
+  test("escapes annotation data", () => {
+    expect(warningAnnotation("a%\n::error::b\r")).toBe("::warning::a%25%0A::error::b%0D");
   });
 
   test("prunes only expired temporary excludes", () => {
@@ -151,6 +215,25 @@ describe("quarantine policy", () => {
         now: NOW,
       });
       expect(result.errors).toEqual([]);
+    }
+  });
+
+  test("allows main push callers without allowing filtered PR or schedule triggers", () => {
+    const expectedRef = "a".repeat(40);
+    const expectedRepository = "stella/example";
+    const workflows = callerWorkflows({ expectedRef, expectedRepository });
+    const withPush = (workflow: string, branches = "[main]") =>
+      workflow.replace("on:\n", `on:\n  push:\n    branches: ${branches}\n`);
+    expect(validateCallerWorkflowRefs({
+      expectedRef, expectedRepository,
+      policyWorkflow: withPush(workflows.policyWorkflow),
+      pruneWorkflow: withPush(workflows.pruneWorkflow),
+    })).toEqual([]);
+    for (const name of ["policyWorkflow", "pruneWorkflow"] as const) {
+      expect(validateCallerWorkflowRefs({
+        expectedRef, expectedRepository, ...workflows,
+        [name]: withPush(workflows[name], "[other]"),
+      }).join("\n")).toContain("restrict push to main");
     }
   });
 
@@ -333,7 +416,7 @@ describe("quarantine policy", () => {
     }
   });
 
-  test("gates reusable pruning and App credentials on the runtime schedule event", () => {
+  test("runs strict enforcement independently of pruning on schedule and main push", () => {
     const workflow = Bun.YAML.parse(
       readFileSync(".github/workflows/quarantine-prune.yml", "utf8"),
     );
@@ -342,10 +425,14 @@ describe("quarantine policy", () => {
       group: "quarantine-prune-${{ github.repository }}",
     });
     expect(workflow.jobs.prepare.if).toBe(
-      "github.repository_owner == 'stella' && github.event_name == 'schedule'",
+      "github.repository_owner == 'stella' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))",
     );
+    expect(workflow.jobs.enforce.needs).toBeUndefined();
+    expect(workflow.jobs.prepare.needs).toBeUndefined();
+    expect(workflow.jobs.enforce.if).toBe(workflow.jobs.prepare.if);
+    expect(workflow.jobs.enforce.uses).toBe("./.github/workflows/quarantine-policy.yml");
     expect(workflow.jobs.propose.if).toBe(
-      "github.event_name == 'schedule' && needs.prepare.outputs.changed == 'true'",
+      "(github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && needs.prepare.outputs.changed == 'true'",
     );
   });
 
@@ -356,6 +443,7 @@ describe("quarantine policy", () => {
     const checkout = workflow.jobs.enforce.steps.find(
       (step: { name?: string }) => step.name === "Checkout trusted target base",
     );
+    expect(checkout?.if).toBe("github.event_name == 'pull_request' || github.event_name == 'merge_group'");
     expect(checkout?.with).toEqual({
       path: ".quarantine-base",
       "persist-credentials": false,
