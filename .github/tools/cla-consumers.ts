@@ -9,98 +9,173 @@ export const REQUIRED_BOTS = [
 ];
 const REQUIRED_PR_EVENTS = ["opened", "synchronize", "reopened"];
 const DAY_MS = 86_400_000;
-export const REQUIRED_PERMISSIONS = {
-  actions: "write",
-  contents: "read",
-  issues: "write",
-  "pull-requests": "write",
-  statuses: "write",
-} as const;
 const CLA_WORKFLOW = "stella/.github/.github/workflows/cla.yml@";
+const PERMISSION_LEVEL = { none: 0, read: 1, write: 2 } as const;
 
-type Permissions = Record<string, string>;
-type Caller = {
-  uses?: string;
-  if?: string;
-  with?: { allowlist?: string };
-  permissions?: Permissions;
-  secrets?: Record<string, string> | "inherit";
-};
+type PermissionAccess = keyof typeof PERMISSION_LEVEL;
 type ApiResult = { content?: string; commit?: { committer: { date: string } } };
 type Config = { repositories: string[]; maxPinAgeDays: number };
 
-export function inspectCaller(source: string): string {
-  const workflow: {
-    on?: {
-      pull_request_target?: Record<string, unknown> | null;
-      issue_comment?: { types?: string[] } | null;
-    };
-    jobs?: Record<string, Caller>;
-    permissions?: Permissions;
-  } = YAML.parse(source);
-  const trigger = workflow.on?.pull_request_target;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const record = (value: unknown, label: string) => {
+  if (!isRecord(value)) throw new Error(`${label} must be a mapping`);
+  return value;
+};
+
+const permissions = (value: unknown) => {
+  const parsed = record(value, "CLA permissions");
+  const result = new Map<string, PermissionAccess>();
+  for (const [scope, access] of Object.entries(parsed)) {
+    if (access !== "none" && access !== "read" && access !== "write") {
+      throw new Error(`invalid CLA permission: ${scope}`);
+    }
+    result.set(scope, access);
+  }
+  return result;
+};
+
+const declarations = (value: unknown, kind: "input" | "secret") => {
+  const parsed = record(value ?? {}, `CLA ${kind} declarations`);
+  const result = new Map<string, { required: boolean }>();
+  for (const [name, value] of Object.entries(parsed)) {
+    const definition = record(value, `CLA ${kind} ${name}`);
+    const required = definition["required"];
+    if (required !== undefined && typeof required !== "boolean") {
+      throw new Error(`CLA ${kind} ${name} required must be boolean`);
+    }
+    if (kind === "input") {
+      const type = definition["type"];
+      if (type !== "string" && type !== "boolean" && type !== "number") {
+        throw new Error(`CLA input ${name} must declare a workflow_call type`);
+      }
+    }
+    result.set(name, { required: required === true });
+  }
+  return result;
+};
+
+export function inspectReusable(source: string) {
+  const workflow = record(YAML.parse(source), "pinned CLA workflow");
+  const on = record(workflow["on"], "pinned CLA triggers");
+  if (!Object.hasOwn(on, "workflow_call"))
+    throw new Error("pinned CLA workflow must expose workflow_call");
+  const contract = record(on["workflow_call"] ?? {}, "pinned CLA workflow_call");
+  const requiredPermissions = permissions(workflow["permissions"]);
+  for (const job of Object.values(record(workflow["jobs"], "pinned CLA jobs"))) {
+    const declared = record(job, "pinned CLA job")["permissions"];
+    if (declared === undefined) continue;
+    for (const [scope, access] of permissions(declared)) {
+      const previous = requiredPermissions.get(scope) ?? "none";
+      if (PERMISSION_LEVEL[access] > PERMISSION_LEVEL[previous])
+        requiredPermissions.set(scope, access);
+    }
+  }
+  return {
+    permissions: requiredPermissions,
+    inputs: declarations(contract["inputs"], "input"),
+    secrets: declarations(contract["secrets"], "secret"),
+  };
+}
+
+export function inspectCaller(source: string) {
+  const workflow = record(YAML.parse(source), "CLA caller");
+  const on = record(workflow["on"], "CLA caller triggers");
+  const trigger = on["pull_request_target"];
   if (trigger === undefined) throw new Error("missing pull_request_target trigger");
-  if (trigger && ["branches", "branches-ignore", "paths", "paths-ignore"].some((key) => key in trigger)) {
+  const pr = record(trigger ?? {}, "pull_request_target trigger");
+  if (
+    ["branches", "branches-ignore", "paths", "paths-ignore"].some((key) => Object.hasOwn(pr, key))
+  ) {
     throw new Error("CLA trigger must cover every pull request");
   }
-  const types = trigger?.types;
-  if (types !== undefined && (!Array.isArray(types) || !REQUIRED_PR_EVENTS.every((event) => types.includes(event)))) {
+  const types = pr["types"];
+  if (
+    types !== undefined &&
+    (!Array.isArray(types) || !REQUIRED_PR_EVENTS.every((event) => types.includes(event)))
+  ) {
     throw new Error("CLA trigger must cover opened, synchronize and reopened pull requests");
   }
-  if (workflow.on?.issue_comment === undefined || (workflow.on.issue_comment?.types && !workflow.on.issue_comment.types.includes("created"))) {
+  const comment = on["issue_comment"];
+  if (comment === undefined) throw new Error("CLA trigger must cover created signing comments");
+  const commentTypes =
+    comment === null ? undefined : record(comment, "issue_comment trigger")["types"];
+  if (
+    commentTypes !== undefined &&
+    (!Array.isArray(commentTypes) || !commentTypes.includes("created"))
+  ) {
     throw new Error("CLA trigger must cover created signing comments");
   }
-  const jobs = Object.values(workflow.jobs ?? {});
-  const callers = jobs.filter((job) => job.uses?.startsWith(CLA_WORKFLOW));
+  const callers: Record<string, unknown>[] = [];
+  for (const job of Object.values(record(workflow["jobs"], "CLA jobs"))) {
+    const candidate = record(job, "CLA job");
+    const uses = candidate["uses"];
+    if (typeof uses === "string" && uses.startsWith(CLA_WORKFLOW)) callers.push(candidate);
+  }
   if (callers.length !== 1) throw new Error("expected one shared CLA caller");
-  const caller = callers[0]!;
-  const permissions = caller.permissions ?? workflow.permissions ?? {};
-  for (const [scope, access] of Object.entries(REQUIRED_PERMISSIONS)) {
-    if (permissions[scope] !== access) throw new Error(`CLA caller requires ${scope}: ${access}`);
-  }
-  if (caller.secrets !== "inherit" && caller.secrets?.CLA_APP_PRIVATE_KEY !== "${{ secrets.CLA_APP_PRIVATE_KEY }}") {
-    throw new Error("CLA caller must forward CLA_APP_PRIVATE_KEY");
-  }
-  const folded = String(caller.if ?? "").replace(/\s+/gu, " ").trim();
+  const caller = callers.at(0);
+  if (!caller) throw new Error("missing shared CLA caller");
+  const folded = String(caller["if"] ?? "")
+    .replace(/\s+/gu, " ")
+    .trim();
   const privateGuard = /^!github\.event\.repository\.private && \(\s*/u;
   const condition = privateGuard.test(folded)
     ? folded.replace(privateGuard, "").replace(/\s*\)$/u, "")
     : folded;
   // Require the PR arm to be unconditional; signature/recheck filtering belongs
   // only in the issue_comment arm. Never evaluate repository expressions here.
-  const prArm = "(?:\\(\\s*github\\.event_name == 'pull_request_target'\\s*\\)|github\\.event_name == 'pull_request_target')";
-  const commentArm = "\\(\\s*github\\.event_name == 'issue_comment'\\s*&&\\s*github\\.event\\.issue\\.pull_request\\s*&&\\s*\\(\\s*github\\.event\\.comment\\.body == 'recheck'\\s*\\|\\|\\s*github\\.event\\.comment\\.body == 'I have read the CLA Document and I hereby sign the CLA'\\s*\\)\\s*\\)";
+  const prArm =
+    "(?:\\(\\s*github\\.event_name == 'pull_request_target'\\s*\\)|github\\.event_name == 'pull_request_target')";
+  const commentArm =
+    "\\(\\s*github\\.event_name == 'issue_comment'\\s*&&\\s*github\\.event\\.issue\\.pull_request\\s*&&\\s*\\(\\s*github\\.event\\.comment\\.body == 'recheck'\\s*\\|\\|\\s*github\\.event\\.comment\\.body == 'I have read the CLA Document and I hereby sign the CLA'\\s*\\)\\s*\\)";
   if (!new RegExp(`^${prArm}\\s*\\|\\|\\s*${commentArm}$`, "u").test(condition)) {
     throw new Error("CLA caller must run for every pull_request_target, including bots");
   }
-  const allowlist = new Set(String(caller.with?.allowlist ?? "").split(",").map((name) => name.trim()));
+  const inputs = record(caller["with"] ?? {}, "CLA caller inputs");
+  const allowlist = inputs["allowlist"];
+  if (typeof allowlist !== "string") throw new Error("CLA caller must declare its bot allowlist");
+  const bots = new Set(allowlist.split(",").map((name) => name.trim()));
   for (const bot of REQUIRED_BOTS) {
-    if (!allowlist.has(bot)) throw new Error(`missing allowlisted bot: ${bot}`);
+    if (!bots.has(bot)) throw new Error(`missing allowlisted bot: ${bot}`);
   }
-  const sha = caller.uses!.slice(CLA_WORKFLOW.length);
+  const uses = caller["uses"];
+  if (typeof uses !== "string") throw new Error("missing shared CLA workflow pin");
+  const sha = uses.slice(CLA_WORKFLOW.length);
   if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error("CLA workflow must use a full commit SHA");
-  return sha;
+  const secrets = record(caller["secrets"] ?? {}, "explicit CLA caller secrets");
+  for (const [name, value] of Object.entries(secrets)) {
+    if (typeof value !== "string")
+      throw new Error(`CLA secret ${name} must be a string expression`);
+  }
+  return {
+    sha,
+    inputs,
+    secrets,
+    permissions: permissions(caller["permissions"] ?? workflow["permissions"]),
+  };
 }
 
-export function inspectReusable(source: string): void {
-  const workflow = YAML.parse(source);
-  for (const [scope, access] of Object.entries(REQUIRED_PERMISSIONS)) {
-    if (workflow.permissions?.[scope] !== access) {
-      throw new Error(`pinned CLA workflow requires ${scope}: ${access}`);
+export function validateCallerContract(
+  caller: ReturnType<typeof inspectCaller>,
+  contract: ReturnType<typeof inspectReusable>,
+) {
+  for (const [scope, access] of contract.permissions) {
+    const granted = caller.permissions.get(scope) ?? "none";
+    if (PERMISSION_LEVEL[granted] < PERMISSION_LEVEL[access]) {
+      throw new Error(`CLA caller requires ${scope}: ${access}`);
     }
   }
-  const contract = workflow.on?.workflow_call;
-  if (contract?.inputs?.allowlist?.type !== "string" || contract?.secrets?.CLA_APP_PRIVATE_KEY?.required !== true) {
-    throw new Error("pinned CLA workflow must expose the shared caller contract");
-  }
-  const assistant = workflow.jobs?.cla?.steps?.find(
-    (step: { uses?: string }) => step.uses?.startsWith("contributor-assistant/github-action@"),
-  );
-  if (!assistant || !/^contributor-assistant\/github-action@[a-f0-9]{40}$/u.test(assistant.uses)) {
-    throw new Error("pinned CLA workflow must run the SHA-pinned contributor assistant");
-  }
-  if (assistant.with?.allowlist !== "${{ inputs.allowlist }}") {
-    throw new Error("pinned CLA workflow must forward the caller allowlist");
+  for (const kind of ["inputs", "secrets"] as const) {
+    const declared = contract[kind];
+    const supplied = caller[kind];
+    for (const name of Object.keys(supplied)) {
+      if (!declared.has(name)) throw new Error(`undeclared CLA ${kind}: ${name}`);
+    }
+    for (const [name, { required }] of declared) {
+      if (required && !Object.hasOwn(supplied, name))
+        throw new Error(`missing required CLA ${kind}: ${name}`);
+    }
   }
 }
 
@@ -112,24 +187,34 @@ export function checkPinAge(date: string, maxPinAgeDays: number, now = Date.now(
 }
 
 export async function auditConsumers(config: Config, api: (path: string) => Promise<ApiResult>) {
-  const commits = new Map<string, ApiResult>();
+  const pins = new Map<
+    string,
+    { commit: ApiResult; contract: ReturnType<typeof inspectReusable> }
+  >();
   const failures: string[] = [];
   for (const repository of config.repositories) {
     try {
       const file = await api(`repos/stella/${repository}/contents/.github/workflows/cla.yml`);
       if (typeof file.content !== "string") throw new Error("missing CLA workflow content");
-      const sha = inspectCaller(Buffer.from(file.content, "base64").toString("utf8"));
-      let commit = commits.get(sha);
-      if (!commit) {
-        commit = await api(`repos/stella/.github/commits/${sha}`);
-        const reusable = await api(`repos/stella/.github/contents/.github/workflows/cla.yml?ref=${sha}`);
-        if (typeof reusable.content !== "string") throw new Error("missing pinned CLA workflow content");
-        inspectReusable(Buffer.from(reusable.content, "base64").toString("utf8"));
-        commits.set(sha, commit);
+      const caller = inspectCaller(Buffer.from(file.content, "base64").toString("utf8"));
+      let pin = pins.get(caller.sha);
+      if (!pin) {
+        const commit = await api(`repos/stella/.github/commits/${caller.sha}`);
+        const reusable = await api(
+          `repos/stella/.github/contents/.github/workflows/cla.yml?ref=${caller.sha}`,
+        );
+        if (typeof reusable.content !== "string")
+          throw new Error("missing pinned CLA workflow content");
+        pin = {
+          commit,
+          contract: inspectReusable(Buffer.from(reusable.content, "base64").toString("utf8")),
+        };
+        pins.set(caller.sha, pin);
       }
-      if (!commit.commit?.committer.date) throw new Error("missing CLA commit date");
-      checkPinAge(commit.commit.committer.date, config.maxPinAgeDays);
-      console.log(`${repository}: CLA caller OK (${sha})`);
+      if (!pin.commit.commit?.committer.date) throw new Error("missing CLA commit date");
+      checkPinAge(pin.commit.commit.committer.date, config.maxPinAgeDays);
+      validateCallerContract(caller, pin.contract);
+      console.log(`${repository}: CLA caller OK (${caller.sha})`);
     } catch (error) {
       failures.push(`${repository}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -138,7 +223,9 @@ export async function auditConsumers(config: Config, api: (path: string) => Prom
 }
 
 if (import.meta.main) {
-  const config = JSON.parse(await readFile(new URL("./cla-consumers.json", import.meta.url), "utf8"));
+  const config = JSON.parse(
+    await readFile(new URL("./cla-consumers.json", import.meta.url), "utf8"),
+  );
   const api = async (path: string) => {
     const response = await fetch(`https://api.github.com/${path}`, {
       headers: {

@@ -191,9 +191,10 @@ to waive signatures for bots, and keep the `issue_comment` signing and
 `recheck` triggers. Callers must pin a full commit SHA from this repository
 that is at most 30 days old. The existing workflow-contract CI checks the
 package callers listed in `.github/tools/cla-consumers.json`; update that
-list when adding a package repository. Repositories requiring the literal
-`cla` context also need a job named `cla` that reflects the reusable job's
-result.
+list when adding a package repository. Caller inputs, explicit secret mappings,
+and permission grants must satisfy the reusable workflow at that exact pin.
+The audit derives this interface and workflow/job permission requests from the
+pinned source and fetches each shared contract once.
 
 ### PR Lint
 
