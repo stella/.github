@@ -14,6 +14,7 @@ export type Ruleset = {
   id?: number; [key: string]: unknown;
 };
 const NAME = template.name;
+const BYPASS_VISIBILITY_ERROR = "INSUFFICIENT_PERMISSION: bypass_actors unavailable; GitHub requires write access to the ruleset to expose bypass actors";
 const REPO = /^[a-zA-Z0-9][a-zA-Z0-9-]*\/(?!\.{1,2}$)[a-zA-Z0-9_.-]+$/u;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -49,6 +50,7 @@ function canonical(value: Json): Json {
 }
 
 export function normalise(value: Ruleset): Ruleset {
+  if (!Array.isArray(value.bypass_actors)) throw new Error(BYPASS_VISIBILITY_ERROR);
   const rules = value.rules.map((rule) => {
     const copy = structuredClone(rule);
     const parameters = copy.parameters;
@@ -71,7 +73,7 @@ export function normalise(value: Ruleset): Ruleset {
   });
   return canonical({
     name: value.name, target: value.target, enforcement: value.enforcement,
-    conditions: value.conditions, bypass_actors: value.bypass_actors ?? [], rules,
+    conditions: value.conditions, bypass_actors: value.bypass_actors, rules,
   } as Json) as Ruleset;
 }
 
@@ -100,6 +102,10 @@ export function audit(inventory: Inventory, repositories: LiveRepository[]): str
     if (!observed) { lines.push(`${repo} repository: missing from organization listing`); continue; }
     const rulesets = observed.rulesets.filter((ruleset) => ruleset.name === NAME);
     if (rulesets.length > 1) { lines.push(`${repo} ruleset: multiple ${NAME} rulesets`); continue; }
+    if (rulesets[0] && !Array.isArray(rulesets[0].bypass_actors)) {
+      lines.push(`${repo} ${BYPASS_VISIBILITY_ERROR}`);
+      continue;
+    }
     for (const change of diff(rulesets[0] ?? null, render(entry))) lines.push(`${repo} ${change.rule}: ${JSON.stringify(change.actual)} -> ${JSON.stringify(change.expected)}`);
   }
   const listed = new Set(Object.keys(inventory).map((repo) => repo.toLowerCase()));
@@ -110,6 +116,11 @@ export function audit(inventory: Inventory, repositories: LiveRepository[]): str
     }
   }
   return lines;
+}
+
+export function checkInventory(inventory: Inventory, repositories: LiveRepository[]): { lines: string[]; exitCode: 0 | 1 } {
+  const lines = audit(inventory, repositories);
+  return { lines, exitCode: lines.length ? 1 : 0 };
 }
 
 export type Options = { inventory: string; mode: "dry-run" | "check" | "apply"; repos: string[]; backupDir?: string };
@@ -169,9 +180,9 @@ export function main(args: string[]): number {
         repositories.push({ repo: repo.full_name, rulesets: readRulesets(repo.full_name) });
       }
     }
-    const lines = audit(inventory, repositories);
-    for (const line of lines) console.log(line);
-    return lines.length ? 1 : 0;
+    const result = checkInventory(inventory, repositories);
+    for (const line of result.lines) console.log(line);
+    return result.exitCode;
   }
   const selected = options.mode === "apply" ? options.repos : Object.keys(inventory);
   // Validate every target before any write or backup.

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import liveFixture from "./fixtures/live-ruleset.json";
 import template from "./ruleset.json";
-import { audit, diff, normalise, parseArgs, parseInventory, render, type Entry, type Ruleset } from "./apply";
+import { audit, checkInventory, diff, normalise, parseArgs, parseInventory, render, type Entry, type Ruleset } from "./apply";
 
 const entry: Entry = { gate: "ci-result", extraChecks: ["dependency-review"], signatures: true, enabled: true };
 const live = structuredClone(liveFixture) as Ruleset;
@@ -108,6 +108,20 @@ describe("normalise and diff", () => {
 });
 
 describe("enumerating guard", () => {
+  test("redacted bypass actors fail with insufficient permission instead of policy drift", () => {
+    const redacted = structuredClone(live);
+    Reflect.deleteProperty(redacted, "bypass_actors");
+    const result = checkInventory(inventory, [{ repo: "fixture/project", rulesets: [redacted] }]);
+    expect(result.exitCode).toBe(1);
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0]).toStartWith("fixture/project INSUFFICIENT_PERMISSION: bypass_actors unavailable;");
+    expect(result.lines[0]).not.toContain(" -> ");
+    expect(() => normalise(redacted)).toThrow("INSUFFICIENT_PERMISSION");
+    expect(() => diff(redacted, render(entry))).toThrow("INSUFFICIENT_PERMISSION");
+    const empty = structuredClone(live);
+    empty.bypass_actors = [];
+    expect(diff(empty, render(entry)).map((change) => change.rule)).toEqual(["bypass_actors"]);
+  });
   test("one drifting and one unlisted repository both cause a failing report", () => {
     const changed = structuredClone(live);
     changed.rules.find((rule) => rule.type === "merge_queue")!.parameters!.max_entries_to_build = 2;

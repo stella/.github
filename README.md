@@ -782,7 +782,10 @@ inventory organization (including private repositories visible to the token),
 reports one line per drifting rule, and exits 1 on drift or an unlisted repository
 with that ruleset name or a merge queue. Use a token that can read every repository
 in the organization so the enumeration covers the whole organization. API errors
-also exit 1.
+also exit 1. GitHub returns bypass actors only with write access to the ruleset.
+If that field is unavailable, the checker reports `INSUFFICIENT_PERMISSION` and
+exits 1; it cannot certify the full policy from a redacted response. Check and
+dry-run only read APIs, regardless of the token's permissions.
 
 Apply requires an enabled inventory entry and administration write access. Before
 each create or update it writes the full live response to a new private backup
