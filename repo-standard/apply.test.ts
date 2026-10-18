@@ -71,7 +71,11 @@ describe("normalise and diff", () => {
   test("the live response matches its rendered policy despite server metadata and defaults", () => {
     expect(diff(live, render(entry))).toEqual([]);
     expect(normalise(normalise(live))).toEqual(normalise(live));
-    expect(normalise(live)).not.toHaveProperty("source");
+    const normalized = normalise(live);
+    for (const field of ["id", "source_type", "source", "node_id", "created_at", "updated_at", "current_user_can_bypass", "_links"]) {
+      expect(live).toHaveProperty(field);
+      expect(normalized).not.toHaveProperty(field);
+    }
   });
   test("order, null app bindings and empty parameters carry no drift", () => {
     const reordered = structuredClone(live);
