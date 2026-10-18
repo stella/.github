@@ -203,3 +203,20 @@ test("bot-only pull requests need no signature-store secret; human coauthors req
     assert.equal(outputs.store_required, needsStore);
   }
 });
+
+test("closed target events skip the entire verifier and its credential preflight", () => {
+  const condition = workflow.match(/^    if: (.+)$/mu)?.[1];
+  assert.ok(condition);
+  for (const [eventName, event, expected] of [
+    ["pull_request_target", { action: "closed" }, false],
+    ["pull_request_target", { action: "opened" }, true],
+    ["merge_group", {}, true],
+    ["workflow_dispatch", {}, true],
+    ["issue_comment", { issue: { pull_request: {} }, comment: { body: "recheck" } }, true],
+    ["issue_comment", { issue: { pull_request: {} }, comment: { body: "unrelated" } }, false],
+  ]) {
+    assert.equal(runInNewContext(condition, { github: { event_name: eventName, event } }), expected);
+  }
+  const caller = readFileSync(new URL("./cla-check.yml", import.meta.url), "utf8");
+  assert.match(caller, /types: \[opened, synchronize, reopened, ready_for_review\]/u);
+});
