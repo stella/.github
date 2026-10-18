@@ -3,32 +3,41 @@ name: CLA Assistant
 on:
   issue_comment:
     types: [created]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      pull_requests:
+        description: Pull request numbers separated by commas or spaces
+        type: string
+        required: true
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request_target') && format('pr-{0}', github.event.pull_request.number || github.ref) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 permissions:
-  actions: write
   contents: read
   issues: write
-  pull-requests: write
-  statuses: write
+  pull-requests: read
+  checks: write
 
 jobs:
   cla:
     # Serializes signing, recheck and pull request runs for one PR. Job level, so
     # unrelated comments (skipped by `if`) never replace a pending check.
     concurrency:
-      group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: cla-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
       cancel-in-progress: false
     # The main ruleset requires the `cla / cla` context on every pull request.
     # A skipped caller job never reports it, so bot pull requests run the
     # reusable workflow too; its allowlist waives the signature for them.
     if: |
-      github.event_name == 'pull_request_target' || (
+      github.event_name == 'pull_request_target' ||
+      github.event_name == 'merge_group' ||
+      github.event_name == 'workflow_dispatch' || (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
         (
