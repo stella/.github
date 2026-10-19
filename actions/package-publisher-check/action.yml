@@ -10,6 +10,10 @@ inputs:
     description: "npm registry base URL"
     required: false
     default: "https://registry.npmjs.org"
+  package-files:
+    description: "Newline-separated package.json files to inspect instead of discovering workspaces"
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -23,4 +27,11 @@ runs:
       shell: bash
       env:
         NPM_REGISTRY_URL: ${{ inputs.registry-url }}
-      run: node "${{ github.action_path }}/../../.github/tools/package-publisher-check.mjs" --root "${{ inputs.root }}"
+        PACKAGE_FILES: ${{ inputs.package-files }}
+        PACKAGE_ROOT: ${{ inputs.root }}
+      run: |
+        args=(--root "$PACKAGE_ROOT")
+        if [[ -n "$PACKAGE_FILES" ]]; then
+          args+=(--package-files "$PACKAGE_FILES")
+        fi
+        node "$GITHUB_ACTION_PATH/../../.github/tools/package-publisher-check.mjs" "${args[@]}"

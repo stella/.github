@@ -11,21 +11,69 @@ const readManifest = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 const manifestPattern = (pattern) => `${pattern.replace(/^\.\//u, "").replace(/\/$/u, "")}/package.json`;
 
-const packageFiles = async (root) => {
+const parsePnpmWorkspace = (source, file) => {
+  const lines = source.split(/\r?\n/u);
+  const start = lines.findIndex((line) => /^packages\s*:\s*(?:#.*)?$/u.test(line));
+  if (start === -1) {
+    if (lines.some((line) => /^packages\s*:/u.test(line))) {
+      throw new Error(`cannot read ${file}: packages must be a plain YAML list`);
+    }
+    return [];
+  }
+  const patterns = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/u.test(line)) break;
+    if (/^\s*(?:#.*)?$/u.test(line)) continue;
+    const match = line.match(/^\s+-\s+(.+?)\s*$/u);
+    if (!match) throw new Error(`cannot read ${file}: packages must be a plain YAML list`);
+    const value = match[1];
+    let pattern;
+    if (value.startsWith('"')) {
+      try { pattern = JSON.parse(value); } catch { throw new Error(`cannot read ${file}: invalid quoted package pattern`); }
+    } else if (value.startsWith("'")) {
+      if (!value.endsWith("'")) throw new Error(`cannot read ${file}: invalid quoted package pattern`);
+      pattern = value.slice(1, -1).replace(/''/gu, "'");
+    } else {
+      pattern = value.replace(/\s+#.*$/u, "").trim();
+      if (/^(?:[\[{&*|>@`]|!!)|:\s/u.test(pattern.replace(/^!/u, ""))) {
+        throw new Error(`cannot read ${file}: unsupported YAML package pattern`);
+      }
+    }
+    if (typeof pattern !== "string" || pattern === "") throw new Error(`cannot read ${file}: invalid package pattern`);
+    patterns.push(pattern);
+  }
+  return patterns;
+};
+
+const pnpmWorkspacePatterns = async (root) => {
+  const file = resolve(root, "pnpm-workspace.yaml");
+  try {
+    return parsePnpmWorkspace(await readFile(file, "utf8"), file);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    if (error instanceof Error && error.message.startsWith("cannot read ")) throw error;
+    throw new Error(`cannot read ${file}: ${error.message}`, { cause: error });
+  }
+};
+
+const discoverPackageFiles = async (root) => {
   const rootFile = resolve(root, "package.json");
   let rootManifest;
   try {
     rootManifest = await readManifest(rootFile);
   } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
+    if (error?.code === "ENOENT") rootManifest = null;
+    else throw error;
   }
 
-  const patterns = Array.isArray(rootManifest.workspaces)
+  const npmPatterns = Array.isArray(rootManifest?.workspaces)
     ? rootManifest.workspaces
-    : rootManifest.workspaces?.packages ?? [];
-  const workspacePatterns = patterns.filter((value) => typeof value === "string");
-  const files = [rootFile];
+    : rootManifest?.workspaces?.packages ?? [];
+  const workspacePatterns = [
+    ...npmPatterns.filter((value) => typeof value === "string"),
+    ...await pnpmWorkspacePatterns(root),
+  ];
+  const files = rootManifest === null ? [] : [rootFile];
   const included = workspacePatterns.filter((pattern) => !pattern.startsWith("!"));
   if (included.length === 0) return files;
 
@@ -36,7 +84,7 @@ const packageFiles = async (root) => {
     cwd: root,
     exclude: ["**/node_modules/**", "**/.git/**", ...excluded],
   })) files.push(resolve(root, file));
-  return files;
+  return [...new Set(files)];
 };
 
 export const normalizeRepository = (repository) => {
@@ -55,9 +103,13 @@ export const normalizeRepository = (repository) => {
   }
 };
 
-export async function checkPackagePublishers({ root = ".", repository, registry = DEFAULT_REGISTRY, fetchImpl = fetch }) {
+export async function checkPackagePublishers({ root = ".", packageFiles, repository, registry = DEFAULT_REGISTRY, fetchImpl = fetch }) {
   if (!/^[^/]+\/[^/]+$/u.test(repository ?? "")) throw new Error("GITHUB_REPOSITORY must be owner/name");
-  const manifests = await Promise.all((await packageFiles(resolve(root))).map(readManifest));
+  const absoluteRoot = resolve(root);
+  const files = packageFiles === undefined
+    ? await discoverPackageFiles(absoluteRoot)
+    : packageFiles.map((file) => resolve(absoluteRoot, file));
+  const manifests = await Promise.all(files.map(readManifest));
   const names = [...new Set(manifests.map(({ name }) => name).filter((name) => typeof name === "string" && name !== ""))];
   const cache = new Map();
 
@@ -99,6 +151,7 @@ const main = async () => {
   };
   await checkPackagePublishers({
     root: option("--root", "."),
+    packageFiles: option("--package-files")?.split(/\r?\n/u).map((file) => file.trim()).filter(Boolean),
     repository: option("--repository", process.env.GITHUB_REPOSITORY),
     registry: option("--registry", process.env.NPM_REGISTRY_URL ?? DEFAULT_REGISTRY),
   });

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 import { checkPackagePublishers, normalizeRepository } from "../tools/package-publisher-check.mjs";
 
@@ -35,6 +36,12 @@ const registry = async (responses) => {
 const yamlFiles = async (directory) => (await readdir(directory, { recursive: true, withFileTypes: true }))
   .filter((entry) => entry.isFile() && /\.ya?ml$/u.test(entry.name))
   .map((entry) => join(entry.parentPath, entry.name));
+
+const parseYaml = (file) => JSON.parse(execFileSync(
+  "ruby",
+  ["-rjson", "-ryaml", "-e", "puts JSON.generate(YAML.safe_load_file(ARGV.fetch(0), aliases: false))", file],
+  { encoding: "utf8" },
+));
 
 const assertPublisherChecksHaveNode = (yaml, file) => {
   const lines = yaml.split("\n");
@@ -141,6 +148,54 @@ test("negated workspace patterns exclude packages", async () => {
   } finally { await rm(root, { recursive: true }); }
 });
 
+test("pnpm workspace packages are discovered without package.json workspaces", async () => {
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-"));
+  await writeFile(join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n  - !ignored/**\n");
+  await mkdir(join(root, "packages", "nested"), { recursive: true });
+  await writeFile(join(root, "packages", "nested", "package.json"), JSON.stringify({ name: "published-elsewhere" }));
+  try {
+    await assert.rejects(checkPackagePublishers({
+      root,
+      repository: "stella/tooling",
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          "dist-tags": { latest: "1.0.0" },
+          versions: { "1.0.0": { repository: "github:elsewhere/source" } },
+        }),
+      }),
+    }), /package published-elsewhere is published from github\.com\/elsewhere\/source/u);
+  } finally { await rm(root, { recursive: true }); }
+});
+
+test("an explicit package file list is honored exactly", async () => {
+  const root = await fixture(["ignored-root", "selected", "ignored-workspace"]);
+  const fake = await registry({ selected: "stella/tooling" });
+  try {
+    await checkPackagePublishers({
+      root,
+      packageFiles: ["packages/0/package.json"],
+      repository: "stella/tooling",
+      registry: fake.url,
+    });
+    assert.deepEqual(Object.fromEntries(fake.reads), { selected: 1 });
+  } finally { await fake.close(); await rm(root, { recursive: true }); }
+});
+
+test("unreadable pnpm workspace YAML fails instead of guessing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-invalid-"));
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "must-not-be-used" }));
+  await writeFile(join(root, "pnpm-workspace.yaml"), "packages: [packages/*]\n");
+  try {
+    await assert.rejects(checkPackagePublishers({
+      root,
+      repository: "stella/tooling",
+      fetchImpl: async () => { throw new Error("root package was inspected"); },
+    }), /cannot read .*pnpm-workspace\.yaml/u);
+  } finally { await rm(root, { recursive: true }); }
+});
+
 test("the same repository path on another host is published elsewhere", async () => {
   const root = await fixture(["same-path"]);
   const fake = await registry({ "same-path": "https://gitlab.com/stella/tooling.git" });
@@ -159,6 +214,46 @@ test("shared entry points invoke the composite action", async () => {
   }
   const action = await readFile(new URL("../../actions/typescript-checks/action.yml", import.meta.url), "utf8");
   assert.match(action, /package-publisher-check\.mjs/u);
+
+  const preflight = parseYaml(new URL("npm-version-preflight.yml", import.meta.url).pathname);
+  const publisherStep = preflight.jobs.preflight.steps.find((step) => step.uses === "stella/.github/actions/package-publisher-check@main");
+  assert.equal(publisherStep.with["package-files"], "${{ inputs.package-files }}");
+});
+
+test("composite action inputs reach its script literally through the environment", async () => {
+  const actionFile = new URL("../../actions/package-publisher-check/action.yml", import.meta.url);
+  const action = parseYaml(actionFile.pathname);
+  const runBlocks = action.runs.steps.flatMap((step) => typeof step.run === "string" ? [step.run] : []);
+  assert.ok(runBlocks.length > 0);
+  for (const run of runBlocks) assert.doesNotMatch(run, /\$\{\{\s*inputs\./u);
+
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-action-"));
+  const bin = join(root, "bin");
+  const output = join(root, "arguments");
+  await mkdir(bin);
+  await writeFile(join(bin, "node"), `#!/bin/sh\nprintf '%s\\n' "$@" > "$OUTPUT"\n`);
+  await chmod(join(bin, "node"), 0o755);
+  const dangerousRoot = "$(printf command-substitution-ran)";
+  try {
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", runBlocks.at(-1)], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_ACTION_PATH: "/action",
+        NPM_REGISTRY_URL: "https://registry.invalid",
+        OUTPUT: output,
+        PACKAGE_FILES: "",
+        PACKAGE_ROOT: dangerousRoot,
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual((await readFile(output, "utf8")).trim().split("\n"), [
+      "/action/../../.github/tools/package-publisher-check.mjs",
+      "--root",
+      dangerousRoot,
+    ]);
+  } finally { await rm(root, { recursive: true }); }
 });
 
 test("every publisher check script provisions Node 22 or newer first", async () => {
