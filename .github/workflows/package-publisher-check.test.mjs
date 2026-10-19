@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +30,34 @@ const registry = async (responses) => {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return { url: `http://127.0.0.1:${server.address().port}`, reads, close: () => new Promise((resolve) => server.close(resolve)) };
+};
+
+const yamlFiles = async (directory) => (await readdir(directory, { recursive: true, withFileTypes: true }))
+  .filter((entry) => entry.isFile() && /\.ya?ml$/u.test(entry.name))
+  .map((entry) => join(entry.parentPath, entry.name));
+
+const assertPublisherChecksHaveNode = (yaml, file) => {
+  const lines = yaml.split("\n");
+  for (const [index, line] of lines.entries()) {
+    if (!line.includes("package-publisher-check.mjs")) continue;
+
+    const runIndent = line.search(/\S/u);
+    const stepsIndex = lines.findLastIndex((candidate, candidateIndex) => candidateIndex < index
+      && candidate.search(/\S/u) < runIndent
+      && candidate.trim() === "steps:");
+    assert.notEqual(stepsIndex, -1, `${file}:${index + 1} must run inside a steps list`);
+
+    const stepIndent = lines.slice(stepsIndex + 1, index + 1)
+      .find((candidate) => /^\s+-\s/u.test(candidate))?.search(/\S/u);
+    assert.notEqual(stepIndent, undefined, `${file}:${index + 1} must run inside a step`);
+    const precedingSteps = lines.slice(stepsIndex + 1, index)
+      .join("\n")
+      .split(new RegExp(`^ {${stepIndent}}- `, "mu"));
+    const setup = precedingSteps.findLast((step) => /uses: actions\/setup-node@[0-9a-f]{40}(?:\s+# v\d+(?:\.\d+){0,2})?$/mu.test(step));
+    assert.ok(setup, `${file}:${index + 1} must be preceded by a pinned setup-node step`);
+    const major = Number(setup.match(/node-version:\s*["']?(\d+)/u)?.[1]);
+    assert.ok(major >= 22, `${file}:${index + 1} setup-node major must be at least 22`);
+  }
 };
 
 test("own, unpublished, private published, scoped, and duplicate packages are checked once", async () => {
@@ -131,4 +159,19 @@ test("shared entry points invoke the composite action", async () => {
   }
   const action = await readFile(new URL("../../actions/typescript-checks/action.yml", import.meta.url), "utf8");
   assert.match(action, /package-publisher-check\.mjs/u);
+});
+
+test("every publisher check script provisions Node 22 or newer first", async () => {
+  const repository = new URL("../../", import.meta.url);
+  const files = [
+    ...await yamlFiles(new URL(".github/workflows/", repository)),
+    ...await yamlFiles(new URL("actions/", repository)),
+  ];
+  let checks = 0;
+  for (const file of files) {
+    const yaml = await readFile(file, "utf8");
+    checks += yaml.match(/package-publisher-check\.mjs/gu)?.length ?? 0;
+    assertPublisherChecksHaveNode(yaml, file);
+  }
+  assert.equal(checks, 2, "all publisher check script entry points are covered");
 });
