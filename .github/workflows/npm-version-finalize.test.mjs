@@ -7,6 +7,17 @@ const workflow = readFileSync(
   "utf8",
 );
 
+test("the release App credentials are required workflow secrets", () => {
+  assert.match(
+    workflow,
+    /RELEASE_APP_ID:\n\s+description: [^\n]+\n\s+required: true/,
+  );
+  assert.match(
+    workflow,
+    /RELEASE_APP_PRIVATE_KEY:\n\s+description: [^\n]+\n\s+required: true/,
+  );
+});
+
 test("the npm OIDC job does not persist a write-capable checkout token", () => {
   assert.match(
     workflow,

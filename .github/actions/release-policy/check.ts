@@ -634,9 +634,16 @@ const validateOptionalBoolean = (value: unknown, label: string) => {
   }
 };
 
-const validateSecretPairs = (secrets: JsonObject, label: string) => {
+const validateSecretPairs = (
+  secrets: JsonObject,
+  label: string,
+  requirement: "optional" | "required" = "optional",
+) => {
   const hasId = "RELEASE_APP_ID" in secrets;
   const hasKey = "RELEASE_APP_PRIVATE_KEY" in secrets;
+  if (requirement === "required" && !hasId && !hasKey) {
+    fail(`${label} must map RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY`);
+  }
   if (hasId !== hasKey) {
     fail(`${label} must map both RELEASE_APP credential fields or neither`);
   }
@@ -738,7 +745,7 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
       fail(`${label}.secrets contains an unsupported mapping for ${name}`);
     }
   }
-  validateSecretPairs(secrets, `${label}.secrets`);
+  validateSecretPairs(secrets, `${label}.secrets`, "required");
 };
 
 const validateCratesPublisher = (job: JsonObject, ref: string, label: string) => {
