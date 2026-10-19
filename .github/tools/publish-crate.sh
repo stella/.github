@@ -4,6 +4,8 @@ set -euo pipefail
 : "${CRATE_DIRECTORY:?}"
 : "${EXPECTED_CRATE_NAME:?}"
 
+tooling_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly tooling_directory
 readonly manifest="${CRATE_DIRECTORY}/release.json"
 readonly upload="${CRATE_DIRECTORY}/upload.bin"
 test -f "${manifest}"
@@ -57,12 +59,30 @@ version_status="$(curl --proto '=https' --tlsv1.2 --retry 3 -sS \
   "https://crates.io/api/v1/crates/${name}/${version}")"
 case "${version_status}" in
   200)
-    if ! exact_archive_is_visible preflight; then
-      printf '::error::Existing crates.io archive does not match the prepared crate.\n'
+    if exact_archive_is_visible preflight; then
+      printf '::notice::%s %s already published with the exact prepared bytes.\n' "${name}" "${version}"
+      exit 0
+    fi
+    # A re-run from a later commit repackages the same version; skip it only when every source file matches.
+    published_archive="${RUNNER_TEMP}/preflight.crate"
+    if [[ ! -s "${published_archive}" ]]; then
+      printf '::error::%s %s exists on crates.io but its archive could not be downloaded.\n' "${name}" "${version}"
       exit 1
     fi
-    printf '::notice::%s %s already published with the exact prepared bytes.\n' "${name}" "${version}"
-    exit 0
+    differences_status=0
+    differences="$(node "${tooling_directory}/crate-source-diff.mjs" \
+      "${published_archive}" "${CRATE_DIRECTORY}/${crate_file}")" || differences_status=$?
+    if [[ "${differences_status}" == 0 ]]; then
+      printf '::notice::%s %s already published from identical source; skipping upload.\n' "${name}" "${version}"
+      exit 0
+    fi
+    if [[ "${differences_status}" == 1 ]]; then
+      printf '::error::%s %s is already published from different source; release a new version. Differing files:\n%s\n' \
+        "${name}" "${version}" "${differences}"
+    else
+      printf '::error::Could not compare the published %s %s archive with the prepared crate.\n' "${name}" "${version}"
+    fi
+    exit 1
     ;;
   404) ;;
   *)
