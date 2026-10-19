@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { glob, readFile } from "node:fs/promises";
+import { access, glob, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -11,216 +11,19 @@ const readManifest = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 const manifestPattern = (pattern) => `${pattern.replace(/^\.\//u, "").replace(/\/$/u, "")}/package.json`;
 
-const workspaceError = (file, line, detail = "packages must be a YAML sequence of strings") =>
-  new Error(`cannot read ${file}:${line}: ${detail}`);
-
-const stripYamlComments = (source) => {
-  let result = "";
-  let quote = null;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (quote === '"' && character === "\\") {
-      result += character + (source[index + 1] ?? "");
-      index += 1;
-      continue;
-    }
-    if (character === quote) {
-      if (quote === "'" && source[index + 1] === "'") {
-        result += "''";
-        index += 1;
-      } else {
-        quote = null;
-        result += character;
-      }
-      continue;
-    }
-    if (quote === null && (character === '"' || character === "'")) {
-      quote = character;
-      result += character;
-      continue;
-    }
-    if (quote === null && character === "#" && (index === 0 || /\s/u.test(source[index - 1]))) {
-      while (index + 1 < source.length && source[index + 1] !== "\n") index += 1;
-      continue;
-    }
-    result += character;
-  }
-  return result;
-};
-
-const parseWorkspaceScalar = (source, file, line) => {
-  const value = source.trim();
-  if (value.startsWith('"')) {
-    try {
-      const match = value.match(/^("(?:[^"\\]|\\.)*")(?:\s+#.*)?$/u);
-      if (!match) throw new Error();
-      return JSON.parse(match[1]);
-    } catch {
-      throw workspaceError(file, line, "invalid quoted package pattern");
-    }
-  }
-  if (value.startsWith("'")) {
-    const match = value.match(/^'((?:[^']|'')*)'(?:\s+#.*)?$/u);
-    if (!match) throw workspaceError(file, line, "invalid quoted package pattern");
-    return match[1].replace(/''/gu, "'");
-  }
-
-  const pattern = value.replace(/\s+#.*$/u, "").trim();
-  if (pattern === "" || /^(?:[\[{&*|>@`]|!!)|:\s/u.test(pattern.replace(/^!/u, ""))) {
-    throw workspaceError(file, line, "unsupported YAML package pattern");
-  }
-  return pattern;
-};
-
-const parseFlowSequence = (source, file, startLine) => {
-  const patterns = [];
-  let item = "";
-  let quote = null;
-  let closed = false;
-  for (let index = 1; index < source.length; index += 1) {
-    const character = source[index];
-    if (quote === '"' && character === "\\") {
-      item += character + (source[index + 1] ?? "");
-      index += 1;
-      continue;
-    }
-    if (character === quote) {
-      if (quote === "'" && source[index + 1] === "'") {
-        item += "''";
-        index += 1;
-      } else quote = null;
-      item += character;
-      continue;
-    }
-    if (quote === null && (character === '"' || character === "'")) {
-      quote = character;
-      item += character;
-      continue;
-    }
-    if (quote === null && character === "#") {
-      while (index < source.length && source[index] !== "\n") index += 1;
-      item += " ";
-      continue;
-    }
-    if (quote === null && (character === "," || character === "]")) {
-      const line = startLine + source.slice(0, index).split("\n").length - 1;
-      if (item.trim() !== "") patterns.push(parseWorkspaceScalar(item, file, line));
-      else if (character === ",") throw workspaceError(file, line);
-      item = "";
-      if (character === "]") {
-        if (!/^[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/u.test(source.slice(index + 1))) throw workspaceError(file, line);
-        closed = true;
-        break;
-      }
-      continue;
-    }
-    item += character;
-  }
-  if (!closed || quote !== null) throw workspaceError(file, startLine + source.split("\n").length - 1);
-  return patterns;
-};
-
-const WORKSPACE_KEYS = new Set([
-  "catalog", "catalogs", "onlyBuiltDependencies", "ignoredBuiltDependencies", "neverBuiltDependencies",
-  "onlyBuiltDependenciesFile", "overrides", "packageExtensions", "peerDependencyRules", "patchedDependencies",
-  "supportedArchitectures", "injectWorkspacePackages", "hoistPattern", "publicHoistPattern", "linkWorkspacePackages",
-  "sharedWorkspaceLockfile", "saveWorkspaceProtocol", "preferWorkspacePackages", "preferFrozenLockfile",
-  "strictPeerDependencies", "autoInstallPeers", "excludeLinksFromLockfile",
-]);
-
-const topLevelEntry = (line) => {
-  const match = line.match(/^(?:([A-Za-z][A-Za-z0-9]*)|'((?:[^']|'')*)'|"((?:[^"\\]|\\.)*)")\s*:(.*)$/u);
-  if (!match) return null;
-  let key = match[1] ?? match[2]?.replace(/''/gu, "'");
-  if (key === undefined) {
-    try { key = JSON.parse(`"${match[3]}"`); } catch { return null; }
-  }
-  return { key, value: match[4].trim() };
-};
-
-const parsePnpmWorkspace = (source, file) => {
-  const lines = stripYamlComments(source).split(/\r?\n/u);
-  const patterns = [];
-  let sawPackages = false;
-  let index = 0;
-
-  for (const [lineIndex, line] of lines.entries()) {
-    if (/^(?:---|\.\.\.)(?:\s|$)/u.test(line)
-      || /(?:^|[\s[{,:-])(?:&|\*)[A-Za-z0-9_-]+(?:\s|$|[\]},])/u.test(line)
-      || /(?:^|[\s[{,:-])![A-Za-z][A-Za-z0-9_-]*(?:\s|$)/u.test(line)
-      || /(?:^|:\s*|-\s+)[|>][+-]?(?:\s|$)/u.test(line)) {
-      throw workspaceError(file, lineIndex + 1, "unsupported YAML construct");
-    }
-  }
-
-  while (index < lines.length) {
-    const line = lines[index];
-    if (/^\s*(?:#.*)?$/u.test(line)) { index += 1; continue; }
-
-    if (line.trimStart().startsWith("{")) {
-      const match = lines.slice(index).join("\n").match(/^\s*\{\s*(?:packages|'packages'|"packages")\s*:\s*(\[[\s\S]*)\}\s*(?:#.*)?\s*$/u);
-      if (!match) throw workspaceError(file, index + 1, "unsupported top-level flow mapping");
-      const sequence = match[1].replace(/\}\s*(?:#.*)?\s*$/u, "");
-      const values = parseFlowSequence(sequence, file, index + 1);
-      if (values.length === 0) throw workspaceError(file, index + 1, "packages must contain at least one pattern");
-      return values;
-    }
-
-    const entry = topLevelEntry(line);
-    if (!entry) throw workspaceError(file, index + 1, "unrecognised YAML line");
-    if (entry.key !== "packages" && !WORKSPACE_KEYS.has(entry.key)) {
-      throw workspaceError(file, index + 1, `unsupported top-level key ${entry.key}`);
-    }
-
-    if (entry.key !== "packages") {
-      index += 1;
-      while (index < lines.length && (lines[index].startsWith(" ") || lines[index].startsWith("\t")
-        || /^\s*(?:#.*)?$/u.test(lines[index]) || /^-\s/u.test(lines[index]))) index += 1;
-      continue;
-    }
-
-    if (sawPackages) throw workspaceError(file, index + 1, "duplicate packages key");
-    sawPackages = true;
-    const value = entry.value.replace(/\s+#.*$/u, "").trim();
-    if (value !== "") {
-      if (!value.startsWith("[")) throw workspaceError(file, index + 1);
-      const values = parseFlowSequence([value, ...lines.slice(index + 1)].join("\n"), file, index + 1);
-      patterns.push(...values);
-      const consumed = [value, ...lines.slice(index + 1)].join("\n").match(/^[\s\S]*?\](?:[ \t]*(?:#[^\r\n]*)?)?(?:\r?\n|$)/u)?.[0];
-      const consumedLines = consumed === undefined ? 1 : consumed.split("\n").length - (consumed.endsWith("\n") ? 1 : 0);
-      index += Math.max(1, consumedLines);
-      continue;
-    }
-
-    index += 1;
-    while (index < lines.length) {
-      const itemLine = lines[index];
-      if (/^\s*(?:#.*)?$/u.test(itemLine)) { index += 1; continue; }
-      if (topLevelEntry(itemLine)) break;
-      const item = itemLine.match(/^\s*-\s+(.+?)\s*$/u);
-      if (!item) throw workspaceError(file, index + 1);
-      patterns.push(parseWorkspaceScalar(item[1], file, index + 1));
-      index += 1;
-    }
-  }
-
-  if (!sawPackages) throw workspaceError(file, 1, "missing packages key");
-  if (patterns.length === 0) throw workspaceError(file, 1, "packages must contain at least one pattern");
-  return patterns;
-};
-
-const pnpmWorkspacePatterns = async (root) => {
+const refusePnpmWorkspace = async (root) => {
   const file = resolve(root, "pnpm-workspace.yaml");
   try {
-    return parsePnpmWorkspace(await readFile(file, "utf8"), file);
+    await access(file);
   } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    if (error instanceof Error && error.message.startsWith("cannot read ")) throw error;
-    throw new Error(`cannot read ${file}: ${error.message}`, { cause: error });
+    if (error?.code === "ENOENT") return;
+    throw error;
   }
+  throw new Error("pnpm-workspace.yaml is not read by this check; declare workspaces in package.json or pass package-files");
 };
 
 const discoverPackageFiles = async (root) => {
+  await refusePnpmWorkspace(root);
   const rootFile = resolve(root, "package.json");
   let rootManifest;
   try {
@@ -233,10 +36,7 @@ const discoverPackageFiles = async (root) => {
   const npmPatterns = Array.isArray(rootManifest?.workspaces)
     ? rootManifest.workspaces
     : rootManifest?.workspaces?.packages ?? [];
-  const workspacePatterns = [
-    ...npmPatterns.filter((value) => typeof value === "string"),
-    ...await pnpmWorkspacePatterns(root),
-  ];
+  const workspacePatterns = npmPatterns.filter((value) => typeof value === "string");
   const files = rootManifest === null ? [] : [rootFile];
   const included = workspacePatterns.filter((pattern) => !pattern.startsWith("!"));
   if (included.length === 0) return files;
