@@ -255,9 +255,50 @@ describe("repository baseline", () => {
     expect(applyBaseline(releasing, apply.api, false).exitCode).toBe(0);
     expect(apply.calls).toEqual([
       "get:RELEASE_APP_ID", "get:RELEASE_APP_PRIVATE_KEY",
+      "get:RELEASE_APP_ID",
       "backup:release-value:RELEASE_APP_ID:[]", "add:RELEASE_APP_ID:42",
+      "get:RELEASE_APP_PRIVATE_KEY",
       "backup:release-value:RELEASE_APP_PRIVATE_KEY:[]", "add:RELEASE_APP_PRIVATE_KEY:42",
     ]);
+  });
+
+  test("re-reads each release value immediately before backing up and adding repositories", () => {
+    const repositories: Record<string, { id: number; full_name: string }[]> = {
+      RELEASE_APP_ID: [], RELEASE_APP_PRIVATE_KEY: [],
+    };
+    const backups: Record<string, { id: number; full_name: string }[]>[] = [];
+    const ids: Record<string, number> = { "fixture/first": 41, "fixture/second": 42 };
+    const releasing = Object.fromEntries(Object.keys(ids).map((repo) => [repo, { ...entry, releases: true }]));
+    const api: RepositoryApi = {
+      getRepository: (repo) => ({ id: ids[repo], archived: false, ...settings }),
+      getRulesets: (repo) => [{ ...desiredLive, source: repo }],
+      getActionsValueRepositories: (_owner, name) => structuredClone(repositories[name]!),
+      backup: (_repo, kind, value, name) => {
+        if (kind === "release-value") backups.push({ [name!]: structuredClone(value as { id: number; full_name: string }[]) });
+      },
+      patchRepository: () => { throw new Error("unexpected settings write"); },
+      upsertRuleset: () => { throw new Error("unexpected ruleset write"); },
+      addRepositoryToActionsValue: (_owner, name, id) => {
+        const repo = Object.keys(ids).find((candidate) => ids[candidate] === id)!;
+        repositories[name]!.push({ id, full_name: repo });
+      },
+    };
+
+    expect(applyBaseline(releasing, api, false).exitCode).toBe(0);
+    for (const name of ["RELEASE_APP_ID", "RELEASE_APP_PRIVATE_KEY"]) {
+      expect(backups.filter((backup) => name in backup)).toEqual([
+        { [name]: [] },
+        { [name]: [{ id: 41, full_name: "fixture/first" }] },
+      ]);
+      expect(repositories[name]).toEqual([
+        { id: 41, full_name: "fixture/first" },
+        { id: 42, full_name: "fixture/second" },
+      ]);
+      repositories[name] = structuredClone(backups.findLast((backup) => name in backup)![name]!);
+      expect(repositories[name]).toEqual([
+        { id: 41, full_name: "fixture/first" },
+      ]);
+    }
   });
 
   test("already-selected release repositories and non-releasing repositories do not change value access", () => {

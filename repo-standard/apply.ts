@@ -230,7 +230,7 @@ export type RepositoryApi = {
 type RepositoryPlan = {
   repo: string; entry: Entry; repository: RepositoryState; live: Ruleset | null; desired: Ruleset;
   settingsChanges: Difference[]; rulesetChanges: Difference[];
-  releaseChanges: { owner: string; name: string; selected: SelectedRepository[] }[]; refusal?: string;
+  releaseChanges: { owner: string; name: string }[]; refusal?: string;
 };
 type BaselinePlan = { lines: string[]; repositories: RepositoryPlan[]; drift: boolean; refusedDrift: boolean };
 
@@ -252,7 +252,7 @@ function planBaseline(inventory: Inventory, api: RepositoryApi): BaselinePlan {
       const owner = repo.split("/")[0]!;
       for (const name of RELEASE_VALUES) {
         const selected = api.getActionsValueRepositories(owner, name);
-        if (!selected.some((candidate) => candidate.id === repository.id)) releaseChanges.push({ owner, name, selected });
+        if (!selected.some((candidate) => candidate.id === repository.id)) releaseChanges.push({ owner, name });
       }
     }
     const changes = [...settingsChanges, ...rulesetChanges];
@@ -292,7 +292,8 @@ export function applyBaseline(inventory: Inventory, api: RepositoryApi, dryRun: 
       api.backup(repo, "ruleset", live);
       api.upsertRuleset(repo, live, desired);
     }
-    for (const { owner, name, selected } of releaseChanges) {
+    for (const { owner, name } of releaseChanges) {
+      const selected = api.getActionsValueRepositories(owner, name);
       api.backup(repo, "release-value", selected, name);
       api.addRepositoryToActionsValue(owner, name, repository.id!);
     }
