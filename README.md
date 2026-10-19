@@ -56,7 +56,13 @@ Set `typecheck: true` on a trusted `rust-napi-ci.yml` caller to run
 declared Bun or TypeScript toolchain versions differ from the PR base, push
 predecessor, or merge-group base. The comparison also covers Bun types and the
 shared compiler configuration/policy packages. If the base is unavailable, it
-runs parity. The default `parity` mode is `changed`; `always` forces parity.
+runs parity. The default `parity` mode is `changed`; `always` forces parity. Dependency
+installation is always `bun install --frozen-lockfile`; callers may set the
+structured `install-ignore-scripts` boolean but cannot replace the install
+command. The workflow detects changes to Cargo manifests and lockfiles, Rust
+toolchain files, `crates/**`, and `src/**/*.rs` from the merge base. The
+`rust-changed` input can add a Rust run but cannot suppress one detected by the
+workflow.
 
 Add a separate nightly caller with `parity: always` and `typecheck-only: true`
 to avoid running the native build/test matrix. Pin both callers to the same
@@ -80,7 +86,7 @@ jobs:
       typecheck: true
       typecheck-only: true
       parity: always
-      install-command: bun install --frozen-lockfile
+      install-ignore-scripts: false
 ```
 
 ### Package Consumer Compatibility
