@@ -6,7 +6,7 @@ import settingsTemplate from "./settings.json";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type ObjectValue = { [key: string]: Json };
-export type Entry = { gate?: string; cla?: string; missingGate?: boolean; extraChecks: string[]; signatures: boolean; enabled: boolean };
+export type Entry = { gate?: string; cla?: string; missingGate?: boolean; releases?: boolean; extraChecks: string[]; signatures: boolean; enabled: boolean };
 export type Inventory = Record<string, Entry>;
 export type Tool = "bun" | "node" | "rust";
 export type ToolchainException = { repo: string; tool: Tool; pin: string; reason: string; expires: string };
@@ -27,6 +27,7 @@ export type Ruleset = {
   id?: number; [key: string]: unknown;
 };
 const NAME = template.name;
+const RELEASE_VALUES = ["RELEASE_APP_ID", "RELEASE_APP_PRIVATE_KEY"] as const;
 const BYPASS_VISIBILITY_ERROR = "INSUFFICIENT_PERMISSION: bypass_actors unavailable; GitHub requires write access to the ruleset to expose bypass actors";
 const REPO = /^[a-zA-Z0-9][a-zA-Z0-9-]*\/(?!\.{1,2}$)[a-zA-Z0-9_.-]+$/u;
 const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
@@ -40,9 +41,10 @@ export function parseInventory(value: unknown): Inventory {
       (entry.gate !== undefined && (typeof entry.gate !== "string" || !entry.gate.trim() || entry.gate !== entry.gate.trim())) ||
       (entry.cla !== undefined && (typeof entry.cla !== "string" || !entry.cla.trim() || entry.cla !== entry.cla.trim())) ||
       (entry.missingGate !== undefined && typeof entry.missingGate !== "boolean") ||
+      (entry.releases !== undefined && typeof entry.releases !== "boolean") ||
       !Array.isArray(entry.extraChecks) || entry.extraChecks.some((check) => typeof check !== "string" || !check.trim() || check !== check.trim()) ||
       typeof entry.signatures !== "boolean" || typeof entry.enabled !== "boolean" ||
-      Object.keys(entry).some((key) => !["gate", "cla", "missingGate", "extraChecks", "signatures", "enabled"].includes(key))) {
+      Object.keys(entry).some((key) => !["gate", "cla", "missingGate", "releases", "extraChecks", "signatures", "enabled"].includes(key))) {
       throw new Error(`Invalid inventory entry: ${repo}`);
     }
   }
@@ -214,17 +216,21 @@ export function settingsDiff(actual: Record<string, unknown>, expected: Reposito
   return Object.entries(expected).flatMap(([key, value]) => actual[key] === value ? [] : [{ rule: `settings.${key}`, actual: actual[key], expected: value }]);
 }
 
-export type RepositoryState = Record<string, unknown> & { archived: boolean };
+export type RepositoryState = Record<string, unknown> & { archived: boolean; id?: number };
+export type SelectedRepository = { id: number; full_name: string };
 export type RepositoryApi = {
   getRepository(repo: string): RepositoryState;
   getRulesets(repo: string): Ruleset[];
-  backup(repo: string, kind: "settings" | "ruleset", value: RepositoryState | Ruleset | null): void;
+  getActionsValueRepositories(owner: string, name: string): SelectedRepository[];
+  backup(repo: string, kind: "settings" | "ruleset" | "release-value", value: RepositoryState | Ruleset | SelectedRepository[] | null, name?: string): void;
   patchRepository(repo: string, settings: RepositorySettings): void;
   upsertRuleset(repo: string, live: Ruleset | null, desired: Ruleset): void;
+  addRepositoryToActionsValue(owner: string, name: string, repositoryId: number): void;
 };
 type RepositoryPlan = {
   repo: string; entry: Entry; repository: RepositoryState; live: Ruleset | null; desired: Ruleset;
-  settingsChanges: Difference[]; rulesetChanges: Difference[]; refusal?: string;
+  settingsChanges: Difference[]; rulesetChanges: Difference[];
+  releaseChanges: { owner: string; name: string }[]; refusal?: string;
 };
 type BaselinePlan = { lines: string[]; repositories: RepositoryPlan[]; drift: boolean; refusedDrift: boolean };
 
@@ -240,6 +246,15 @@ function planBaseline(inventory: Inventory, api: RepositoryApi): BaselinePlan {
     const live = matching[0] ?? null;
     const desired = render(entry);
     const rulesetChanges = diff(live, desired);
+    const releaseChanges: RepositoryPlan["releaseChanges"] = [];
+    if (entry.releases) {
+      if (!Number.isSafeInteger(repository.id) || Number(repository.id) <= 0) throw new Error(`Invalid repository id: ${repo}`);
+      const owner = repo.split("/")[0]!;
+      for (const name of RELEASE_VALUES) {
+        const selected = api.getActionsValueRepositories(owner, name);
+        if (!selected.some((candidate) => candidate.id === repository.id)) releaseChanges.push({ owner, name });
+      }
+    }
     const changes = [...settingsChanges, ...rulesetChanges];
     let refusal: string | undefined;
     if (repository.archived) refusal = "archived; skipped";
@@ -248,22 +263,27 @@ function planBaseline(inventory: Inventory, api: RepositoryApi): BaselinePlan {
       throw new Error(`Refusing to update inherited ruleset: ${repo}`);
     }
     if (refusal) lines.push(`${repo}: ${refusal}`);
-    if (!changes.length) {
+    if (!changes.length && !releaseChanges.length) {
       if (!repository.archived) lines.push(`${repo}: no drift`);
     } else {
       drift = true;
       if (refusal) refusedDrift = true;
       for (const change of changes) lines.push(`${repo} ${change.rule}: ${JSON.stringify(change.actual)} -> ${JSON.stringify(change.expected)}`);
     }
-    repositories.push({ repo, entry, repository, live, desired, settingsChanges, rulesetChanges, ...(refusal ? { refusal } : {}) });
+    if (releaseChanges.length) {
+      drift = true;
+      if (refusal) refusedDrift = true;
+      for (const { name } of releaseChanges) lines.push(`${repo} actions.${name}.repositories: missing repository selection`);
+    }
+    repositories.push({ repo, entry, repository, live, desired, settingsChanges, rulesetChanges, releaseChanges, ...(refusal ? { refusal } : {}) });
   }
   return { lines, repositories, drift, refusedDrift };
 }
 
 export function applyBaseline(inventory: Inventory, api: RepositoryApi, dryRun: boolean): { lines: string[]; exitCode: 0 | 1 } {
   const plan = planBaseline(inventory, api);
-  if (!dryRun) for (const { repo, repository, live, desired, settingsChanges, rulesetChanges, refusal } of plan.repositories) {
-    if (refusal || (!settingsChanges.length && !rulesetChanges.length)) continue;
+  if (!dryRun) for (const { repo, repository, live, desired, settingsChanges, rulesetChanges, releaseChanges, refusal } of plan.repositories) {
+    if (refusal || (!settingsChanges.length && !rulesetChanges.length && !releaseChanges.length)) continue;
     if (settingsChanges.length) {
       api.backup(repo, "settings", repository);
       api.patchRepository(repo, settingsTemplate);
@@ -271,6 +291,11 @@ export function applyBaseline(inventory: Inventory, api: RepositoryApi, dryRun: 
     if (rulesetChanges.length) {
       api.backup(repo, "ruleset", live);
       api.upsertRuleset(repo, live, desired);
+    }
+    for (const { owner, name } of releaseChanges) {
+      const selected = api.getActionsValueRepositories(owner, name);
+      api.backup(repo, "release-value", selected, name);
+      api.addRepositoryToActionsValue(owner, name, repository.id!);
     }
   }
   return { lines: plan.lines, exitCode: (dryRun ? plan.drift : plan.refusedDrift) ? 1 : 0 };
@@ -347,6 +372,22 @@ function pages(path: string): Record<string, unknown>[] {
   if (!Array.isArray(result) || result.some((page) => !Array.isArray(page))) throw new Error(`Invalid GitHub list response: ${path}`);
   return result.flat();
 }
+function readActionsValueRepositories(owner: string, name: string): SelectedRepository[] {
+  const path = `orgs/${owner}/actions/secrets/${name}/repositories`;
+  const result = gh([`${path}?per_page=100`, "--paginate", "--slurp"]);
+  if (!Array.isArray(result)) throw new Error(`Invalid GitHub list response: ${path}`);
+  const repositories: SelectedRepository[] = [];
+  for (const page of result) {
+    if (!object(page) || !Array.isArray(page.repositories)) throw new Error(`Invalid GitHub list response: ${path}`);
+    for (const repository of page.repositories) {
+      if (!object(repository) || !Number.isSafeInteger(repository.id) || Number(repository.id) <= 0 || typeof repository.full_name !== "string") {
+        throw new Error(`Invalid selected repository response: ${name}`);
+      }
+      repositories.push({ id: Number(repository.id), full_name: repository.full_name });
+    }
+  }
+  return repositories;
+}
 function readRulesets(repo: string): Ruleset[] {
   return pages(`repos/${repo}/rulesets?includes_parents=true`).map((rule) => {
     if (!Number.isSafeInteger(rule.id) || Number(rule.id) <= 0) throw new Error(`Invalid ruleset id: ${repo}`);
@@ -407,17 +448,22 @@ export function main(args: string[]): number {
       return response as RepositoryState;
     },
     getRulesets: readRulesets,
-    backup(repo, kind, value) {
+    getActionsValueRepositories: readActionsValueRepositories,
+    backup(repo, kind, value, name) {
       mkdirSync(options.backupDir!, { recursive: true, mode: 0o700 });
       const id = kind === "ruleset" && value && "id" in value ? value.id : kind;
       const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-      const backup = join(options.backupDir!, `${repo.replace("/", "-")}-${id ?? "new"}-${timestamp}.json`);
+      const suffix = name ? `${id}-${name}` : id;
+      const backup = join(options.backupDir!, `${repo.replace("/", "-")}-${suffix ?? "new"}-${timestamp}.json`);
       writeFileSync(backup, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
       console.log(`${repo}: backed up ${kind} to ${backup}`);
     },
     patchRepository(repo, settings) { gh([`repos/${repo}`, "--method", "PATCH", "--input", "-"], settings); },
     upsertRuleset(repo, live, desired) {
       gh([live ? `repos/${repo}/rulesets/${live.id}` : `repos/${repo}/rulesets`, "--method", live ? "PUT" : "POST", "--input", "-"], desired);
+    },
+    addRepositoryToActionsValue(owner, name, repositoryId) {
+      gh([`orgs/${owner}/actions/secrets/${name}/repositories/${repositoryId}`, "--method", "PUT"]);
     },
   };
   if (options.mode === "check") {
