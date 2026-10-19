@@ -67,6 +67,16 @@ const assertPublisherChecksHaveNode = (yaml, file) => {
   }
 };
 
+const acceptedPnpmWorkspaces = [
+  "packages:\n  - packages/*\n  - '!ignored/**'\n",
+  "'packages':\n - 'packages/*'\n",
+  "\"packages\": [\"packages/*\"]\n",
+  "{packages: ['packages/*']}\n",
+  "packages:\n# indentless with comments and blank lines\n\n- 'packages/*'\n- !ignored/**\n",
+  "packages: [packages/*, \"!ignored/**\"] # flow sequence\n",
+  "catalog:\n  react: 19.0.0\npackages:\n  - packages/*\nonlyBuiltDependencies:\n- esbuild\n",
+];
+
 test("own, unpublished, private published, scoped, and duplicate packages are checked once", async () => {
   const root = await fixture(["@stll/own", "unpublished", "@stll/own", "private-published"]);
   const fake = await registry({ "@stll/own": { url: "git+https://github.com/stella/tooling.git" }, "private-published": "stella/tooling" });
@@ -149,16 +159,7 @@ test("negated workspace patterns exclude packages", async () => {
 });
 
 test("pnpm block and flow workspace sequences inspect nested packages", async () => {
-  const workspaces = [
-    "packages:\n  - packages/*\n  - '!ignored/**'\n",
-    "'packages':\n - 'packages/*'\n",
-    "\"packages\": [\"packages/*\"]\n",
-    "{packages: ['packages/*']}\n",
-    "packages:\n# indentless with comments and blank lines\n\n- 'packages/*'\n- !ignored/**\n",
-    "packages: [packages/*, \"!ignored/**\"] # flow sequence\n",
-    "catalog:\n  react: 19.0.0\npackages:\n  - packages/*\nonlyBuiltDependencies:\n- esbuild\n",
-  ];
-  for (const workspace of workspaces) {
+  for (const workspace of acceptedPnpmWorkspaces) {
     const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-"));
     await writeFile(join(root, "pnpm-workspace.yaml"), workspace);
     await mkdir(join(root, "packages", "nested"), { recursive: true });
@@ -178,6 +179,75 @@ test("pnpm block and flow workspace sequences inspect nested packages", async ()
       }), /package published-elsewhere is published from github\.com\/elsewhere\/source/u);
     } finally { await rm(root, { recursive: true }); }
   }
+});
+
+test("a comment-only packages value still inspects nested packages", async () => {
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-comment-"));
+  await writeFile(join(root, "pnpm-workspace.yaml"), "packages: # workspace packages\n - packages/*\n");
+  await mkdir(join(root, "packages", "nested"), { recursive: true });
+  await writeFile(join(root, "packages", "nested", "package.json"), JSON.stringify({ name: "published-elsewhere" }));
+  try {
+    await assert.rejects(checkPackagePublishers({
+      root,
+      repository: "stella/tooling",
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          "dist-tags": { latest: "1.0.0" },
+          versions: { "1.0.0": { repository: "github:elsewhere/source" } },
+        }),
+      }),
+    }), /package published-elsewhere is published from github\.com\/elsewhere\/source/u);
+  } finally { await rm(root, { recursive: true }); }
+});
+
+test("line-end comments do not change any accepted workspace fixture", async () => {
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-comments-"));
+  await mkdir(join(root, "packages", "nested"), { recursive: true });
+  await writeFile(join(root, "packages", "nested", "package.json"), JSON.stringify({ name: "nested" }));
+  const discovered = async (workspace) => {
+    await writeFile(join(root, "pnpm-workspace.yaml"), workspace);
+    const names = [];
+    await checkPackagePublishers({
+      root,
+      repository: "stella/tooling",
+      fetchImpl: async (url) => {
+        names.push(decodeURIComponent(new URL(url).pathname.slice(1)));
+        return { ok: false, status: 404 };
+      },
+    });
+    return names;
+  };
+  try {
+    for (const workspace of acceptedPnpmWorkspaces) {
+      const expected = await discovered(workspace);
+      const lines = workspace.split("\n");
+      for (const lineIndex of lines.keys()) {
+        const commented = lines.map((line, index) => index === lineIndex ? `${line} # note` : line).join("\n");
+        assert.deepEqual(await discovered(commented), expected, `comment on line ${lineIndex + 1} of ${JSON.stringify(workspace)}`);
+      }
+    }
+  } finally { await rm(root, { recursive: true }); }
+});
+
+test("a hash without preceding whitespace stays in a quoted package pattern", async () => {
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-hash-"));
+  await writeFile(join(root, "pnpm-workspace.yaml"), "packages:\n  - 'a#b/*' # note\n");
+  await mkdir(join(root, "a#b", "nested"), { recursive: true });
+  await writeFile(join(root, "a#b", "nested", "package.json"), JSON.stringify({ name: "hash-package" }));
+  const inspected = [];
+  try {
+    await checkPackagePublishers({
+      root,
+      repository: "stella/tooling",
+      fetchImpl: async (url) => {
+        inspected.push(decodeURIComponent(new URL(url).pathname.slice(1)));
+        return { ok: false, status: 404 };
+      },
+    });
+    assert.deepEqual(inspected, ["hash-package"]);
+  } finally { await rm(root, { recursive: true }); }
 });
 
 test("an explicit package file list is honored exactly", async () => {

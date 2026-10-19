@@ -14,6 +14,40 @@ const manifestPattern = (pattern) => `${pattern.replace(/^\.\//u, "").replace(/\
 const workspaceError = (file, line, detail = "packages must be a YAML sequence of strings") =>
   new Error(`cannot read ${file}:${line}: ${detail}`);
 
+const stripYamlComments = (source) => {
+  let result = "";
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === '"' && character === "\\") {
+      result += character + (source[index + 1] ?? "");
+      index += 1;
+      continue;
+    }
+    if (character === quote) {
+      if (quote === "'" && source[index + 1] === "'") {
+        result += "''";
+        index += 1;
+      } else {
+        quote = null;
+        result += character;
+      }
+      continue;
+    }
+    if (quote === null && (character === '"' || character === "'")) {
+      quote = character;
+      result += character;
+      continue;
+    }
+    if (quote === null && character === "#" && (index === 0 || /\s/u.test(source[index - 1]))) {
+      while (index + 1 < source.length && source[index + 1] !== "\n") index += 1;
+      continue;
+    }
+    result += character;
+  }
+  return result;
+};
+
 const parseWorkspaceScalar = (source, file, line) => {
   const value = source.trim();
   if (value.startsWith('"')) {
@@ -105,7 +139,7 @@ const topLevelEntry = (line) => {
 };
 
 const parsePnpmWorkspace = (source, file) => {
-  const lines = source.split(/\r?\n/u);
+  const lines = stripYamlComments(source).split(/\r?\n/u);
   const patterns = [];
   let sawPackages = false;
   let index = 0;
