@@ -14,7 +14,7 @@ on:
         type: string
         default: "false"
       rust-changed:
-        description: "Whether Rust-related inputs changed"
+        description: "Whether the caller requests Rust checks in addition to the workflow’s manifest, lockfile, toolchain, crate, and Rust source detection."
         required: false
         type: string
         default: "true"
@@ -43,11 +43,11 @@ on:
         required: false
         type: string
         default: "cargo fmt --all -- --check"
-      install-command:
-        description: "Command used to install dependencies. `--no-verify` works around bun's integrity check on napi-rs platform sub-packages."
+      install-ignore-scripts:
+        description: "Install dependencies without running package lifecycle scripts; the frozen lockfile install itself is fixed."
         required: false
-        type: string
-        default: "bun install --frozen-lockfile --no-verify"
+        type: boolean
+        default: false
       typecheck:
         description: "Run typecheck and a seeded-error rejection probe"
         required: false
@@ -100,7 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_IGNORE_SCRIPTS: ${{ inputs.install-ignore-scripts }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_IGNORE_SCRIPTS" == 'true' ]]; then
+            bun install --frozen-lockfile --ignore-scripts
+          else
+            bun install --frozen-lockfile
+          fi
       - run: bun run lint
 
   typecheck:
@@ -117,7 +126,16 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_IGNORE_SCRIPTS: ${{ inputs.install-ignore-scripts }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_IGNORE_SCRIPTS" == 'true' ]]; then
+            bun install --frozen-lockfile --ignore-scripts
+          else
+            bun install --frozen-lockfile
+          fi
       - run: bun run check:toolchain
       - run: bun run typecheck
       - name: Reject a seeded type error
@@ -212,7 +230,16 @@ jobs:
         # fails with `unexpected argument 'metadata'`.
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_IGNORE_SCRIPTS: ${{ inputs.install-ignore-scripts }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_IGNORE_SCRIPTS" == 'true' ]]; then
+            bun install --frozen-lockfile --ignore-scripts
+          else
+            bun install --frozen-lockfile
+          fi
       - run: bun run build
       - run: bun run build:js
       - name: Bun runtime smoke
@@ -222,9 +249,41 @@ jobs:
         if: matrix.runtime == 'node'
         run: node scripts/runtime-smoke.mjs
 
+  detect-rust:
+    name: Detect Rust inputs
+    if: inputs.trusted == 'true' && !inputs.typecheck-only
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      rust-changed: ${{ steps.select.outputs.rust-changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select Rust checks
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        shell: bash
+        run: |
+          rust_changed=true
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && ! "$BASE_SHA" =~ ^0+$ ]] && merge_base=$(git merge-base HEAD "$BASE_SHA"); then
+            if ! git diff --quiet "$merge_base" HEAD -- 'Cargo.toml' 'Cargo.lock' '**/Cargo.toml' '**/Cargo.lock' 'rust-toolchain' 'rust-toolchain.toml' 'crates/**' 'src/**/*.rs'; then
+              rust_changed=true
+            else
+              rust_changed=false
+            fi
+          else
+            echo '::notice::Merge base unavailable; running Rust checks.'
+          fi
+          echo "rust-changed=$rust_changed" >> "$GITHUB_OUTPUT"
+
   rust-checks:
     name: Rust checks
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && inputs.rust-changed == 'true'
+    if: inputs.trusted == 'true' && !inputs.typecheck-only && (inputs.rust-changed == 'true' || needs.detect-rust.outputs.rust-changed == 'true')
+    needs: [detect-rust]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -261,13 +320,13 @@ jobs:
       - name: Stable source lint
         run: cargo stella-lint .
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -Dwarnings
       - name: Format
         run: $RUST_FORMAT_CMD
         env:
           RUST_FORMAT_CMD: ${{ inputs.rust-format-command }}
       - name: Tests
-        run: cargo test --workspace --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
       - name: License audit
         run: |
           cargo install cargo-deny --locked
@@ -287,7 +346,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_IGNORE_SCRIPTS: ${{ inputs.install-ignore-scripts }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_IGNORE_SCRIPTS" == 'true' ]]; then
+            bun install --frozen-lockfile --ignore-scripts
+          else
+            bun install --frozen-lockfile
+          fi
       - uses: stella/.github/actions/provenance-check@636b7841096c8f0cc5a1572077b78768ef8fea42
         with:
           provenance-version: ${{ inputs.provenance-version }}
@@ -344,7 +412,16 @@ jobs:
         with:
           shared-key: build-${{ env.BUILD_TARGET }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_IGNORE_SCRIPTS: ${{ inputs.install-ignore-scripts }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_IGNORE_SCRIPTS" == 'true' ]]; then
+            bun install --frozen-lockfile --ignore-scripts
+          else
+            bun install --frozen-lockfile
+          fi
       - name: Build (native)
         if: >-
           env.BUILD_KIND == 'native'
@@ -434,7 +511,16 @@ jobs:
     steps: &test-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_IGNORE_SCRIPTS: ${{ inputs.install-ignore-scripts }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_IGNORE_SCRIPTS" == 'true' ]]; then
+            bun install --frozen-lockfile --ignore-scripts
+          else
+            bun install --frozen-lockfile
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
