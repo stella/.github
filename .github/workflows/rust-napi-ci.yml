@@ -3,6 +3,11 @@ name: Rust NAPI CI
 on:
   workflow_call:
     inputs:
+      scope:
+        description: "Run the full matrix or the single-runner pull-request suite"
+        required: false
+        type: string
+        default: "full"
       node-version:
         description: "Node.js version"
         required: false
@@ -68,18 +73,98 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  pr:
+    name: PR checks (ubuntu-latest)
+    if: inputs.scope == 'pr' && inputs.trusted == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Validate scope
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          if [[ "$SCOPE" != 'pr' ]]; then
+            echo "::error::Invalid scope '$SCOPE'; expected 'full' or 'pr'."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: ${{ inputs.typecheck && 0 || 1 }}
+          persist-credentials: false
+      - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: ${{ inputs.node-version }}
+      - run: node scripts/version-sync.mjs check
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - run: ${{ inputs.install-command }}
+      - run: bun run lint
+      - if: inputs.typecheck
+        uses: ./.github/actions/napi-typecheck
+        with:
+          parity: ${{ inputs.parity }}
+          base-sha: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+      - name: Cache Rust build outputs
+        if: inputs.rust-changed == 'true' || inputs.build-changed == 'true'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: pr-1.99.0-${{ hashFiles('Cargo.lock') }}
+      - if: inputs.rust-changed == 'true'
+        uses: ./.github/actions/napi-rust-checks
+        with:
+          rust-format-command: ${{ inputs.rust-format-command }}
+          cache: "false"
+      - if: inputs.provenance-changed == 'true'
+        uses: stella/.github/actions/provenance-check@636b7841096c8f0cc5a1572077b78768ef8fea42
+        with:
+          provenance-version: ${{ inputs.provenance-version }}
+      - if: inputs.build-changed == 'true'
+        uses: ./.github/actions/napi-build
+        with:
+          target: x86_64-unknown-linux-gnu
+          kind: native
+          node-version: ${{ inputs.node-version }}
+          install-command: ${{ inputs.install-command }}
+          cache: "false"
+      - if: inputs.build-changed == 'true'
+        run: bun run build:js
+      - if: inputs.build-changed == 'true'
+        run: bun test
+      - name: Property tests
+        if: inputs.build-changed == 'true' && inputs.property-test-command != ''
+        run: $PROPERTY_TEST_CMD
+        env:
+          PROPERTY_TEST_CMD: ${{ inputs.property-test-command }}
+      - if: inputs.build-changed == 'true'
+        run: bun run test:runtime:bun
+      - if: inputs.build-changed == 'true'
+        run: node scripts/runtime-smoke.mjs
+
   workflow-lint:
     name: Workflow lint
+    if: inputs.scope == 'full' || (inputs.scope != 'full' && inputs.scope != 'pr')
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: Validate scope
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          if [[ "$SCOPE" != 'full' ]]; then
+            echo "::error::Invalid scope '$SCOPE'; expected 'full' or 'pr'."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
 
   version-check:
     name: Version sync
-    if: inputs.trusted == 'true' && !inputs.typecheck-only
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,7 +177,7 @@ jobs:
 
   lint:
     name: Lint
-    if: inputs.trusted == 'true' && !inputs.typecheck-only
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only
     needs: [workflow-lint, version-check]
     runs-on: ubuntu-latest
     permissions:
@@ -105,7 +190,7 @@ jobs:
 
   typecheck:
     name: Typecheck and parity
-    if: inputs.trusted == 'true' && inputs.typecheck
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && inputs.typecheck
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -118,66 +203,14 @@ jobs:
         with:
           bun-version-file: package.json
       - run: ${{ inputs.install-command }}
-      - run: bun run check:toolchain
-      - run: bun run typecheck
-      - name: Reject a seeded type error
-        shell: bash
-        run: |
-          probe=$(mktemp src/typecheck-rejection-XXXXXX.ts)
-          trap 'rm -f "$probe"' EXIT
-          printf 'export const typecheckRejectionProbe: string = 123;\n' > "$probe"
-          log="$RUNNER_TEMP/typecheck-rejection.log"
-          if bun run typecheck > "$log" 2>&1; then
-            cat "$log"
-            echo "::error::Typecheck accepted a seeded type error."
-            exit 1
-          fi
-          cat "$log"
-          grep -F "$(basename "$probe")" "$log" | grep -E 'TS2322([^0-9]|$)'
-      - name: Select compiler parity
-        id: parity
-        env:
-          PARITY_MODE: ${{ inputs.parity }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-        run: |
-          node --input-type=module <<'JS'
-          import { execFileSync } from 'node:child_process';
-          import { appendFileSync, readFileSync } from 'node:fs';
-          const mode = process.env.PARITY_MODE;
-          if (mode !== 'changed' && mode !== 'always') throw new Error('Unsupported compiler parity mode');
-          const versions = (manifest) => {
-            if (!/^bun@\d+\.\d+\.\d+(?:[-+].+)?$/.test(manifest.packageManager ?? '')) {
-              throw new Error('Expected a pinned Bun packageManager');
-            }
-            const dependencies = { ...manifest.dependencies, ...manifest.devDependencies };
-            const compilers = Object.entries(dependencies).filter(([name, version]) =>
-              name === 'typescript' || name.startsWith('@typescript/') ||
-              name === 'bun-types' || name === '@stll/typescript-config' ||
-              name === '@stll/oxlint-config' || /^npm:typescript@/.test(version)
-            ).sort(([a], [b]) => a.localeCompare(b));
-            return JSON.stringify([manifest.packageManager, compilers]);
-          };
-          let changed = true;
-          if (mode === 'changed') {
-            const head = versions(JSON.parse(readFileSync('package.json', 'utf8')));
-            const base = process.env.BASE_SHA ?? '';
-            if (/^[0-9a-f]{40}$/.test(base) && !/^0+$/.test(base)) {
-              try {
-                changed = head !== versions(JSON.parse(execFileSync('git', ['show', `${base}:package.json`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })));
-              } catch {
-                console.log('Base toolchain unavailable; running compiler parity.');
-              }
-            }
-          }
-          appendFileSync(process.env.GITHUB_OUTPUT, `run=${changed}\n`);
-          JS
-      - name: Check compiler parity
-        if: steps.parity.outputs.run == 'true'
-        run: bun run check:typecheck-parity
+      - uses: ./.github/actions/napi-typecheck
+        with:
+          parity: ${{ inputs.parity }}
+          base-sha: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
 
   runtime-compat:
     name: Runtime - ${{ matrix.runtime }} / ${{ matrix.os }}
-    if: inputs.trusted == 'true' && !inputs.typecheck-only
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ${{ matrix.os }}
     env:
       RUSTUP_TOOLCHAIN: 1.99.0
@@ -224,62 +257,19 @@ jobs:
 
   rust-checks:
     name: Rust checks
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && inputs.rust-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && inputs.rust-changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      RUSTUP_TOOLCHAIN: 1.99.0
-      STELLA_SOURCE_LINT_REV: a1bd81740ecb4b66999f56d1716e1190c4e7272f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: ./.github/actions/napi-rust-checks
         with:
-          toolchain: 1.99.0
-          components: clippy, rustfmt
-      - name: Ensure cargo on PATH
-        # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
-        # not adding $CARGO_HOME/bin to PATH when rustup is pre-installed.
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          shared-key: rust-checks
-      - name: Cache stable source checker
-        id: source-lint-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/stella-source-lint/bin
-          key: stella-source-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.STELLA_SOURCE_LINT_REV }}
-      - name: Install stable source checker
-        if: steps.source-lint-cache.outputs.cache-hit != 'true'
-        run: >-
-          cargo install --git https://github.com/stella/tooling
-          --rev "$STELLA_SOURCE_LINT_REV" --locked
-          --root "$RUNNER_TEMP/stella-source-lint" stella_source_lint
-      - name: Add stable source checker to PATH
-        run: echo "$RUNNER_TEMP/stella-source-lint/bin" >> "$GITHUB_PATH"
-      - name: Stable source lint
-        run: cargo stella-lint .
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -Dwarnings
-      - name: Format
-        run: $RUST_FORMAT_CMD
-        env:
-          RUST_FORMAT_CMD: ${{ inputs.rust-format-command }}
-      - name: Tests
-        run: cargo test --all-targets --all-features
-      - name: License audit
-        run: |
-          cargo install cargo-deny --locked
-          cargo deny check
-      - name: Docs
-        run: cargo doc --no-deps
-        env:
-          RUSTDOCFLAGS: -Dwarnings
+          rust-format-command: ${{ inputs.rust-format-command }}
 
   provenance:
     name: Provenance
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && inputs.provenance-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && inputs.provenance-changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -294,7 +284,7 @@ jobs:
 
   detect:
     name: Detect build inputs
-    if: inputs.trusted == 'true' && !inputs.typecheck-only
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only
     runs-on: ubuntu-latest
     permissions: {}
     outputs:
@@ -318,7 +308,7 @@ jobs:
 
   build:
     name: Build - x86_64-apple-darwin
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
     runs-on: macos-15
     env:
@@ -329,37 +319,12 @@ jobs:
       contents: read
     steps: &build-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: ./.github/actions/napi-build
         with:
+          target: ${{ env.BUILD_TARGET }}
+          kind: ${{ env.BUILD_KIND }}
           node-version: ${{ inputs.node-version }}
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-        with:
-          toolchain: 1.99.0
-          targets: ${{ env.BUILD_TARGET }}
-      - name: Ensure cargo on PATH
-        # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
-        # not adding $CARGO_HOME/bin to PATH when rustup is pre-installed.
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          shared-key: build-${{ env.BUILD_TARGET }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
-      - name: Build (native)
-        if: >-
-          env.BUILD_KIND == 'native'
-        run: >
-          bun run build
-          --target ${{ env.BUILD_TARGET }}
-      - name: Build (cross-compile)
-        if: env.BUILD_KIND == 'cross'
-        run: >
-          bun run build
-          --target ${{ env.BUILD_TARGET }}
-          --use-napi-cross
-      - name: Build (WASM)
-        if: env.BUILD_KIND == 'wasm'
-        run: bun run build:wasm
+          install-command: ${{ inputs.install-command }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bindings-${{ env.BUILD_TARGET }}
@@ -374,7 +339,7 @@ jobs:
 
   build-macos-arm64:
     name: Build - aarch64-apple-darwin
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
     runs-on: macos-15
     env:
@@ -387,7 +352,7 @@ jobs:
 
   build-linux:
     name: Build - x86_64-unknown-linux-gnu
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
     runs-on: ubuntu-latest
     env:
@@ -400,7 +365,7 @@ jobs:
 
   build-linux-arm64:
     name: Build - aarch64-unknown-linux-gnu
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
     runs-on: ubuntu-latest
     env:
@@ -413,7 +378,7 @@ jobs:
 
   build-wasm:
     name: Build - wasm32-wasip1-threads
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
     runs-on: ubuntu-latest
     env:
@@ -426,7 +391,7 @@ jobs:
 
   test:
     name: Test (ubuntu-latest)
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect, build, build-macos-arm64, build-linux, build-linux-arm64, build-wasm]
     runs-on: ubuntu-latest
     permissions:
@@ -462,7 +427,7 @@ jobs:
 
   test-macos:
     name: Test (macos-15)
-    if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
+    if: inputs.scope == 'full' && inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect, build, build-macos-arm64, build-linux, build-linux-arm64, build-wasm]
     runs-on: macos-15
     permissions:

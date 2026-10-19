@@ -48,6 +48,17 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 
 ## Usage
 
+### Rust NAPI CI scopes
+
+`rust-napi-ci.yml` supports two execution scopes. The default, `full`, preserves
+the platform and runtime matrix for merge groups, pushes to `main`, and release
+workflows. The `pr` scope runs the pull-request checks in one Ubuntu job, avoiding
+separate runner queues while retaining lint, typecheck, Rust, provenance, build,
+and runtime coverage selected by the existing change inputs.
+
+Callers should pass `scope: pr` for `pull_request` events and `scope: full` for
+all other events. Existing callers that omit `scope` continue to use `full`.
+
 ### Rust NAPI Typecheck and Nightly Parity
 
 Set `typecheck: true` on a trusted `rust-napi-ci.yml` caller to run

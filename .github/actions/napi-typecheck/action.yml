@@ -1,0 +1,74 @@
+name: NAPI typecheck
+description: Run the NAPI TypeScript checks and compiler-parity selection
+inputs:
+  parity:
+    description: Compiler parity mode (changed or always)
+    required: false
+    default: changed
+  base-sha:
+    description: Base commit used to compare compiler versions
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - run: bun run check:toolchain
+      shell: bash
+    - run: bun run typecheck
+      shell: bash
+    - name: Reject a seeded type error
+      shell: bash
+      run: |
+        probe=$(mktemp src/typecheck-rejection-XXXXXX.ts)
+        trap 'rm -f "$probe"' EXIT
+        printf 'export const typecheckRejectionProbe: string = 123;\n' > "$probe"
+        log="$RUNNER_TEMP/typecheck-rejection.log"
+        if bun run typecheck > "$log" 2>&1; then
+          cat "$log"
+          echo "::error::Typecheck accepted a seeded type error."
+          exit 1
+        fi
+        cat "$log"
+        grep -F "$(basename "$probe")" "$log" | grep -E 'TS2322([^0-9]|$)'
+    - name: Select compiler parity
+      id: parity
+      shell: bash
+      env:
+        PARITY_MODE: ${{ inputs.parity }}
+        BASE_SHA: ${{ inputs.base-sha }}
+      run: |
+        node --input-type=module <<'JS'
+        import { execFileSync } from 'node:child_process';
+        import { appendFileSync, readFileSync } from 'node:fs';
+        const mode = process.env.PARITY_MODE;
+        if (mode !== 'changed' && mode !== 'always') throw new Error('Unsupported compiler parity mode');
+        const versions = (manifest) => {
+          if (!/^bun@\d+\.\d+\.\d+(?:[-+].+)?$/.test(manifest.packageManager ?? '')) {
+            throw new Error('Expected a pinned Bun packageManager');
+          }
+          const dependencies = { ...manifest.dependencies, ...manifest.devDependencies };
+          const compilers = Object.entries(dependencies).filter(([name, version]) =>
+            name === 'typescript' || name.startsWith('@typescript/') ||
+            name === 'bun-types' || name === '@stll/typescript-config' ||
+            name === '@stll/oxlint-config' || /^npm:typescript@/.test(version)
+          ).sort(([a], [b]) => a.localeCompare(b));
+          return JSON.stringify([manifest.packageManager, compilers]);
+        };
+        let changed = true;
+        if (mode === 'changed') {
+          const head = versions(JSON.parse(readFileSync('package.json', 'utf8')));
+          const base = process.env.BASE_SHA ?? '';
+          if (/^[0-9a-f]{40}$/.test(base) && !/^0+$/.test(base)) {
+            try {
+              changed = head !== versions(JSON.parse(execFileSync('git', ['show', `${base}:package.json`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })));
+            } catch {
+              console.log('Base toolchain unavailable; running compiler parity.');
+            }
+          }
+        }
+        appendFileSync(process.env.GITHUB_OUTPUT, `run=${changed}\n`);
+        JS
+    - name: Check compiler parity
+      if: steps.parity.outputs.run == 'true'
+      shell: bash
+      run: bun run check:typecheck-parity
