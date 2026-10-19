@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { readFile, readdir } from "node:fs/promises";
-import { resolve, relative, sep } from "node:path";
+import { glob, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -9,11 +9,7 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
 const readManifest = async (file) => JSON.parse(await readFile(file, "utf8"));
 
-const globPattern = (pattern) => {
-  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//u, "").replace(/\/$/u, "");
-  const escaped = normalized.replace(/[.+^${}()|[\]\\]/gu, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("**", "\0").replaceAll("*", "[^/]*").replaceAll("\0", ".*")}(?:/package\\.json)?$`, "u");
-};
+const manifestPattern = (pattern) => `${pattern.replace(/^\.\//u, "").replace(/\/$/u, "")}/package.json`;
 
 const packageFiles = async (root) => {
   const rootFile = resolve(root, "package.json");
@@ -28,40 +24,32 @@ const packageFiles = async (root) => {
   const patterns = Array.isArray(rootManifest.workspaces)
     ? rootManifest.workspaces
     : rootManifest.workspaces?.packages ?? [];
-  const matchers = patterns.filter((value) => typeof value === "string").map(globPattern);
+  const workspacePatterns = patterns.filter((value) => typeof value === "string");
   const files = [rootFile];
-  if (matchers.length === 0) return files;
+  const included = workspacePatterns.filter((pattern) => !pattern.startsWith("!"));
+  if (included.length === 0) return files;
 
-  const visit = async (directory) => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === "node_modules" || entry.name === ".git") continue;
-      const child = resolve(directory, entry.name);
-      const path = relative(root, child).split(sep).join("/");
-      if (matchers.some((matcher) => matcher.test(path))) {
-        try {
-          await readFile(resolve(child, "package.json"));
-          files.push(resolve(child, "package.json"));
-        } catch (error) {
-          if (error?.code !== "ENOENT") throw error;
-        }
-      }
-      await visit(child);
-    }
-  };
-  await visit(root);
+  const excluded = workspacePatterns
+    .filter((pattern) => pattern.startsWith("!"))
+    .map((pattern) => manifestPattern(pattern.slice(1)));
+  for await (const file of glob(included.map(manifestPattern), {
+    cwd: root,
+    exclude: ["**/node_modules/**", "**/.git/**", ...excluded],
+  })) files.push(resolve(root, file));
   return files;
 };
 
 export const normalizeRepository = (repository) => {
   let value = typeof repository === "string" ? repository : repository?.url;
   if (typeof value !== "string" || value.trim() === "") return null;
-  value = value.trim().replace(/^github:/u, "").replace(/^git\+/u, "").replace(/\.git(?:#.*)?$/u, "");
-  if (/^[^/:]+\/[^/]+$/u.test(value)) return value;
-  value = value.replace(/^git@[^:]+:/u, "https://placeholder/");
+  value = value.trim().replace(/^git\+/u, "").replace(/\.git(?:#.*)?$/u, "");
+  if (value.startsWith("github:")) value = value.replace(/^github:/u, "https://github.com/");
+  if (/^[^/:]+\/[^/]+$/u.test(value)) value = `https://github.com/${value}`;
+  value = value.replace(/^git@([^:]+):/u, "https://$1/");
   try {
     const url = new URL(value);
     const parts = url.pathname.replace(/^\//u, "").split("/").filter(Boolean);
-    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null;
+    return parts.length >= 2 ? `${url.hostname}/${parts[0]}/${parts[1]}` : null;
   } catch {
     return null;
   }
@@ -97,7 +85,7 @@ export async function checkPackagePublishers({ root = ".", repository, registry 
     const latest = document?.["dist-tags"]?.latest;
     const publishedFrom = normalizeRepository(document?.versions?.[latest]?.repository);
     if (!publishedFrom) throw new Error(`failed to read npm registry for ${name}: latest version has no valid repository.url`);
-    if (publishedFrom.toLowerCase() !== repository.toLowerCase()) {
+    if (publishedFrom.toLowerCase() !== `github.com/${repository}`.toLowerCase()) {
       throw new Error(`package ${name} is published from ${publishedFrom}; consume it instead of keeping a copy`);
     }
   }

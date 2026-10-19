@@ -46,7 +46,7 @@ test("a package published elsewhere fails with the exact message", async () => {
   const fake = await registry({ "@stll/time": { url: "git+https://github.com/stella/tooling.git" } });
   try {
     await assert.rejects(checkPackagePublishers({ root, repository: "stella/stella", registry: fake.url }), {
-      message: "package @stll/time is published from stella/tooling; consume it instead of keeping a copy",
+      message: "package @stll/time is published from github.com/stella/tooling; consume it instead of keeping a copy",
     });
   } finally { await fake.close(); await rm(root, { recursive: true }); }
 });
@@ -70,10 +70,57 @@ test("network errors fail closed with the package name", async () => {
   } finally { await rm(root, { recursive: true }); }
 });
 
-test("repository URL forms normalize to owner/name", () => {
+test("repository URL forms normalize to host/owner/name", () => {
   for (const value of ["stella/tooling", "github:stella/tooling", "git+https://github.com/stella/tooling.git", "git@github.com:stella/tooling.git"]) {
-    assert.equal(normalizeRepository(value), "stella/tooling");
+    assert.equal(normalizeRepository(value), "github.com/stella/tooling");
   }
+});
+
+test("workspace brace and character-class patterns inspect published packages", async () => {
+  for (const [pattern, directory] of [["packages/{core,utils}", "utils"], ["packages/[ab]", "b"]]) {
+    const root = await mkdtemp(join(tmpdir(), "publisher-check-glob-"));
+    await writeFile(join(root, "package.json"), JSON.stringify({ private: true, workspaces: [pattern] }));
+    await mkdir(join(root, "packages", directory), { recursive: true });
+    await writeFile(join(root, "packages", directory, "package.json"), JSON.stringify({ name: `published-${directory}` }));
+    try {
+      await assert.rejects(checkPackagePublishers({
+        root,
+        repository: "stella/tooling",
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            "dist-tags": { latest: "1.0.0" },
+            versions: { "1.0.0": { repository: "github:elsewhere/source" } },
+          }),
+        }),
+      }), new RegExp(`package published-${directory} is published from github\\.com/elsewhere/source`, "u"));
+    } finally { await rm(root, { recursive: true }); }
+  }
+});
+
+test("negated workspace patterns exclude packages", async () => {
+  const root = await mkdtemp(join(tmpdir(), "publisher-check-negation-"));
+  await writeFile(join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*", "!packages/excluded"] }));
+  await mkdir(join(root, "packages", "excluded"), { recursive: true });
+  await writeFile(join(root, "packages", "excluded", "package.json"), JSON.stringify({ name: "excluded" }));
+  try {
+    await checkPackagePublishers({
+      root,
+      repository: "stella/tooling",
+      fetchImpl: async () => { throw new Error("excluded package was inspected"); },
+    });
+  } finally { await rm(root, { recursive: true }); }
+});
+
+test("the same repository path on another host is published elsewhere", async () => {
+  const root = await fixture(["same-path"]);
+  const fake = await registry({ "same-path": "https://gitlab.com/stella/tooling.git" });
+  try {
+    await assert.rejects(checkPackagePublishers({ root, repository: "stella/tooling", registry: fake.url }), {
+      message: "package same-path is published from gitlab.com/stella/tooling; consume it instead of keeping a copy",
+    });
+  } finally { await fake.close(); await rm(root, { recursive: true }); }
 });
 
 test("shared entry points invoke the composite action", async () => {
