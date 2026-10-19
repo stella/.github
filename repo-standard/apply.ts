@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import template from "./ruleset.json";
+import settingsTemplate from "./settings.json";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type ObjectValue = { [key: string]: Json };
-export type Entry = { gate: string; extraChecks: string[]; signatures: boolean; enabled: boolean };
+export type Entry = { gate?: string; cla?: string; missingGate?: boolean; extraChecks: string[]; signatures: boolean; enabled: boolean };
 export type Inventory = Record<string, Entry>;
 export type Tool = "bun" | "node" | "rust";
 export type ToolchainException = { repo: string; tool: Tool; pin: string; reason: string; expires: string };
@@ -36,10 +36,12 @@ export function parseInventory(value: unknown): Inventory {
   if (!object(value) || !Object.keys(value).length) throw new Error("Inventory must be a nonempty repository-to-entry object");
   for (const [repo, entry] of Object.entries(value)) {
     if (!REPO.test(repo) || !object(entry) ||
-      typeof entry.gate !== "string" || !entry.gate.trim() || entry.gate !== entry.gate.trim() ||
+      (entry.gate !== undefined && (typeof entry.gate !== "string" || !entry.gate.trim() || entry.gate !== entry.gate.trim())) ||
+      (entry.cla !== undefined && (typeof entry.cla !== "string" || !entry.cla.trim() || entry.cla !== entry.cla.trim())) ||
+      (entry.missingGate !== undefined && typeof entry.missingGate !== "boolean") ||
       !Array.isArray(entry.extraChecks) || entry.extraChecks.some((check) => typeof check !== "string" || !check.trim() || check !== check.trim()) ||
       typeof entry.signatures !== "boolean" || typeof entry.enabled !== "boolean" ||
-      Object.keys(entry).some((key) => !["gate", "extraChecks", "signatures", "enabled"].includes(key))) {
+      Object.keys(entry).some((key) => !["gate", "cla", "missingGate", "extraChecks", "signatures", "enabled"].includes(key))) {
       throw new Error(`Invalid inventory entry: ${repo}`);
     }
   }
@@ -149,7 +151,9 @@ export function render(entry: Entry): Ruleset {
   const body = structuredClone(template) as Ruleset;
   const status = body.rules.find((rule) => rule.type === "required_status_checks");
   if (!status?.parameters) throw new Error("Template is missing required_status_checks");
-  status.parameters.required_status_checks = [...new Set([entry.gate, "cla", ...entry.extraChecks])].map((context) => ({ context }));
+  const checks = entry.missingGate ? [entry.cla ?? "cla / cla", ...entry.extraChecks] : [entry.gate ?? "ci-result", entry.cla ?? "cla / cla", ...entry.extraChecks];
+  status.parameters.required_status_checks = [...new Set(checks)].map((context) => ({ context }));
+  if (entry.missingGate) body.rules = body.rules.filter((rule) => rule.type !== "merge_queue");
   if (entry.signatures) body.rules.push({ type: "required_signatures" });
   return body;
 }
@@ -204,6 +208,43 @@ export function diff(actual: Ruleset | null, expected: Ruleset): Difference[] {
   return changes;
 }
 
+export type RepositorySettings = typeof settingsTemplate;
+export function settingsDiff(actual: Record<string, unknown>, expected: RepositorySettings = settingsTemplate): Difference[] {
+  return Object.entries(expected).flatMap(([key, value]) => actual[key] === value ? [] : [{ rule: `settings.${key}`, actual: actual[key], expected: value }]);
+}
+
+export type RepositoryState = Record<string, unknown> & { archived: boolean };
+export type RepositoryApi = {
+  getRepository(repo: string): RepositoryState;
+  getRulesets(repo: string): Ruleset[];
+  patchRepository(repo: string, settings: RepositorySettings): void;
+  upsertRuleset(repo: string, live: Ruleset | null, desired: Ruleset): void;
+};
+export function applyBaseline(inventory: Inventory, api: RepositoryApi, dryRun: boolean): { lines: string[]; exitCode: 0 | 1 } {
+  const lines: string[] = [];
+  let drift = false;
+  for (const [repo, entry] of Object.entries(inventory)) {
+    if (!entry.enabled) { lines.push(`${repo}: disabled; skipped`); continue; }
+    const repository = api.getRepository(repo);
+    if (repository.archived) { lines.push(`${repo}: archived; skipped`); continue; }
+    if (entry.missingGate) lines.push(`${repo}: missing gate`);
+    const settingsChanges = settingsDiff(repository);
+    const matching = api.getRulesets(repo).filter((ruleset) => ruleset.name === NAME);
+    if (matching.length > 1) throw new Error(`Multiple ${NAME} rulesets: ${repo}`);
+    const live = matching[0] ?? null;
+    const desired = render(entry);
+    const rulesetChanges = diff(live, desired);
+    const changes = [...settingsChanges, ...rulesetChanges];
+    if (!changes.length) { lines.push(`${repo}: no drift`); continue; }
+    drift = true;
+    for (const change of changes) lines.push(`${repo} ${change.rule}: ${JSON.stringify(change.actual)} -> ${JSON.stringify(change.expected)}`);
+    if (dryRun) continue;
+    if (settingsChanges.length) api.patchRepository(repo, settingsTemplate);
+    if (rulesetChanges.length) api.upsertRuleset(repo, live, desired);
+  }
+  return { lines, exitCode: dryRun && drift ? 1 : 0 };
+}
+
 export type LiveRepository = { repo: string; rulesets: Ruleset[] };
 export function audit(inventory: Inventory, repositories: LiveRepository[]): string[] {
   const live = new Map(repositories.map((entry) => [entry.repo.toLowerCase(), entry]));
@@ -256,9 +297,10 @@ export function parseArgs(args: string[]): Options {
     else if (arg?.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
     else if (arg) repos.push(arg);
   }
-  if (!inventory || !mode || (mode === "apply" && (!repos.length || !backupDir)) || (mode !== "apply" && repos.length) ||
+  mode ??= "apply";
+  if (!inventory || repos.length || backupDir ||
     (toolchainExceptions !== undefined && mode !== "check")) {
-    throw new Error("Usage: bun repo-standard/apply.ts --inventory <file> (--dry-run | --check [--toolchain-exceptions <file>] | apply <owner/repo...> --backup-dir <dir>)");
+    throw new Error("Usage: bun repo-standard/apply.ts --inventory <file> [--dry-run | --check [--toolchain-exceptions <file>]]");
   }
   return { inventory, mode, repos, backupDir, ...(toolchainExceptions === undefined ? {} : { toolchainExceptions }) };
 }
@@ -348,34 +390,22 @@ export function main(args: string[]): number {
     for (const line of toolchains.lines) console.log(line);
     return result.exitCode || toolchains.failures.length ? 1 : 0;
   }
-  const selected = options.mode === "apply" ? options.repos : Object.keys(inventory);
-  // Validate every target before any write or backup.
-  for (const repo of selected) {
-    if (!Object.hasOwn(inventory, repo)) throw new Error(`Repository is not in inventory: ${repo}`);
-    if (options.mode === "apply" && !inventory[repo]!.enabled) throw new Error(`Repository is not enabled: ${repo}`);
-  }
-  for (const repo of selected) {
-    const rulesets = readRulesets(repo).filter((ruleset) => ruleset.name === NAME);
-    if (rulesets.length > 1) throw new Error(`Multiple ${NAME} rulesets: ${repo}`);
-    const live = rulesets[0] ?? null;
-    const desired = render(inventory[repo]!);
-    const changes = diff(live, desired);
-    if (options.mode === "dry-run") {
-      if (!changes.length) console.log(`${repo}: no drift`);
-      for (const change of changes) console.log(`${repo} ${change.rule}: ${JSON.stringify(change.actual)} -> ${JSON.stringify(change.expected)}`);
-      continue;
-    }
-    if (!changes.length) { console.log(`${repo}: no drift`); continue; }
-    if (live && (live.source_type !== "Repository" || String(live.source).toLowerCase() !== repo.toLowerCase())) throw new Error(`Refusing to update inherited ruleset: ${repo}`);
-    mkdirSync(options.backupDir!, { recursive: true, mode: 0o700 });
-    const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-    const backup = join(options.backupDir!, `${repo.replace("/", "-")}-${live?.id ?? "new"}-${timestamp}.json`);
-    // A create backs up null: there was no ruleset before this operation.
-    writeFileSync(backup, `${JSON.stringify(live, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    gh([live ? `repos/${repo}/rulesets/${live.id}` : `repos/${repo}/rulesets`, "--method", live ? "PUT" : "POST", "--input", "-"], desired);
-    console.log(`${repo}: applied; backup ${backup}`);
-  }
-  return 0;
+  const api: RepositoryApi = {
+    getRepository(repo) {
+      const response = gh([`repos/${repo}`]);
+      if (!object(response) || typeof response.archived !== "boolean") throw new Error(`Invalid repository response: ${repo}`);
+      return response as RepositoryState;
+    },
+    getRulesets: readRulesets,
+    patchRepository(repo, settings) { gh([`repos/${repo}`, "--method", "PATCH", "--input", "-"], settings); },
+    upsertRuleset(repo, live, desired) {
+      if (live && (live.source_type !== "Repository" || String(live.source).toLowerCase() !== repo.toLowerCase())) throw new Error(`Refusing to update inherited ruleset: ${repo}`);
+      gh([live ? `repos/${repo}/rulesets/${live.id}` : `repos/${repo}/rulesets`, "--method", live ? "PUT" : "POST", "--input", "-"], desired);
+    },
+  };
+  const result = applyBaseline(inventory, api, options.mode === "dry-run");
+  for (const line of result.lines) console.log(line);
+  return result.exitCode;
 }
 if (import.meta.main) {
   try { process.exitCode = main(process.argv.slice(2)); }

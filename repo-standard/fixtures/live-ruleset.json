@@ -55,7 +55,7 @@
             "context": "dependency-review"
           },
           {
-            "context": "cla"
+            "context": "cla / cla"
           }
         ]
       }
