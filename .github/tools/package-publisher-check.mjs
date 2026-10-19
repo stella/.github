@@ -11,37 +11,106 @@ const readManifest = async (file) => JSON.parse(await readFile(file, "utf8"));
 
 const manifestPattern = (pattern) => `${pattern.replace(/^\.\//u, "").replace(/\/$/u, "")}/package.json`;
 
+const workspaceError = (file, detail = "packages must be a YAML sequence of strings") =>
+  new Error(`cannot read ${file}: ${detail}`);
+
+const parseWorkspaceScalar = (source, file) => {
+  const value = source.trim();
+  if (value.startsWith('"')) {
+    try {
+      const match = value.match(/^("(?:[^"\\]|\\.)*")(?:\s+#.*)?$/u);
+      if (!match) throw new Error();
+      return JSON.parse(match[1]);
+    } catch {
+      throw workspaceError(file, "invalid quoted package pattern");
+    }
+  }
+  if (value.startsWith("'")) {
+    const match = value.match(/^'((?:[^']|'')*)'(?:\s+#.*)?$/u);
+    if (!match) throw workspaceError(file, "invalid quoted package pattern");
+    return match[1].replace(/''/gu, "'");
+  }
+
+  const pattern = value.replace(/\s+#.*$/u, "").trim();
+  if (pattern === "" || /^(?:[\[{&*|>@`]|!!)|:\s/u.test(pattern.replace(/^!/u, ""))) {
+    throw workspaceError(file, "unsupported YAML package pattern");
+  }
+  return pattern;
+};
+
+const parseFlowSequence = (source, file) => {
+  const patterns = [];
+  let item = "";
+  let quote = null;
+  let closed = false;
+  for (let index = 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === '"' && character === "\\") {
+      item += character + (source[index + 1] ?? "");
+      index += 1;
+      continue;
+    }
+    if (character === quote) {
+      if (quote === "'" && source[index + 1] === "'") {
+        item += "''";
+        index += 1;
+      } else quote = null;
+      item += character;
+      continue;
+    }
+    if (quote === null && (character === '"' || character === "'")) {
+      quote = character;
+      item += character;
+      continue;
+    }
+    if (quote === null && character === "#") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      item += " ";
+      continue;
+    }
+    if (quote === null && (character === "," || character === "]")) {
+      if (item.trim() !== "") patterns.push(parseWorkspaceScalar(item, file));
+      else if (character === ",") throw workspaceError(file);
+      item = "";
+      if (character === "]") {
+        if (!/^[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/u.test(source.slice(index + 1))) throw workspaceError(file);
+        closed = true;
+        break;
+      }
+      continue;
+    }
+    item += character;
+  }
+  if (!closed || quote !== null) throw workspaceError(file);
+  return patterns;
+};
+
 const parsePnpmWorkspace = (source, file) => {
   const lines = source.split(/\r?\n/u);
-  const start = lines.findIndex((line) => /^packages\s*:\s*(?:#.*)?$/u.test(line));
+  const start = lines.findIndex((line) => /^packages\s*:/u.test(line));
   if (start === -1) {
-    if (lines.some((line) => /^packages\s*:/u.test(line))) {
-      throw new Error(`cannot read ${file}: packages must be a plain YAML list`);
-    }
     return [];
   }
+  const header = lines[start];
+  const inline = header.replace(/^packages\s*:\s*/u, "");
+  if (inline !== "" && !inline.startsWith("#")) {
+    if (!inline.startsWith("[")) throw workspaceError(file);
+    const patterns = parseFlowSequence([inline, ...lines.slice(start + 1)].join("\n"), file);
+    if (patterns.length === 0) throw workspaceError(file, "packages must contain at least one pattern");
+    return patterns;
+  }
+
   const patterns = [];
   for (const line of lines.slice(start + 1)) {
-    if (/^\S/u.test(line)) break;
     if (/^\s*(?:#.*)?$/u.test(line)) continue;
-    const match = line.match(/^\s+-\s+(.+?)\s*$/u);
-    if (!match) throw new Error(`cannot read ${file}: packages must be a plain YAML list`);
-    const value = match[1];
-    let pattern;
-    if (value.startsWith('"')) {
-      try { pattern = JSON.parse(value); } catch { throw new Error(`cannot read ${file}: invalid quoted package pattern`); }
-    } else if (value.startsWith("'")) {
-      if (!value.endsWith("'")) throw new Error(`cannot read ${file}: invalid quoted package pattern`);
-      pattern = value.slice(1, -1).replace(/''/gu, "'");
-    } else {
-      pattern = value.replace(/\s+#.*$/u, "").trim();
-      if (/^(?:[\[{&*|>@`]|!!)|:\s/u.test(pattern.replace(/^!/u, ""))) {
-        throw new Error(`cannot read ${file}: unsupported YAML package pattern`);
-      }
+    const match = line.match(/^\s*-\s+(.+?)\s*$/u);
+    if (!match) {
+      if (/^\s/u.test(line) || /^-/u.test(line)) throw workspaceError(file);
+      break;
     }
-    if (typeof pattern !== "string" || pattern === "") throw new Error(`cannot read ${file}: invalid package pattern`);
-    patterns.push(pattern);
+    patterns.push(parseWorkspaceScalar(match[1], file));
   }
+  if (patterns.length === 0) throw workspaceError(file, "packages must contain at least one pattern");
   return patterns;
 };
 

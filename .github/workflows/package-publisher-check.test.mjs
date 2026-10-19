@@ -148,25 +148,32 @@ test("negated workspace patterns exclude packages", async () => {
   } finally { await rm(root, { recursive: true }); }
 });
 
-test("pnpm workspace packages are discovered without package.json workspaces", async () => {
-  const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-"));
-  await writeFile(join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n  - !ignored/**\n");
-  await mkdir(join(root, "packages", "nested"), { recursive: true });
-  await writeFile(join(root, "packages", "nested", "package.json"), JSON.stringify({ name: "published-elsewhere" }));
-  try {
-    await assert.rejects(checkPackagePublishers({
-      root,
-      repository: "stella/tooling",
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          "dist-tags": { latest: "1.0.0" },
-          versions: { "1.0.0": { repository: "github:elsewhere/source" } },
+test("pnpm block and flow workspace sequences inspect nested packages", async () => {
+  const workspaces = [
+    "packages:\n  - packages/*\n  - '!ignored/**'\n",
+    "packages:\n# indentless with comments and blank lines\n\n- 'packages/*'\n- !ignored/**\n",
+    "packages: [packages/*, \"!ignored/**\"] # flow sequence\n",
+  ];
+  for (const workspace of workspaces) {
+    const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-"));
+    await writeFile(join(root, "pnpm-workspace.yaml"), workspace);
+    await mkdir(join(root, "packages", "nested"), { recursive: true });
+    await writeFile(join(root, "packages", "nested", "package.json"), JSON.stringify({ name: "published-elsewhere" }));
+    try {
+      await assert.rejects(checkPackagePublishers({
+        root,
+        repository: "stella/tooling",
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            "dist-tags": { latest: "1.0.0" },
+            versions: { "1.0.0": { repository: "github:elsewhere/source" } },
+          }),
         }),
-      }),
-    }), /package published-elsewhere is published from github\.com\/elsewhere\/source/u);
-  } finally { await rm(root, { recursive: true }); }
+      }), /package published-elsewhere is published from github\.com\/elsewhere\/source/u);
+    } finally { await rm(root, { recursive: true }); }
+  }
 });
 
 test("an explicit package file list is honored exactly", async () => {
@@ -186,7 +193,7 @@ test("an explicit package file list is honored exactly", async () => {
 test("unreadable pnpm workspace YAML fails instead of guessing", async () => {
   const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-invalid-"));
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "must-not-be-used" }));
-  await writeFile(join(root, "pnpm-workspace.yaml"), "packages: [packages/*]\n");
+  await writeFile(join(root, "pnpm-workspace.yaml"), "packages: { path: packages/* }\n");
   try {
     await assert.rejects(checkPackagePublishers({
       root,
