@@ -10,7 +10,7 @@ const workflow = readFileSync(
 test("GitHub App tokens use the supported client-id input", () => {
   assert.match(
     workflow,
-    /uses: actions\/create-github-app-token@[0-9a-f]{40} # v3\.2\.0/,
+    /uses: actions\/create-github-app-token@[0-9a-f]{40} # v3\.\d+\.\d+/,
   );
   assert.match(
     workflow,

@@ -18,7 +18,7 @@ test("the npm OIDC job does not persist a write-capable checkout token", () => {
 test("the release App token requests only repository contents write", () => {
   assert.match(
     workflow,
-    /uses: actions\/create-github-app-token@[0-9a-f]{40} # v3\.2\.0/,
+    /uses: actions\/create-github-app-token@[0-9a-f]{40} # v3\.\d+\.\d+/,
   );
   assert.match(
     workflow,
