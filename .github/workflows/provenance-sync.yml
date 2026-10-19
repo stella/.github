@@ -62,7 +62,7 @@ jobs:
       github.event_name == 'pull_request_target'
       && github.event.pull_request.state == 'open'
       && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -223,7 +223,7 @@ jobs:
     name: Commit provenance
     needs: generate
     if: needs.generate.outputs.changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
