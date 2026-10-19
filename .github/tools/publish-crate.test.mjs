@@ -75,6 +75,8 @@ const setup = (t) => {
   );
 
   const uploads = join(directory, "uploads.log");
+  const outputs = join(directory, "github-output");
+  const reusedDirectory = join(directory, "published-crate");
   const run = (publishedCrate) =>
     spawnSync("bash", ["-eo", "pipefail", publisher], {
       encoding: "utf8",
@@ -86,21 +88,39 @@ const setup = (t) => {
         EXPECTED_CRATE_NAME: "example-core",
         FAKE_PUBLISHED_CRATE: publishedCrate,
         FAKE_UPLOADS: uploads,
+        GITHUB_OUTPUT: outputs,
+        PUBLISHED_ARCHIVE_DIRECTORY: reusedDirectory,
       },
     });
-  return { pack, run, preparedPath: join(crateDirectory, "example-core-1.2.3.crate"), uploads };
+  const readOutputs = () =>
+    Object.fromEntries(
+      readFileSync(outputs, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+    );
+  return {
+    pack,
+    run,
+    readOutputs,
+    reusedDirectory,
+    preparedSha: sha256(prepared),
+    preparedPath: join(crateDirectory, "example-core-1.2.3.crate"),
+    uploads,
+  };
 };
 
 test("an existing version with the exact prepared bytes is skipped", (t) => {
-  const { run, preparedPath, uploads } = setup(t);
+  const { run, readOutputs, preparedSha, preparedPath, uploads } = setup(t);
   const result = run(preparedPath);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /already published with the exact prepared bytes/);
   assert.equal(existsSync(uploads), false);
+  assert.deepEqual(readOutputs(), { "published-sha256": preparedSha, "reused-archive": "" });
 });
 
 test("an existing version packaged from another commit with identical source is skipped", (t) => {
-  const { pack, run, uploads } = setup(t);
+  const { pack, run, readOutputs, reusedDirectory, preparedSha, uploads } = setup(t);
   const published = pack({
     ...source,
     ".cargo_vcs_info.json": '{"git":{"sha1":"2222222222222222222222222222222222222222"},"path_in_vcs":"crates/core"}\n',
@@ -109,6 +129,12 @@ test("an existing version packaged from another commit with identical source is 
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /already published from identical source; skipping upload/);
   assert.equal(existsSync(uploads), false);
+  // The reported digest and the archive handed to attestation are the registry's bytes, not the prepared ones.
+  const publishedBytes = readFileSync(published);
+  const reused = join(reusedDirectory, "example-core-1.2.3.crate");
+  assert.notEqual(sha256(publishedBytes), preparedSha);
+  assert.deepEqual(readOutputs(), { "published-sha256": sha256(publishedBytes), "reused-archive": reused });
+  assert.ok(readFileSync(reused).equals(publishedBytes));
 });
 
 test("an existing version with different source fails and names the differing files", (t) => {
@@ -119,6 +145,18 @@ test("an existing version with different source fails and names the differing fi
   assert.match(result.stdout, /already published from different source; release a new version/);
   assert.match(result.stdout, /example-core-1\.2\.3\/src\/lib\.rs/);
   assert.equal(existsSync(uploads), false);
+});
+
+test("the workflow reports and attests the archive crates.io serves", () => {
+  const workflow = readFileSync(new URL("../workflows/crates-io-publish.yml", import.meta.url), "utf8");
+  assert.match(
+    workflow,
+    /crate-sha256:\n\s+description: [^\n]+\n\s+value: \$\{\{ jobs\.publish\.outputs\.published-sha256 \}\}/,
+  );
+  const attestJob = workflow.slice(workflow.indexOf("  attest-published:"));
+  assert.match(attestJob, /if: needs\.publish\.outputs\.reused-archive != ''/);
+  assert.match(attestJob, /sha256sum --check --strict/);
+  assert.match(attestJob, /subject-path: published-crate\/\*\.crate/);
 });
 
 test("an unreadable published archive fails without uploading", (t) => {

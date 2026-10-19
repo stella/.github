@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,12 +22,14 @@ const listFiles = (root, directory = root) =>
 const unpack = (cratePath) => {
   const directory = mkdtempSync(join(tmpdir(), "crate-source-"));
   try {
-    execFileSync("tar", ["-xzf", cratePath, "-C", directory]);
+    // -p keeps the archived permission bits instead of applying the umask.
+    execFileSync("tar", ["-xpzf", cratePath, "-C", directory]);
     const files = new Map();
     for (const path of listFiles(directory)) {
       const [, ...inside] = path.split("/");
       if (inside.join("/") !== VCS_INFO) {
-        files.set(path, readFileSync(join(directory, path)));
+        const file = join(directory, path);
+        files.set(path, { bytes: readFileSync(file), mode: statSync(file).mode & 0o7777 });
       }
     }
     return files;
@@ -36,7 +38,7 @@ const unpack = (cratePath) => {
   }
 };
 
-/** Paths whose bytes differ between two crate archives, ignoring archive metadata and the VCS record. */
+/** Paths whose bytes or permission bits differ between two crate archives, ignoring timestamps, owners and the VCS record. */
 export const diffCrateSources = (leftCrate, rightCrate) => {
   const left = unpack(leftCrate);
   const right = unpack(rightCrate);
@@ -45,7 +47,7 @@ export const diffCrateSources = (leftCrate, rightCrate) => {
     .filter((path) => {
       const a = left.get(path);
       const b = right.get(path);
-      return a === undefined || b === undefined || !a.equals(b);
+      return a === undefined || b === undefined || a.mode !== b.mode || !a.bytes.equals(b.bytes);
     })
     .sort();
 };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -18,7 +18,7 @@ const crateSource = {
   ".cargo_vcs_info.json": '{"git":{"sha1":"1111111111111111111111111111111111111111"},"path_in_vcs":"crates/core"}\n',
 };
 
-const packCrate = (t, files, { mtime = 1_153_704_088 } = {}) => {
+const packCrate = (t, files, { mtime = 1_153_704_088, modes = {} } = {}) => {
   const directory = mkdtempSync(join(tmpdir(), "crate-source-test-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const root = join(directory, "example-core-1.2.3");
@@ -26,6 +26,7 @@ const packCrate = (t, files, { mtime = 1_153_704_088 } = {}) => {
     const file = join(root, path);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents);
+    chmodSync(file, modes[path] ?? 0o644);
     utimesSync(file, mtime, mtime);
   }
   const crate = join(directory, "example-core-1.2.3.crate");
@@ -51,6 +52,14 @@ test("a changed source file is reported", (t) => {
   const published = packCrate(t, crateSource);
   const rebuilt = packCrate(t, { ...crateSource, "src/lib.rs": "pub fn matches() -> bool { false }\n" });
   assert.deepEqual(diffCrateSources(published, rebuilt), ["example-core-1.2.3/src/lib.rs"]);
+});
+
+test("a changed permission bit is reported even when the bytes match", (t) => {
+  const withScript = { ...crateSource, "build-helper.sh": "#!/bin/sh\nexit 0\n" };
+  const published = packCrate(t, withScript, { modes: { "build-helper.sh": 0o755 } });
+  const rebuilt = packCrate(t, withScript, { modes: { "build-helper.sh": 0o644 } });
+  assert.deepEqual(diffCrateSources(published, rebuilt), ["example-core-1.2.3/build-helper.sh"]);
+  assert.deepEqual(diffCrateSources(published, packCrate(t, withScript, { modes: { "build-helper.sh": 0o755 } })), []);
 });
 
 test("added and removed files are reported from either side", (t) => {
