@@ -781,7 +781,7 @@ entries too. Enable an entry only when its workflows handle merge groups.
 bun repo-standard/apply.ts --inventory /private/repos.json --dry-run
 bun repo-standard/apply.ts --inventory /private/repos.json --check
 bun repo-standard/apply.ts --inventory /private/repos.json --check --toolchain-exceptions /private/toolchain-exceptions.json
-bun repo-standard/apply.ts --inventory /private/repos.json apply organization/project --backup-dir /private/backups
+bun repo-standard/apply.ts --inventory /private/repos.json --repo organization/project --backup-dir /private/backups
 ```
 
 #### Toolchain Standard
@@ -820,12 +820,15 @@ If that field is unavailable, the checker reports `INSUFFICIENT_PERMISSION` and
 exits 1; it cannot certify the full policy from a redacted response. Check and
 dry-run only read APIs, regardless of the token's permissions.
 
-Apply requires an enabled inventory entry and administration write access. Before
-each create or update it writes the full live response to a new private backup
-file named `<owner>-<repo>-<ruleset id>-<UTC timestamp>.json` (`new` and JSON `null`
-for a create). Existing matching rulesets produce no write. Inherited organization
-rulesets cannot be updated by this tool. Keep apply manual; scheduled CI should
-run `--check` only.
+Apply requires at least one explicit, repeatable `--repo <owner/name>` target, an
+enabled inventory entry for every target, `--backup-dir <dir>`, and administration
+write access. Without `--repo`, the command refuses to write; only `--dry-run` may
+cover the whole inventory. Before each settings or ruleset write, apply stores the
+current repository response or full live ruleset response in a new private backup
+file. Existing matching settings and rulesets produce no write. Archived,
+missing-gate, and inherited-ruleset refusals are decided after computing drift but
+before the first backup or write for that repository. Keep apply manual; scheduled
+CI should run `--check` only.
 
 The normalizer ignores response metadata, default empty review restrictions and
 null app bindings, while preserving additional restrictions and explicit app

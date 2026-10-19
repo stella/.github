@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import template from "./ruleset.json";
+import settingsTemplate from "./settings.json";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type ObjectValue = { [key: string]: Json };
-export type Entry = { gate: string; extraChecks: string[]; signatures: boolean; enabled: boolean };
+export type Entry = { gate?: string; cla?: string; missingGate?: boolean; extraChecks: string[]; signatures: boolean; enabled: boolean };
 export type Inventory = Record<string, Entry>;
 export type Tool = "bun" | "node" | "rust";
 export type ToolchainException = { repo: string; tool: Tool; pin: string; reason: string; expires: string };
@@ -36,10 +37,12 @@ export function parseInventory(value: unknown): Inventory {
   if (!object(value) || !Object.keys(value).length) throw new Error("Inventory must be a nonempty repository-to-entry object");
   for (const [repo, entry] of Object.entries(value)) {
     if (!REPO.test(repo) || !object(entry) ||
-      typeof entry.gate !== "string" || !entry.gate.trim() || entry.gate !== entry.gate.trim() ||
+      (entry.gate !== undefined && (typeof entry.gate !== "string" || !entry.gate.trim() || entry.gate !== entry.gate.trim())) ||
+      (entry.cla !== undefined && (typeof entry.cla !== "string" || !entry.cla.trim() || entry.cla !== entry.cla.trim())) ||
+      (entry.missingGate !== undefined && typeof entry.missingGate !== "boolean") ||
       !Array.isArray(entry.extraChecks) || entry.extraChecks.some((check) => typeof check !== "string" || !check.trim() || check !== check.trim()) ||
       typeof entry.signatures !== "boolean" || typeof entry.enabled !== "boolean" ||
-      Object.keys(entry).some((key) => !["gate", "extraChecks", "signatures", "enabled"].includes(key))) {
+      Object.keys(entry).some((key) => !["gate", "cla", "missingGate", "extraChecks", "signatures", "enabled"].includes(key))) {
       throw new Error(`Invalid inventory entry: ${repo}`);
     }
   }
@@ -149,7 +152,9 @@ export function render(entry: Entry): Ruleset {
   const body = structuredClone(template) as Ruleset;
   const status = body.rules.find((rule) => rule.type === "required_status_checks");
   if (!status?.parameters) throw new Error("Template is missing required_status_checks");
-  status.parameters.required_status_checks = [...new Set([entry.gate, "cla", ...entry.extraChecks])].map((context) => ({ context }));
+  const checks = entry.missingGate ? [entry.cla ?? "cla / cla", ...entry.extraChecks] : [entry.gate ?? "ci-result", entry.cla ?? "cla / cla", ...entry.extraChecks];
+  status.parameters.required_status_checks = [...new Set(checks)].map((context) => ({ context }));
+  if (entry.missingGate) body.rules = body.rules.filter((rule) => rule.type !== "merge_queue");
   if (entry.signatures) body.rules.push({ type: "required_signatures" });
   return body;
 }
@@ -204,6 +209,73 @@ export function diff(actual: Ruleset | null, expected: Ruleset): Difference[] {
   return changes;
 }
 
+export type RepositorySettings = typeof settingsTemplate;
+export function settingsDiff(actual: Record<string, unknown>, expected: RepositorySettings = settingsTemplate): Difference[] {
+  return Object.entries(expected).flatMap(([key, value]) => actual[key] === value ? [] : [{ rule: `settings.${key}`, actual: actual[key], expected: value }]);
+}
+
+export type RepositoryState = Record<string, unknown> & { archived: boolean };
+export type RepositoryApi = {
+  getRepository(repo: string): RepositoryState;
+  getRulesets(repo: string): Ruleset[];
+  backup(repo: string, kind: "settings" | "ruleset", value: RepositoryState | Ruleset | null): void;
+  patchRepository(repo: string, settings: RepositorySettings): void;
+  upsertRuleset(repo: string, live: Ruleset | null, desired: Ruleset): void;
+};
+type RepositoryPlan = {
+  repo: string; entry: Entry; repository: RepositoryState; live: Ruleset | null; desired: Ruleset;
+  settingsChanges: Difference[]; rulesetChanges: Difference[]; refusal?: string;
+};
+type BaselinePlan = { lines: string[]; repositories: RepositoryPlan[]; drift: boolean; refusedDrift: boolean };
+
+function planBaseline(inventory: Inventory, api: RepositoryApi): BaselinePlan {
+  const lines: string[] = [], repositories: RepositoryPlan[] = [];
+  let drift = false, refusedDrift = false;
+  for (const [repo, entry] of Object.entries(inventory)) {
+    if (!entry.enabled) { lines.push(`${repo}: disabled; skipped`); continue; }
+    const repository = api.getRepository(repo);
+    const settingsChanges = settingsDiff(repository);
+    const matching = api.getRulesets(repo).filter((ruleset) => ruleset.name === NAME);
+    if (matching.length > 1) throw new Error(`Multiple ${NAME} rulesets: ${repo}`);
+    const live = matching[0] ?? null;
+    const desired = render(entry);
+    const rulesetChanges = diff(live, desired);
+    const changes = [...settingsChanges, ...rulesetChanges];
+    let refusal: string | undefined;
+    if (repository.archived) refusal = "archived; skipped";
+    else if (entry.missingGate) refusal = "missing gate";
+    else if (live && changes.length && (live.source_type !== "Repository" || String(live.source).toLowerCase() !== repo.toLowerCase())) {
+      throw new Error(`Refusing to update inherited ruleset: ${repo}`);
+    }
+    if (refusal) lines.push(`${repo}: ${refusal}`);
+    if (!changes.length) {
+      if (!repository.archived) lines.push(`${repo}: no drift`);
+    } else {
+      drift = true;
+      if (refusal) refusedDrift = true;
+      for (const change of changes) lines.push(`${repo} ${change.rule}: ${JSON.stringify(change.actual)} -> ${JSON.stringify(change.expected)}`);
+    }
+    repositories.push({ repo, entry, repository, live, desired, settingsChanges, rulesetChanges, ...(refusal ? { refusal } : {}) });
+  }
+  return { lines, repositories, drift, refusedDrift };
+}
+
+export function applyBaseline(inventory: Inventory, api: RepositoryApi, dryRun: boolean): { lines: string[]; exitCode: 0 | 1 } {
+  const plan = planBaseline(inventory, api);
+  if (!dryRun) for (const { repo, repository, live, desired, settingsChanges, rulesetChanges, refusal } of plan.repositories) {
+    if (refusal || (!settingsChanges.length && !rulesetChanges.length)) continue;
+    if (settingsChanges.length) {
+      api.backup(repo, "settings", repository);
+      api.patchRepository(repo, settingsTemplate);
+    }
+    if (rulesetChanges.length) {
+      api.backup(repo, "ruleset", live);
+      api.upsertRuleset(repo, live, desired);
+    }
+  }
+  return { lines: plan.lines, exitCode: (dryRun ? plan.drift : plan.refusedDrift) ? 1 : 0 };
+}
+
 export type LiveRepository = { repo: string; rulesets: Ruleset[] };
 export function audit(inventory: Inventory, repositories: LiveRepository[]): string[] {
   const live = new Map(repositories.map((entry) => [entry.repo.toLowerCase(), entry]));
@@ -244,21 +316,22 @@ export function parseArgs(args: string[]): Options {
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--inventory" || arg === "--backup-dir" || arg === "--toolchain-exceptions") {
+    if (arg === "--inventory" || arg === "--backup-dir" || arg === "--toolchain-exceptions" || arg === "--repo") {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}`);
       if (arg === "--inventory") inventory = value;
       else if (arg === "--backup-dir") backupDir = value;
-      else toolchainExceptions = value;
+      else if (arg === "--toolchain-exceptions") toolchainExceptions = value;
+      else repos.push(value);
     } else if (arg === "--dry-run") selectMode("dry-run");
     else if (arg === "--check") selectMode("check");
-    else if (arg === "apply") selectMode("apply");
     else if (arg?.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
-    else if (arg) repos.push(arg);
+    else if (arg) throw new Error(`Unknown argument: ${arg}`);
   }
-  if (!inventory || !mode || (mode === "apply" && (!repos.length || !backupDir)) || (mode !== "apply" && repos.length) ||
+  mode ??= repos.length || backupDir ? "apply" : undefined;
+  if (!inventory || !mode || (mode === "apply" && (!repos.length || !backupDir)) || (mode !== "apply" && (repos.length || backupDir)) ||
     (toolchainExceptions !== undefined && mode !== "check")) {
-    throw new Error("Usage: bun repo-standard/apply.ts --inventory <file> (--dry-run | --check [--toolchain-exceptions <file>] | apply <owner/repo...> --backup-dir <dir>)");
+    throw new Error("Usage: bun repo-standard/apply.ts --inventory <file> (--dry-run | --check [--toolchain-exceptions <file>] | --repo <owner/repo> [--repo <owner/repo>...] --backup-dir <dir>)");
   }
   return { inventory, mode, repos, backupDir, ...(toolchainExceptions === undefined ? {} : { toolchainExceptions }) };
 }
@@ -327,6 +400,26 @@ function readRepositories(owner: string): { repos: string[]; observations: Toolc
 export function main(args: string[]): number {
   const options = parseArgs(args);
   const inventory = parseInventory(JSON.parse(readFileSync(options.inventory, "utf8")));
+  const api: RepositoryApi = {
+    getRepository(repo) {
+      const response = gh([`repos/${repo}`]);
+      if (!object(response) || typeof response.archived !== "boolean") throw new Error(`Invalid repository response: ${repo}`);
+      return response as RepositoryState;
+    },
+    getRulesets: readRulesets,
+    backup(repo, kind, value) {
+      mkdirSync(options.backupDir!, { recursive: true, mode: 0o700 });
+      const id = kind === "ruleset" && value && "id" in value ? value.id : kind;
+      const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
+      const backup = join(options.backupDir!, `${repo.replace("/", "-")}-${id ?? "new"}-${timestamp}.json`);
+      writeFileSync(backup, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      console.log(`${repo}: backed up ${kind} to ${backup}`);
+    },
+    patchRepository(repo, settings) { gh([`repos/${repo}`, "--method", "PATCH", "--input", "-"], settings); },
+    upsertRuleset(repo, live, desired) {
+      gh([live ? `repos/${repo}/rulesets/${live.id}` : `repos/${repo}/rulesets`, "--method", live ? "PUT" : "POST", "--input", "-"], desired);
+    },
+  };
   if (options.mode === "check") {
     const standard = parseToolchain(JSON.parse(readFileSync(new URL("./toolchain.json", import.meta.url), "utf8")));
     const exceptions = options.toolchainExceptions === undefined
@@ -343,39 +436,22 @@ export function main(args: string[]): number {
       }
     }
     const result = checkInventory(inventory, repositories);
+    const baseline = applyBaseline(inventory, api, true);
     const toolchains = auditToolchain(standard, exceptions, observations, new Date().toISOString().slice(0, 10));
     for (const line of result.lines) console.log(line);
+    for (const line of baseline.lines) console.log(line);
     for (const line of toolchains.lines) console.log(line);
-    return result.exitCode || toolchains.failures.length ? 1 : 0;
+    return result.exitCode || baseline.exitCode || toolchains.failures.length ? 1 : 0;
   }
   const selected = options.mode === "apply" ? options.repos : Object.keys(inventory);
-  // Validate every target before any write or backup.
   for (const repo of selected) {
     if (!Object.hasOwn(inventory, repo)) throw new Error(`Repository is not in inventory: ${repo}`);
     if (options.mode === "apply" && !inventory[repo]!.enabled) throw new Error(`Repository is not enabled: ${repo}`);
   }
-  for (const repo of selected) {
-    const rulesets = readRulesets(repo).filter((ruleset) => ruleset.name === NAME);
-    if (rulesets.length > 1) throw new Error(`Multiple ${NAME} rulesets: ${repo}`);
-    const live = rulesets[0] ?? null;
-    const desired = render(inventory[repo]!);
-    const changes = diff(live, desired);
-    if (options.mode === "dry-run") {
-      if (!changes.length) console.log(`${repo}: no drift`);
-      for (const change of changes) console.log(`${repo} ${change.rule}: ${JSON.stringify(change.actual)} -> ${JSON.stringify(change.expected)}`);
-      continue;
-    }
-    if (!changes.length) { console.log(`${repo}: no drift`); continue; }
-    if (live && (live.source_type !== "Repository" || String(live.source).toLowerCase() !== repo.toLowerCase())) throw new Error(`Refusing to update inherited ruleset: ${repo}`);
-    mkdirSync(options.backupDir!, { recursive: true, mode: 0o700 });
-    const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-    const backup = join(options.backupDir!, `${repo.replace("/", "-")}-${live?.id ?? "new"}-${timestamp}.json`);
-    // A create backs up null: there was no ruleset before this operation.
-    writeFileSync(backup, `${JSON.stringify(live, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    gh([live ? `repos/${repo}/rulesets/${live.id}` : `repos/${repo}/rulesets`, "--method", live ? "PUT" : "POST", "--input", "-"], desired);
-    console.log(`${repo}: applied; backup ${backup}`);
-  }
-  return 0;
+  const selectedInventory = Object.fromEntries(selected.map((repo) => [repo, inventory[repo]!])) as Inventory;
+  const result = applyBaseline(selectedInventory, api, options.mode === "dry-run");
+  for (const line of result.lines) console.log(line);
+  return result.exitCode;
 }
 if (import.meta.main) {
   try { process.exitCode = main(process.argv.slice(2)); }

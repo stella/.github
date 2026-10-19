@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import liveFixture from "./fixtures/live-ruleset.json";
 import template from "./ruleset.json";
-import { audit, auditToolchain, checkInventory, diff, normalise, parseArgs, parseInventory, parseToolchain, parseToolchainExceptions, parseToolObservations, render, type Entry, type Ruleset, type Toolchain, type ToolchainException, type ToolchainObservation } from "./apply";
+import settings from "./settings.json";
+import { applyBaseline, audit, auditToolchain, checkInventory, diff, normalise, parseArgs, parseInventory, parseToolchain, parseToolchainExceptions, parseToolObservations, render, type Entry, type RepositoryApi, type RepositoryState, type Ruleset, type Toolchain, type ToolchainException, type ToolchainObservation } from "./apply";
 
 const entry: Entry = { gate: "ci-result", extraChecks: ["dependency-review"], signatures: true, enabled: true };
 const live = structuredClone(liveFixture) as Ruleset;
@@ -27,7 +28,7 @@ describe("render", () => {
     expect(second).toEqual(originalSecond);
     expect(template).toEqual(originalTemplate);
     expect(render(secondEntry)).toEqual(originalSecond);
-    expect(render(firstEntry).rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks).toEqual([{ context: "first-gate" }, { context: "cla" }, { context: "first-extra" }]);
+    expect(render(firstEntry).rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks).toEqual([{ context: "first-gate" }, { context: "cla / cla" }, { context: "first-extra" }]);
   });
   test("pins the complete queue and review policy", () => {
     const body = render(entry);
@@ -52,11 +53,11 @@ describe("render", () => {
   });
   test("renders check names once and toggles signatures without mutating the template", () => {
     for (const signatures of [false, true]) {
-      const body = render({ ...entry, signatures, gate: "checks", extraChecks: ["checks", "cla", "extra", "extra"] });
+      const body = render({ ...entry, signatures, gate: "checks", extraChecks: ["checks", "cla / cla", "extra", "extra"] });
       expect(body.rules.some((rule) => rule.type === "required_signatures")).toBe(signatures);
       expect(body.rules.find((rule) => rule.type === "required_status_checks")?.parameters).toEqual({
         strict_required_status_checks_policy: false, do_not_enforce_on_create: false,
-        required_status_checks: [{ context: "checks" }, { context: "cla" }, { context: "extra" }],
+        required_status_checks: [{ context: "checks" }, { context: "cla / cla" }, { context: "extra" }],
       });
     }
     expect(diff(live, render(entry))).toEqual([]);
@@ -147,11 +148,11 @@ describe("enumerating guard", () => {
 });
 
 describe("input boundaries", () => {
-  test("all CLI modes require inventory, apply also requires explicit targets and backup directory", () => {
+  test("all CLI modes require inventory, while writes require explicit repositories and a backup directory", () => {
     expect(parseArgs(["--inventory", "repos.json", "--check"]).mode).toBe("check");
     expect(parseArgs(["--dry-run", "--inventory", "repos.json"]).mode).toBe("dry-run");
-    expect(parseArgs(["apply", "fixture/project", "--inventory", "repos.json", "--backup-dir", "backups"])).toEqual({ inventory: "repos.json", mode: "apply", repos: ["fixture/project"], backupDir: "backups" });
-    for (const args of [[], ["--check"], ["--inventory"], ["--inventory", "repos.json", "--check", "--dry-run"], ["--inventory", "repos.json", "apply", "fixture/project"], ["--inventory", "repos.json", "--check", "fixture/project"], ["--inventory", "repos.json", "--unknown"]]) {
+    expect(parseArgs(["--inventory", "repos.json", "--repo", "fixture/project", "--repo", "fixture/other", "--backup-dir", "backups"])).toEqual({ inventory: "repos.json", mode: "apply", repos: ["fixture/project", "fixture/other"], backupDir: "backups" });
+    for (const args of [[], ["--check"], ["--inventory"], ["--inventory", "repos.json", "--check", "--dry-run"], ["--inventory", "repos.json"], ["--inventory", "repos.json", "--repo", "fixture/project"], ["--inventory", "repos.json", "--backup-dir", "backups"], ["--inventory", "repos.json", "apply", "fixture/project", "--backup-dir", "backups"], ["--inventory", "repos.json", "--check", "fixture/project"], ["--inventory", "repos.json", "--unknown"]]) {
       expect(() => parseArgs(args)).toThrow();
     }
   });
@@ -160,6 +161,90 @@ describe("input boundaries", () => {
     for (const invalid of [null, [], {}, { "fixture/project": { ...entry, gate: "" } }, { "fixture/project": { ...entry, extraChecks: [""] } }, { "fixture/project": { ...entry, signatures: "true" } }, { "fixture/project": { ...entry, enabled: 1 } }, { "fixture/project": { ...entry, extra: true } }, { "../project": entry }, { "fixture/project": entry, "FIXTURE/PROJECT": entry }]) {
       expect(() => parseInventory(invalid)).toThrow();
     }
+  });
+});
+
+describe("repository baseline", () => {
+  const desiredLive = render(entry);
+  desiredLive.id = 7;
+  desiredLive.source_type = "Repository";
+  desiredLive.source = "fixture/project";
+  function fake(repository: RepositoryState, rulesets: Ruleset[] = [desiredLive]) {
+    const calls: string[] = [];
+    const api: RepositoryApi = {
+      getRepository: () => repository,
+      getRulesets: () => rulesets,
+      backup: (_repo, kind) => { calls.push(`backup:${kind}`); },
+      patchRepository: (_repo, body) => { calls.push(`patch:${JSON.stringify(body)}`); },
+      upsertRuleset: () => { calls.push("ruleset"); },
+    };
+    return { api, calls };
+  }
+
+  test("detects settings-only drift in check and dry-run planning, then patches it when applying", () => {
+    const repository = { archived: false, ...settings, allow_auto_merge: false };
+    for (const mode of ["check", "dry-run"]) {
+      const planned = fake(repository);
+      const report = applyBaseline(inventory, planned.api, true);
+      expect(report.exitCode, mode).toBe(1);
+      expect(report.lines.some((line) => line.startsWith("fixture/project settings.allow_auto_merge:")), mode).toBe(true);
+      expect(planned.calls, mode).toEqual([]);
+    }
+    const apply = fake(repository);
+    expect(applyBaseline(inventory, apply.api, false).exitCode).toBe(0);
+    expect(apply.calls).toEqual(["backup:settings", `patch:${JSON.stringify(settings)}`]);
+  });
+
+  test("refuses inherited rulesets before settings drift can cause a write", () => {
+    const inherited = structuredClone(desiredLive);
+    inherited.source_type = "Organization";
+    inherited.source = "fixture";
+    inherited.rules.find((rule) => rule.type === "merge_queue")!.parameters!.max_entries_to_build = 2;
+    const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [inherited]);
+    expect(() => applyBaseline(inventory, api, false)).toThrow("Refusing to update inherited ruleset: fixture/project");
+    expect(calls).toEqual([]);
+  });
+
+  test("backs up settings and rulesets immediately before their writes", () => {
+    const changed = structuredClone(desiredLive);
+    changed.rules.find((rule) => rule.type === "merge_queue")!.parameters!.max_entries_to_build = 2;
+    const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [changed]);
+    expect(applyBaseline(inventory, api, false).exitCode).toBe(0);
+    expect(calls).toEqual(["backup:settings", `patch:${JSON.stringify(settings)}`, "backup:ruleset", "ruleset"]);
+  });
+
+  test("missing-gate repositories are refused before backup or write", () => {
+    const missing = { ...entry, missingGate: true };
+    const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [render(missing)]);
+    const report = applyBaseline({ "fixture/project": missing }, api, false);
+    expect(report.lines[0]).toBe("fixture/project: missing gate");
+    expect(report.exitCode).toBe(1);
+    expect(calls).toEqual([]);
+  });
+
+  test("a clean repository is a no-op with a successful dry-run", () => {
+    const { api, calls } = fake({ archived: false, ...settings });
+    expect(applyBaseline(inventory, api, true)).toEqual({ lines: ["fixture/project: no drift"], exitCode: 0 });
+    expect(applyBaseline(inventory, api, false)).toEqual({ lines: ["fixture/project: no drift"], exitCode: 0 });
+    expect(calls).toEqual([]);
+  });
+
+  test("archived repositories are reported and skipped", () => {
+    const { api, calls } = fake({ archived: true, ...settings });
+    expect(applyBaseline(inventory, api, true)).toEqual({ lines: ["fixture/project: archived; skipped"], exitCode: 0 });
+    expect(calls).toEqual([]);
+  });
+
+  test("CLA defaults to its real check name and missing-gate entries omit queue requirements", () => {
+    const withoutOverrides: Entry = { extraChecks: [], signatures: false, enabled: true };
+    const checks = render(withoutOverrides).rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks;
+    expect(checks).toEqual([{ context: "ci-result" }, { context: "cla / cla" }]);
+    const missing = { ...withoutOverrides, missingGate: true };
+    const { api } = fake({ archived: false, ...settings }, [render(missing)]);
+    const report = applyBaseline({ "fixture/project": missing }, api, true);
+    expect(report).toEqual({ lines: ["fixture/project: missing gate", "fixture/project: no drift"], exitCode: 0 });
+    expect(render(missing).rules.some((rule) => rule.type === "merge_queue")).toBe(false);
+    expect(render(missing).rules.find((rule) => rule.type === "required_status_checks")!.parameters!.required_status_checks).toEqual([{ context: "cla / cla" }]);
   });
 });
 
