@@ -1,0 +1,31 @@
+name: "CI Result"
+description: "Apply shared pass and skip rules to the results of required CI jobs"
+
+inputs:
+  needs:
+    description: "JSON serialization of the caller job's needs context"
+    required: true
+  allow-skipped:
+    description: "Newline- or comma-separated job ids that may be skipped on every event"
+    required: false
+    default: ""
+  pull-request-only:
+    description: "Newline- or comma-separated job ids required on pull requests and allowed to skip otherwise"
+    required: false
+    default: ""
+  require-trusted-output:
+    description: "A job.output reference that must equal true on pull requests"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Evaluate CI results
+      shell: bash
+      env:
+        INPUT_NEEDS: ${{ inputs.needs }}
+        INPUT_ALLOW_SKIPPED: ${{ inputs.allow-skipped }}
+        INPUT_PULL_REQUEST_ONLY: ${{ inputs.pull-request-only }}
+        INPUT_REQUIRE_TRUSTED_OUTPUT: ${{ inputs.require-trusted-output }}
+      run: node "$GITHUB_ACTION_PATH/decide.mjs"

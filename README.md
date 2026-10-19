@@ -29,6 +29,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `typescript-checks` | Setup pnpm, install deps, run lint + format + typecheck |
 | `notify-failure` | Send failure notification to Google Chat webhook |
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |
+| `ci-result` | Apply shared pass and skip rules to an aggregate CI result |
 | `changeset-policy` | Require valid release intent for caller-declared package paths |
 | `ci-plan` | Plan a CI run: suite depth, merge-group trust, and the areas a change selects |
 | `npm-publish-hardened` | Publish pre-packed npm tarballs through trusted publishing |
@@ -47,6 +48,30 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 ---
 
 ## Usage
+
+### Aggregate CI Result
+
+An aggregate job can pass its complete `needs` context to `ci-result`. Jobs in
+`allow-skipped` may skip on every event. Jobs in `pull-request-only` must succeed
+on pull requests, but may skip on other events. `require-trusted-output` names an
+output that must equal `true` on pull requests.
+
+```yaml
+jobs:
+  ci-result:
+    if: always()
+    needs: [build, docs, trust-check, changeset]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: stella/.github/actions/ci-result@<reviewed-commit>
+        with:
+          needs: ${{ toJSON(needs) }}
+          allow-skipped: docs
+          pull-request-only: |
+            trust-check
+            changeset
+          require-trusted-output: trust-check.trusted
+```
 
 ### Rust NAPI Typecheck and Nightly Parity
 
