@@ -63,7 +63,7 @@ test("typechecking is opt-in, trust-gated, read-only, and independent of Rust ch
   for (const action of job.matchAll(/uses: ([^\n]+)/gu)) {
     assert.match(action[1], /@[0-9a-f]{40}(?: |$)/u);
   }
-  const commands = ["${{ inputs.install-command }}", "bun run check:toolchain", "bun run typecheck", "Reject a seeded type error", "Select compiler parity", "bun run check:typecheck-parity"];
+  const commands = ["bun install --frozen-lockfile", "bun run check:toolchain", "bun run typecheck", "Reject a seeded type error", "Select compiler parity", "bun run check:typecheck-parity"];
   for (let index = 1; index < commands.length; index++) {
     assert.ok(job.indexOf(commands[index - 1]) < job.indexOf(commands[index]));
   }
@@ -189,7 +189,70 @@ test("Rust checks lint and test every workspace crate, as release verification d
   const cargoRuns = section.match(/run: cargo (?:clippy|test)\b.*/gu) ?? [];
   assert.equal(cargoRuns.length, 2);
   for (const run of cargoRuns) {
+    assert.match(run, / --locked /u);
     assert.match(run, / --workspace /u);
     assert.match(run, / --all-targets --all-features/u);
   }
+});
+
+test("dependency installation preserves and enforces lockfile integrity", () => {
+  assert.match(workflow, /      install-ignore-scripts:\n[^]*?        type: boolean\n        default: false/u);
+  assert.doesNotMatch(workflow, /install-command|eval /u);
+  const installs = [...workflow.matchAll(/      - name: Install dependencies\n([^]*?)(?=\n      - )/gu)].map((match) => match[1]);
+  assert.equal(installs.length, 6);
+  for (const install of installs) {
+    assert.match(install, /bun install --frozen-lockfile --ignore-scripts/u);
+    assert.match(install, /bun install --frozen-lockfile\n/u);
+    assert.doesNotMatch(install, /INSTALL_COMMAND|eval/u);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "napi-install-"));
+  try {
+    mkdirSync(join(root, "bin"));
+    const calls = join(root, "calls");
+    writeFileSync(join(root, "bin/bun"), `#!/bin/bash\nprintf '%s\\n' "$*" >> "$CALLS"\n`, { mode: 0o755 });
+    const install = installs[0].split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", install], {
+      env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, CALLS: calls, INSTALL_COMMAND: "bun install --no-'verify'", INSTALL_IGNORE_SCRIPTS: "false" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(calls, "utf8"), "install --frozen-lockfile\n");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Rust change selection includes lockfiles and manifests", () => {
+  assert.match(workflow, /rust-changed:\n        description: "[^"]*caller requests Rust checks in addition to the workflow’s manifest, lockfile, toolchain, crate, and Rust source detection\."\n        required: false\n        type: string\n        default: "true"/u);
+  const rustChecks = sectionFor("rust-checks");
+  assert.match(rustChecks, /inputs\.rust-changed == 'true' \|\| needs\.detect-rust\.outputs\.rust-changed == 'true'/u);
+  assert.match(rustChecks, /needs: \[detect-rust\]/u);
+
+  const rustDetect = sectionFor("detect-rust");
+  assert.match(rustDetect, /fetch-depth: 0/u);
+  assert.match(rustDetect, /git merge-base HEAD "\$BASE_SHA"/u);
+  for (const path of ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "crates/**", "src/**/*.rs"]) {
+    assert.ok(rustDetect.includes(`'${path}'`), `missing Rust change path ${path}`);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "napi-rust-selection-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    spawnSync("git", ["config", "user.name", "Test"], { cwd: root });
+    writeFileSync(join(root, "Cargo.lock"), "version = 3\n");
+    spawnSync("git", ["add", "Cargo.lock"], { cwd: root });
+    spawnSync("git", ["commit", "-qm", "base"], { cwd: root });
+    const base = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(root, "Cargo.lock"), "version = 4\n");
+    spawnSync("git", ["commit", "-qam", "lockfile"], { cwd: root });
+    const output = join(root, "output");
+    const script = rustDetect.split("      - name: Select Rust checks\n")[1].split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+      cwd: root,
+      env: { ...process.env, BASE_SHA: base, GITHUB_OUTPUT: output, RUST_CHANGED: "false" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output, "utf8"), "rust-changed=true\n");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
