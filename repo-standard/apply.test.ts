@@ -148,11 +148,11 @@ describe("enumerating guard", () => {
 });
 
 describe("input boundaries", () => {
-  test("inventory alone applies, while dry-run and check are explicit alternatives", () => {
+  test("all CLI modes require inventory, while writes require explicit repositories and a backup directory", () => {
     expect(parseArgs(["--inventory", "repos.json", "--check"]).mode).toBe("check");
     expect(parseArgs(["--dry-run", "--inventory", "repos.json"]).mode).toBe("dry-run");
-    expect(parseArgs(["--inventory", "repos.json"])).toEqual({ inventory: "repos.json", mode: "apply", repos: [], backupDir: undefined });
-    for (const args of [[], ["--check"], ["--inventory"], ["--inventory", "repos.json", "--check", "--dry-run"], ["--inventory", "repos.json", "apply", "fixture/project"], ["--inventory", "repos.json", "--check", "fixture/project"], ["--inventory", "repos.json", "--unknown"]]) {
+    expect(parseArgs(["--inventory", "repos.json", "--repo", "fixture/project", "--repo", "fixture/other", "--backup-dir", "backups"])).toEqual({ inventory: "repos.json", mode: "apply", repos: ["fixture/project", "fixture/other"], backupDir: "backups" });
+    for (const args of [[], ["--check"], ["--inventory"], ["--inventory", "repos.json", "--check", "--dry-run"], ["--inventory", "repos.json"], ["--inventory", "repos.json", "--repo", "fixture/project"], ["--inventory", "repos.json", "--backup-dir", "backups"], ["--inventory", "repos.json", "apply", "fixture/project", "--backup-dir", "backups"], ["--inventory", "repos.json", "--check", "fixture/project"], ["--inventory", "repos.json", "--unknown"]]) {
       expect(() => parseArgs(args)).toThrow();
     }
   });
@@ -174,6 +174,7 @@ describe("repository baseline", () => {
     const api: RepositoryApi = {
       getRepository: () => repository,
       getRulesets: () => rulesets,
+      backup: (_repo, kind) => { calls.push(`backup:${kind}`); },
       patchRepository: (_repo, body) => { calls.push(`patch:${JSON.stringify(body)}`); },
       upsertRuleset: () => { calls.push("ruleset"); },
     };
@@ -189,7 +190,32 @@ describe("repository baseline", () => {
     expect(dry.calls).toEqual([]);
     const apply = fake(repository);
     expect(applyBaseline(inventory, apply.api, false).exitCode).toBe(0);
-    expect(apply.calls).toEqual([`patch:${JSON.stringify(settings)}`]);
+    expect(apply.calls).toEqual(["backup:settings", `patch:${JSON.stringify(settings)}`]);
+  });
+
+  test("refuses inherited rulesets before settings drift can cause a write", () => {
+    const inherited = structuredClone(desiredLive);
+    inherited.source_type = "Organization";
+    inherited.source = "fixture";
+    inherited.rules.find((rule) => rule.type === "merge_queue")!.parameters!.max_entries_to_build = 2;
+    const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [inherited]);
+    expect(() => applyBaseline(inventory, api, false)).toThrow("Refusing to update inherited ruleset: fixture/project");
+    expect(calls).toEqual([]);
+  });
+
+  test("backs up settings and rulesets immediately before their writes", () => {
+    const changed = structuredClone(desiredLive);
+    changed.rules.find((rule) => rule.type === "merge_queue")!.parameters!.max_entries_to_build = 2;
+    const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [changed]);
+    expect(applyBaseline(inventory, api, false).exitCode).toBe(0);
+    expect(calls).toEqual(["backup:settings", `patch:${JSON.stringify(settings)}`, "backup:ruleset", "ruleset"]);
+  });
+
+  test("missing-gate repositories are refused before backup or write", () => {
+    const missing = { ...entry, missingGate: true };
+    const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [render(missing)]);
+    expect(applyBaseline({ "fixture/project": missing }, api, false).lines[0]).toBe("fixture/project: missing gate");
+    expect(calls).toEqual([]);
   });
 
   test("a clean repository is a no-op with a successful dry-run", () => {
