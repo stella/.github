@@ -37,11 +37,11 @@ on:
         value: ${{ jobs.finalize.outputs.changed }}
     secrets:
       RELEASE_APP_ID:
-        description: Optional GitHub App ID for release tag and GitHub release writes.
-        required: false
+        description: GitHub App ID for release tag and GitHub release writes.
+        required: true
       RELEASE_APP_PRIVATE_KEY:
-        description: Optional GitHub App private key for release tag and GitHub release writes.
-        required: false
+        description: GitHub App private key for release tag and GitHub release writes.
+        required: true
 
 permissions: {}
 
@@ -363,6 +363,10 @@ jobs:
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          if [[ "$HAS_RELEASE_APP_CREDENTIALS" != "true" ]]; then
+            echo "::error::RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY are required to create the release tag."
+            exit 1
+          fi
           if gh api "repos/${REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             exit 0
           fi

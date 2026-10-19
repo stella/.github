@@ -69,6 +69,41 @@ describe("release policy", () => {
     expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
   });
 
+  test("requires both release app mappings from finalizer callers", () => {
+    const withoutReleaseAppId = base.replace(
+      "      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}\n",
+      "",
+    );
+    const withoutReleaseAppPrivateKey = base.replace(
+      "      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n",
+      "",
+    );
+    const withoutReleaseApp = withoutReleaseAppId.replace(
+      "      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n",
+      "",
+    );
+
+    expect(() => validateReleaseWorkflow(withoutReleaseApp, ref)).toThrow(
+      "jobs.finalize.secrets must map RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY",
+    );
+    expect(() => validateReleaseWorkflow(withoutReleaseAppId, ref)).toThrow(
+      "jobs.finalize.secrets must map both RELEASE_APP credential fields or neither",
+    );
+    expect(() => validateReleaseWorkflow(withoutReleaseAppPrivateKey, ref)).toThrow(
+      "jobs.finalize.secrets must map both RELEASE_APP credential fields or neither",
+    );
+    expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
+  });
+
+  test("allows an independent npm publisher without release app mappings", () => {
+    const workflow = base.replace(
+      /  finalize:[\s\S]*$/,
+      `  release:\n    if: github.ref == 'refs/heads/main' && (true)\n    uses: stella/.github/.github/workflows/npm-independent-release.yml@${ref}\n    with:\n      package-files: package.json\n    permissions:\n      actions: read\n      contents: write\n      id-token: write\n`,
+    );
+
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
+  });
+
   const fileSelectors = [
     { runtime: "node", file: ".node-version", version: "24.15.0" },
     { runtime: "node", file: ".nvmrc", version: "24.15.0" },
