@@ -181,13 +181,15 @@ describe("repository baseline", () => {
     return { api, calls };
   }
 
-  test("detects settings drift in dry-run and patches it when applying", () => {
+  test("detects settings-only drift in check and dry-run planning, then patches it when applying", () => {
     const repository = { archived: false, ...settings, allow_auto_merge: false };
-    const dry = fake(repository);
-    const report = applyBaseline(inventory, dry.api, true);
-    expect(report.exitCode).toBe(1);
-    expect(report.lines.some((line) => line.startsWith("fixture/project settings.allow_auto_merge:"))).toBe(true);
-    expect(dry.calls).toEqual([]);
+    for (const mode of ["check", "dry-run"]) {
+      const planned = fake(repository);
+      const report = applyBaseline(inventory, planned.api, true);
+      expect(report.exitCode, mode).toBe(1);
+      expect(report.lines.some((line) => line.startsWith("fixture/project settings.allow_auto_merge:")), mode).toBe(true);
+      expect(planned.calls, mode).toEqual([]);
+    }
     const apply = fake(repository);
     expect(applyBaseline(inventory, apply.api, false).exitCode).toBe(0);
     expect(apply.calls).toEqual(["backup:settings", `patch:${JSON.stringify(settings)}`]);
@@ -214,13 +216,16 @@ describe("repository baseline", () => {
   test("missing-gate repositories are refused before backup or write", () => {
     const missing = { ...entry, missingGate: true };
     const { api, calls } = fake({ archived: false, ...settings, allow_auto_merge: false }, [render(missing)]);
-    expect(applyBaseline({ "fixture/project": missing }, api, false).lines[0]).toBe("fixture/project: missing gate");
+    const report = applyBaseline({ "fixture/project": missing }, api, false);
+    expect(report.lines[0]).toBe("fixture/project: missing gate");
+    expect(report.exitCode).toBe(1);
     expect(calls).toEqual([]);
   });
 
   test("a clean repository is a no-op with a successful dry-run", () => {
     const { api, calls } = fake({ archived: false, ...settings });
     expect(applyBaseline(inventory, api, true)).toEqual({ lines: ["fixture/project: no drift"], exitCode: 0 });
+    expect(applyBaseline(inventory, api, false)).toEqual({ lines: ["fixture/project: no drift"], exitCode: 0 });
     expect(calls).toEqual([]);
   });
 
