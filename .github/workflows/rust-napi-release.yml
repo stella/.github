@@ -1,0 +1,109 @@
+name: Rust NAPI release build and test
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "22"
+      install-command:
+        description: "Command used to install dependencies"
+        required: false
+        type: string
+        default: "bun install --frozen-lockfile --no-verify"
+      build-command:
+        description: "Command used to build one target; the target is appended"
+        required: false
+        type: string
+        default: "bun run build --target"
+      binding-test-directory:
+        description: "Test directory used on macOS and Windows"
+        required: false
+        type: string
+        default: "__test__"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUSTUP_TOOLCHAIN: 1.99.0
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - os: macos-15
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: ${{ inputs.node-version }}
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: release-${{ matrix.target }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: ${{ inputs.install-command }}
+      - name: Build binding
+        shell: bash
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+          BUILD_TARGET: ${{ matrix.target }}
+          CROSS_ARGUMENT: ${{ matrix.cross && '--use-napi-cross' || '' }}
+        run: $BUILD_COMMAND "$BUILD_TARGET" $CROSS_ARGUMENT
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bindings-${{ matrix.target }}
+          path: "*.node"
+          if-no-files-found: error
+
+  test:
+    name: Test - ${{ matrix.os }}
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: ${{ inputs.install-command }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bindings-*
+          path: artifacts
+          merge-multiple: true
+      - name: Install built bindings
+        shell: bash
+        run: cp -- artifacts/*.node .
+      - name: Full repository suite
+        if: runner.os == 'Linux'
+        run: bun test
+      - name: Binding suite
+        if: runner.os != 'Linux'
+        env:
+          BINDING_TEST_DIRECTORY: ${{ inputs.binding-test-directory }}
+        run: bun test "./$BINDING_TEST_DIRECTORY"
