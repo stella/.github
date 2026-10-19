@@ -1,0 +1,21 @@
+name: "Package Publisher Check"
+description: "Reject workspace packages published from another repository"
+
+inputs:
+  root:
+    description: "Repository root containing package.json"
+    required: false
+    default: "."
+  registry-url:
+    description: "npm registry base URL"
+    required: false
+    default: "https://registry.npmjs.org"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check package publishers
+      shell: bash
+      env:
+        NPM_REGISTRY_URL: ${{ inputs.registry-url }}
+      run: node "${{ github.action_path }}/../../.github/tools/package-publisher-check.mjs" --root "${{ inputs.root }}"
