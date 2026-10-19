@@ -5,7 +5,11 @@ allows squash merges only, deletes merged branches, and configures squash messag
 `ruleset.json` defines the main-branch ruleset. Inventory entries may override the
 default `ci-result` gate and `cla / cla` CLA contexts. Set `missingGate` to `true`
 while a repository has no merge-queue gate; its gate context and merge-queue rule
-are omitted, and the report lists it under `missing gate`.
+are omitted, and the report lists it under `missing gate`. Set `releases` to `true`
+for repositories that publish through `npm-version-finalize.yml`. Those repositories
+must be selected for both organization Actions values, `RELEASE_APP_ID` and
+`RELEASE_APP_PRIVATE_KEY`; the command checks repository access without reading the
+values.
 
 Preview all settings and ruleset drift:
 
@@ -22,7 +26,8 @@ bun repo-standard/apply.ts --inventory <file> --repo <owner/name> --backup-dir <
 ```
 
 Without `--repo`, the command refuses to write; only `--dry-run` may cover the whole
-inventory. Before each settings or ruleset write, the command backs up the current
-repository settings or ruleset. Run it whenever this baseline changes and whenever a
-repository is created. Archived, disabled, missing-gate, and inherited-ruleset
-repositories are refused before their first write.
+inventory. Before each settings, ruleset, or release-value access write, the command
+backs up the current repository settings, ruleset, or selected-repository list. Run
+it whenever this baseline changes and whenever a repository is created. Archived,
+disabled, missing-gate, and inherited-ruleset repositories are refused before their
+first write.

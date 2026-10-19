@@ -158,7 +158,7 @@ describe("input boundaries", () => {
   });
   test("inventory validates every option and rejects malformed or duplicate identities", () => {
     expect(parseInventory(inventory)).toEqual(inventory);
-    for (const invalid of [null, [], {}, { "fixture/project": { ...entry, gate: "" } }, { "fixture/project": { ...entry, extraChecks: [""] } }, { "fixture/project": { ...entry, signatures: "true" } }, { "fixture/project": { ...entry, enabled: 1 } }, { "fixture/project": { ...entry, extra: true } }, { "../project": entry }, { "fixture/project": entry, "FIXTURE/PROJECT": entry }]) {
+    for (const invalid of [null, [], {}, { "fixture/project": { ...entry, gate: "" } }, { "fixture/project": { ...entry, extraChecks: [""] } }, { "fixture/project": { ...entry, signatures: "true" } }, { "fixture/project": { ...entry, releases: "true" } }, { "fixture/project": { ...entry, enabled: 1 } }, { "fixture/project": { ...entry, extra: true } }, { "../project": entry }, { "fixture/project": entry, "FIXTURE/PROJECT": entry }]) {
       expect(() => parseInventory(invalid)).toThrow();
     }
   });
@@ -169,14 +169,18 @@ describe("repository baseline", () => {
   desiredLive.id = 7;
   desiredLive.source_type = "Repository";
   desiredLive.source = "fixture/project";
-  function fake(repository: RepositoryState, rulesets: Ruleset[] = [desiredLive]) {
+  function fake(repository: RepositoryState, rulesets: Ruleset[] = [desiredLive], selected: Record<string, { id: number; full_name: string }[]> = {}) {
     const calls: string[] = [];
     const api: RepositoryApi = {
       getRepository: () => repository,
       getRulesets: () => rulesets,
-      backup: (_repo, kind) => { calls.push(`backup:${kind}`); },
+      getActionsValueRepositories: (_owner, name) => { calls.push(`get:${name}`); return selected[name] ?? []; },
+      backup: (_repo, kind, value, name) => {
+        calls.push(name ? `backup:${kind}:${name}:${JSON.stringify(value)}` : `backup:${kind}`);
+      },
       patchRepository: (_repo, body) => { calls.push(`patch:${JSON.stringify(body)}`); },
       upsertRuleset: () => { calls.push("ruleset"); },
+      addRepositoryToActionsValue: (_owner, name, id) => { calls.push(`add:${name}:${id}`); },
     };
     return { api, calls };
   }
@@ -233,6 +237,39 @@ describe("repository baseline", () => {
     const { api, calls } = fake({ archived: true, ...settings });
     expect(applyBaseline(inventory, api, true)).toEqual({ lines: ["fixture/project: archived; skipped"], exitCode: 0 });
     expect(calls).toEqual([]);
+  });
+
+  test("release repositories report missing value selections and apply both after backups", () => {
+    const releasing = { "fixture/project": { ...entry, releases: true } };
+    const repository = { id: 42, archived: false, ...settings };
+    const preview = fake(repository);
+    const report = applyBaseline(releasing, preview.api, true);
+    expect(report.exitCode).toBe(1);
+    expect(report.lines).toEqual([
+      "fixture/project actions.RELEASE_APP_ID.repositories: missing repository selection",
+      "fixture/project actions.RELEASE_APP_PRIVATE_KEY.repositories: missing repository selection",
+    ]);
+    expect(preview.calls).toEqual(["get:RELEASE_APP_ID", "get:RELEASE_APP_PRIVATE_KEY"]);
+
+    const apply = fake(repository);
+    expect(applyBaseline(releasing, apply.api, false).exitCode).toBe(0);
+    expect(apply.calls).toEqual([
+      "get:RELEASE_APP_ID", "get:RELEASE_APP_PRIVATE_KEY",
+      "backup:release-value:RELEASE_APP_ID:[]", "add:RELEASE_APP_ID:42",
+      "backup:release-value:RELEASE_APP_PRIVATE_KEY:[]", "add:RELEASE_APP_PRIVATE_KEY:42",
+    ]);
+  });
+
+  test("already-selected release repositories and non-releasing repositories do not change value access", () => {
+    const repository = { id: 42, archived: false, ...settings };
+    const selected = { id: 42, full_name: "fixture/project" };
+    const clean = fake(repository, [desiredLive], { RELEASE_APP_ID: [selected], RELEASE_APP_PRIVATE_KEY: [selected] });
+    expect(applyBaseline({ "fixture/project": { ...entry, releases: true } }, clean.api, false)).toEqual({ lines: ["fixture/project: no drift"], exitCode: 0 });
+    expect(clean.calls).toEqual(["get:RELEASE_APP_ID", "get:RELEASE_APP_PRIVATE_KEY"]);
+
+    const ordinary = fake(repository);
+    expect(applyBaseline(inventory, ordinary.api, false)).toEqual({ lines: ["fixture/project: no drift"], exitCode: 0 });
+    expect(ordinary.calls).toEqual([]);
   });
 
   test("CLA defaults to its real check name and missing-gate entries omit queue requirements", () => {
