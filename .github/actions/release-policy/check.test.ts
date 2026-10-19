@@ -60,7 +60,7 @@ jobs:
 `;
 
 const approvedBun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6";
-const approvedNode = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
+const approvedNode = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1";
 const approvedPython = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97";
 const bunFileBase = base.replace(`oven-sh/setup-bun@${"4".repeat(40)}`, approvedBun);
 
@@ -592,7 +592,7 @@ jobs:
       attestations: write
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: release-artifacts
           path: release-artifacts
@@ -654,8 +654,8 @@ jobs:
     expect(() =>
       validateReleaseWorkflow(
         workflow.replace(
-          "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-          "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6\n        with:\n          subject-path: release-artifacts/*.tgz\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+          "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6\n        with:\n          subject-path: release-artifacts/*.tgz\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
         ),
         ref,
       ),
