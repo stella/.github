@@ -14,7 +14,7 @@ on:
         type: string
         default: "false"
       rust-changed:
-        description: "Whether Rust-related inputs changed"
+        description: "Whether Rust-related inputs changed. Caller detection must include every Cargo.toml and Cargo.lock."
         required: false
         type: string
         default: "true"
@@ -44,10 +44,10 @@ on:
         type: string
         default: "cargo fmt --all -- --check"
       install-command:
-        description: "Command used to install dependencies. `--no-verify` works around bun's integrity check on napi-rs platform sub-packages."
+        description: "Command used to install dependencies. Commands containing `--no-verify` are rejected."
         required: false
         type: string
-        default: "bun install --frozen-lockfile --no-verify"
+        default: "bun install --frozen-lockfile"
       typecheck:
         description: "Run typecheck and a seeded-error rejection probe"
         required: false
@@ -100,7 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_COMMAND" == *--no-verify* ]]; then
+            echo '::error::install-command must not contain --no-verify; dependency integrity verification is required.'
+            exit 1
+          fi
+          eval "$INSTALL_COMMAND"
       - run: bun run lint
 
   typecheck:
@@ -117,7 +126,16 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_COMMAND" == *--no-verify* ]]; then
+            echo '::error::install-command must not contain --no-verify; dependency integrity verification is required.'
+            exit 1
+          fi
+          eval "$INSTALL_COMMAND"
       - run: bun run check:toolchain
       - run: bun run typecheck
       - name: Reject a seeded type error
@@ -212,7 +230,16 @@ jobs:
         # fails with `unexpected argument 'metadata'`.
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_COMMAND" == *--no-verify* ]]; then
+            echo '::error::install-command must not contain --no-verify; dependency integrity verification is required.'
+            exit 1
+          fi
+          eval "$INSTALL_COMMAND"
       - run: bun run build
       - run: bun run build:js
       - name: Bun runtime smoke
@@ -261,13 +288,13 @@ jobs:
       - name: Stable source lint
         run: cargo stella-lint .
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -Dwarnings
       - name: Format
         run: $RUST_FORMAT_CMD
         env:
           RUST_FORMAT_CMD: ${{ inputs.rust-format-command }}
       - name: Tests
-        run: cargo test --workspace --all-targets --all-features
+        run: cargo test --locked --workspace --all-targets --all-features
       - name: License audit
         run: |
           cargo install cargo-deny --locked
@@ -287,7 +314,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_COMMAND" == *--no-verify* ]]; then
+            echo '::error::install-command must not contain --no-verify; dependency integrity verification is required.'
+            exit 1
+          fi
+          eval "$INSTALL_COMMAND"
       - uses: stella/.github/actions/provenance-check@636b7841096c8f0cc5a1572077b78768ef8fea42
         with:
           provenance-version: ${{ inputs.provenance-version }}
@@ -344,7 +380,16 @@ jobs:
         with:
           shared-key: build-${{ env.BUILD_TARGET }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_COMMAND" == *--no-verify* ]]; then
+            echo '::error::install-command must not contain --no-verify; dependency integrity verification is required.'
+            exit 1
+          fi
+          eval "$INSTALL_COMMAND"
       - name: Build (native)
         if: >-
           env.BUILD_KIND == 'native'
@@ -434,7 +479,16 @@ jobs:
     steps: &test-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: ${{ inputs.install-command }}
+      - name: Install dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        shell: bash
+        run: |
+          if [[ "$INSTALL_COMMAND" == *--no-verify* ]]; then
+            echo '::error::install-command must not contain --no-verify; dependency integrity verification is required.'
+            exit 1
+          fi
+          eval "$INSTALL_COMMAND"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts

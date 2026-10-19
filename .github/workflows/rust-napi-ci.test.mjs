@@ -189,7 +189,33 @@ test("Rust checks lint and test every workspace crate, as release verification d
   const cargoRuns = section.match(/run: cargo (?:clippy|test)\b.*/gu) ?? [];
   assert.equal(cargoRuns.length, 2);
   for (const run of cargoRuns) {
+    assert.match(run, / --locked /u);
     assert.match(run, / --workspace /u);
     assert.match(run, / --all-targets --all-features/u);
   }
+});
+
+test("dependency installation preserves and enforces lockfile integrity", () => {
+  assert.match(workflow, /      install-command:\n[^]*?        default: "bun install --frozen-lockfile"/u);
+  assert.doesNotMatch(workflow.match(/      install-command:\n[^]*?        default: ([^\n]+)/u)?.[1] ?? "", /--no-verify/u);
+  const installs = [...workflow.matchAll(/      - name: Install dependencies\n([^]*?)(?=\n      - )/gu)].map((match) => match[1]);
+  assert.equal(installs.length, 6);
+  assert.doesNotMatch(workflow, /- run: \$\{\{ inputs\.install-command \}\}/u);
+  for (const install of installs) {
+    assert.match(install, /if \[\[ "\$INSTALL_COMMAND" == \*--no-verify\* \]\]/u);
+    assert.match(install, /::error::install-command must not contain --no-verify/u);
+  }
+  const guard = installs[0].split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+  const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], {
+    env: { ...process.env, INSTALL_COMMAND: "bun install --frozen-lockfile --no-verify" },
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /dependency integrity verification is required/u);
+});
+
+test("Rust change selection includes lockfiles and manifests", () => {
+  assert.match(workflow, /rust-changed:\n        description: "[^"]*every Cargo\.toml and Cargo\.lock\."\n        required: false\n        type: string\n        default: "true"/u);
+  const rustChecks = sectionFor("rust-checks");
+  assert.match(rustChecks, /inputs\.rust-changed == 'true'/u);
 });
