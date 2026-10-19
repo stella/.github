@@ -146,7 +146,7 @@ test("build jobs share steps and keep target, runner and build kind consistent",
   }
   const actionSteps = steps(buildAction);
   assert.equal(actionSteps.find((step) => step.uses?.startsWith("dtolnay/rust-toolchain@"))?.with.targets, "${{ inputs.target }}");
-  assert.equal(actionSteps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@"))?.with["shared-key"], "build-${{ inputs.target }}-${{ inputs.toolchain }}");
+  assert.equal(actionSteps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@"))?.with["shared-key"], "build-${{ inputs.target }}-1.99.0");
   assert.equal(actionSteps.find((step) => step.if === "inputs.kind == 'native'")?.run, "bun run build --target ${{ inputs.target }}");
   assert.match(actionSteps.find((step) => step.if === "inputs.kind == 'cross'")?.run, /--use-napi-cross/u);
   assert.equal(actionSteps.find((step) => step.if === "inputs.kind == 'wasm'")?.run, "bun run build:wasm");

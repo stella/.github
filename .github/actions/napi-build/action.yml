@@ -5,9 +5,6 @@ inputs:
     required: true
   kind:
     required: true
-  toolchain:
-    required: false
-    default: 1.99.0
   node-version:
     required: false
     default: "22"
@@ -24,24 +21,32 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      env:
+        RUSTUP_TOOLCHAIN: 1.99.0
       with:
-        toolchain: ${{ inputs.toolchain }}
+        toolchain: 1.99.0
         targets: ${{ inputs.target }}
     - run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       shell: bash
     - if: inputs.cache == 'true'
       uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
       with:
-        shared-key: build-${{ inputs.target }}-${{ inputs.toolchain }}
+        shared-key: build-${{ inputs.target }}-1.99.0
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
     - run: ${{ inputs.install-command }}
       shell: bash
     - if: inputs.kind == 'native'
       run: bun run build --target ${{ inputs.target }}
       shell: bash
+      env:
+        RUSTUP_TOOLCHAIN: 1.99.0
     - if: inputs.kind == 'cross'
       run: bun run build --target ${{ inputs.target }} --use-napi-cross
       shell: bash
+      env:
+        RUSTUP_TOOLCHAIN: 1.99.0
     - if: inputs.kind == 'wasm'
       run: bun run build:wasm
       shell: bash
+      env:
+        RUSTUP_TOOLCHAIN: 1.99.0
