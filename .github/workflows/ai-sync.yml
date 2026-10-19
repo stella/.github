@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
@@ -40,3 +42,21 @@ jobs:
         with:
           submodules: true
       - run: bash scripts/sync-ai-skills.sh --check
+
+  ci-result:
+    name: ci-result
+    if: always()
+    needs: [workflow-contracts, sync-ai]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check validation results
+        env:
+          WORKFLOW_CONTRACTS_RESULT: ${{ needs.workflow-contracts.result }}
+          SYNC_AI_RESULT: ${{ needs.sync-ai.result }}
+        run: |
+          for result in "$WORKFLOW_CONTRACTS_RESULT" "$SYNC_AI_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "Validation job concluded with result: $result"
+              exit 1
+            fi
+          done
