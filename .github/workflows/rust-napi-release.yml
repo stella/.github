@@ -72,7 +72,12 @@ jobs:
           BUILD_COMMAND: ${{ inputs.build-command }}
           BUILD_TARGET: ${{ matrix.target }}
           CROSS_ARGUMENT: ${{ matrix.cross && '--use-napi-cross' || '' }}
-        run: $BUILD_COMMAND "$BUILD_TARGET" $CROSS_ARGUMENT
+        # The build command is a command line: split it into words once, explicitly.
+        run: |
+          read -ra build <<< "$BUILD_COMMAND"
+          arguments=("$BUILD_TARGET")
+          if [[ -n "$CROSS_ARGUMENT" ]]; then arguments+=("$CROSS_ARGUMENT"); fi
+          "${build[@]}" "${arguments[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bindings-${{ matrix.target }}
