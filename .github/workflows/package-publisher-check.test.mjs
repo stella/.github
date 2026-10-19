@@ -151,8 +151,12 @@ test("negated workspace patterns exclude packages", async () => {
 test("pnpm block and flow workspace sequences inspect nested packages", async () => {
   const workspaces = [
     "packages:\n  - packages/*\n  - '!ignored/**'\n",
+    "'packages':\n - 'packages/*'\n",
+    "\"packages\": [\"packages/*\"]\n",
+    "{packages: ['packages/*']}\n",
     "packages:\n# indentless with comments and blank lines\n\n- 'packages/*'\n- !ignored/**\n",
     "packages: [packages/*, \"!ignored/**\"] # flow sequence\n",
+    "catalog:\n  react: 19.0.0\npackages:\n  - packages/*\nonlyBuiltDependencies:\n- esbuild\n",
   ];
   for (const workspace of workspaces) {
     const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-"));
@@ -201,6 +205,25 @@ test("unreadable pnpm workspace YAML fails instead of guessing", async () => {
       fetchImpl: async () => { throw new Error("root package was inspected"); },
     }), /cannot read .*pnpm-workspace\.yaml/u);
   } finally { await rm(root, { recursive: true }); }
+});
+
+test("unsupported pnpm workspace constructs fail with their line", async () => {
+  const documents = [
+    ["catalog: &shared\n  react: 19.0.0\npackages: *shared\n", 1],
+    ["packages:\n  nested:\n    - packages/*\n", 2],
+    ["packages:\n  - packages/*\nthis is not yaml\n", 3],
+  ];
+  for (const [workspace, line] of documents) {
+    const root = await mkdtemp(join(tmpdir(), "publisher-check-pnpm-invalid-"));
+    await writeFile(join(root, "pnpm-workspace.yaml"), workspace);
+    try {
+      await assert.rejects(checkPackagePublishers({
+        root,
+        repository: "stella/tooling",
+        fetchImpl: async () => { throw new Error("a malformed workspace was inspected"); },
+      }), new RegExp(`pnpm-workspace\\.yaml:${line}:`, "u"));
+    } finally { await rm(root, { recursive: true }); }
+  }
 });
 
 test("the same repository path on another host is published elsewhere", async () => {
