@@ -38,7 +38,7 @@ jobs:
     name: Package crate without OIDC
     env:
       RUSTUP_TOOLCHAIN: 1.99.0
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -100,7 +100,7 @@ jobs:
   attest:
     name: Attest prepared crate
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       attestations: write # Record the prepared crate attestation.
@@ -117,7 +117,7 @@ jobs:
   publish:
     name: Publish prepared crate
     needs: [package, attest]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
@@ -161,7 +161,7 @@ jobs:
     name: Attest reused registry archive
     needs: publish
     if: needs.publish.outputs.reused-archive != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       attestations: write # Record the registry archive attestation.

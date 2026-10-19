@@ -5,10 +5,10 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: 'Runner label (JSON format, e.g. "ubuntu-latest")'
+        description: 'Runner label (JSON format, e.g. "ubuntu-24.04")'
         required: false
         type: string
-        default: '"ubuntu-latest"'
+        default: '"ubuntu-24.04"'
       run-pr-lint:
         description: 'Run PR lint checks (conventional commits, labels, size)'
         required: false

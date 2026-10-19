@@ -34,7 +34,7 @@ on:
         type: string
         default: "v0.1.2"
       property-test-command:
-        description: "Optional extra test command to run on ubuntu-latest"
+        description: "Optional extra test command to run on ubuntu-24.04"
         required: false
         type: string
         default: ""
@@ -70,7 +70,7 @@ env:
 jobs:
   workflow-lint:
     name: Workflow lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -80,7 +80,7 @@ jobs:
   version-check:
     name: Version sync
     if: inputs.trusted == 'true' && !inputs.typecheck-only
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -94,7 +94,7 @@ jobs:
     name: Lint
     if: inputs.trusted == 'true' && !inputs.typecheck-only
     needs: [workflow-lint, version-check]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -106,7 +106,7 @@ jobs:
   typecheck:
     name: Typecheck and parity
     if: inputs.trusted == 'true' && inputs.typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -188,9 +188,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             runtime: bun
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             runtime: node
           - os: macos-15
             runtime: bun
@@ -225,7 +225,7 @@ jobs:
   rust-checks:
     name: Rust checks
     if: inputs.trusted == 'true' && !inputs.typecheck-only && inputs.rust-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
@@ -280,7 +280,7 @@ jobs:
   provenance:
     name: Provenance
     if: inputs.trusted == 'true' && !inputs.typecheck-only && inputs.provenance-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
@@ -295,7 +295,7 @@ jobs:
   detect:
     name: Detect build inputs
     if: inputs.trusted == 'true' && !inputs.typecheck-only
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     outputs:
       build-changed: ${{ steps.select.outputs.build-changed }}
@@ -389,7 +389,7 @@ jobs:
     name: Build - x86_64-unknown-linux-gnu
     if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RUSTUP_TOOLCHAIN: 1.99.0
       BUILD_TARGET: x86_64-unknown-linux-gnu
@@ -402,7 +402,7 @@ jobs:
     name: Build - aarch64-unknown-linux-gnu
     if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RUSTUP_TOOLCHAIN: 1.99.0
       BUILD_TARGET: aarch64-unknown-linux-gnu
@@ -415,7 +415,7 @@ jobs:
     name: Build - wasm32-wasip1-threads
     if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RUSTUP_TOOLCHAIN: 1.99.0
       BUILD_TARGET: wasm32-wasip1-threads
@@ -425,10 +425,10 @@ jobs:
     steps: *build-steps
 
   test:
-    name: Test (ubuntu-latest)
+    name: Test (ubuntu-24.04)
     if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'
     needs: [detect, build, build-macos-arm64, build-linux, build-linux-arm64, build-wasm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps: &test-steps

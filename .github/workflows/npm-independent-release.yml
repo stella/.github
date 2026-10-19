@@ -64,7 +64,7 @@ permissions: {}
 jobs:
   release:
     name: Publish packages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Fixed budget: GitHub Actions cannot set this from an input. Keep it
     # above the maximum accepted npm-visibility-timeout-minutes (45, see
     # MAX_NPM_VISIBILITY_TIMEOUT_MINUTES in runtime.mjs) plus margin for

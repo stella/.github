@@ -48,7 +48,7 @@ permissions: {}
 jobs:
   finalize:
     name: Release state
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The npm-visibility wait step now polls the registry for up to 20
     # minutes by default (see .github/actions/npm-visibility/wait.mjs);
     # bound the job above that plus margin for the earlier steps.

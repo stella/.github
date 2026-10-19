@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: 'Runner to use (default: ubuntu-latest)'
+        description: 'Runner to use (default: ubuntu-24.04)'
         required: false
         type: string
-        default: '"ubuntu-latest"'
+        default: '"ubuntu-24.04"'
 
 jobs:
   pr-lint:
