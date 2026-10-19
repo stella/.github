@@ -68,6 +68,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: stella/.github/actions/package-publisher-check@main
+        with:
+          package-files: ${{ inputs.package-files }}
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22.21.1"
