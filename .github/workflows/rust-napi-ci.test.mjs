@@ -183,3 +183,13 @@ test("test jobs share artifact handling and run extra property tests only on Lin
   assert.match(artifactTest, /if: >-\n          runner.os == 'Linux'\n          && inputs.property-test-command != ''/u);
   assert.match(artifactTest, /run: \$PROPERTY_TEST_CMD\n        env:\n          PROPERTY_TEST_CMD: \$\{\{ inputs.property-test-command \}\}/u);
 });
+
+test("Rust checks lint and test every workspace crate, as release verification does", () => {
+  const section = workflow.split("\n  rust-checks:\n")[1].split(/\n  [a-z][\w-]*:\n/u)[0];
+  const cargoRuns = section.match(/run: cargo (?:clippy|test)\b.*/gu) ?? [];
+  assert.equal(cargoRuns.length, 2);
+  for (const run of cargoRuns) {
+    assert.match(run, / --workspace /u);
+    assert.match(run, / --all-targets --all-features/u);
+  }
+});
