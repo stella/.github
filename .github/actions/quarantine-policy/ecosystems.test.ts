@@ -15,6 +15,7 @@ import {
   checkCargoPolicy,
   checkPnpmPolicy,
   checkRepositoryPolicy,
+  classifyCargoSource,
   pruneRepositoryExcludes,
   readCargoPackages,
   readPnpmLockedRegistryVersions,
@@ -28,6 +29,8 @@ const cargoLock = (
   source = "registry+https://github.com/rust-lang/crates.io-index",
 ) =>
   `version = 3\n[[package]]\nname = "crate"\nversion = "1.0.0"\nsource = "${source}"\n[[package]]\nname = "local"\nversion = "0.1.0"\n`;
+const cargoGitLock = (name: string, source: string) =>
+  `[[package]]\nname = "${name}"\nversion = "1.0.0"\nsource = "${source}"\n`;
 const quarantine = (
   entry = '"crate@1.0.0", # quarantine-expires: 2026-08-30T12:00:00.000Z',
 ) => `excludes = [\n  ${entry}\n]\n`;
@@ -234,6 +237,98 @@ describe("Cargo quarantine", () => {
     expect(
       readCargoPackages(cargoLock()).find((p) => p.name === "local")?.source,
     ).toBeUndefined();
+  });
+  test("classifies pinned first-party git sources", () => {
+    const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
+    expect(
+      classifyCargoSource(
+        "stella-stdnum",
+        `git+https://github.com/stella/stdnum?tag=v2.1.3#${commit}`,
+      ),
+    ).toEqual({ kind: "first-party-git", repository: "stdnum", commit });
+    expect(
+      classifyCargoSource(
+        "stella_internal",
+        `git+https://github.com/stella/internal?rev=${commit}#${commit}`,
+      ),
+    ).toEqual({ kind: "first-party-git", repository: "internal", commit });
+  });
+  test("rejects non-canonical or unpinned first-party git sources", () => {
+    const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
+    const secureShellSource = "git+ssh://git" + `@github.com/stella/x#${commit}`;
+    for (const [name, source] of [
+      ["stella-x", `git+https://github.com/other/x#${commit}`],
+      ["stella-x", secureShellSource],
+      ["stella-x", `git+http://github.com/stella/x#${commit}`],
+      ["stella-x", `git+https://github.com/stella/x/y#${commit}`],
+      ["stella-x", "git+https://github.com/stella/x#50798ef8f962"],
+      ["stella-x", "git+https://github.com/stella/x"],
+      ["stella-x", `git+https://github.com/stella/x#${commit.toUpperCase()}`],
+      ["stella-x", `git+https://github.com/stella/..#${commit}`],
+      ["serde", `git+https://github.com/stella/serde#${commit}`],
+    ] as const) {
+      expect(classifyCargoSource(name, source)).toEqual({
+        kind: "unsupported",
+        source,
+      });
+    }
+  });
+  test("never classifies random non-stella owners as first-party git", () => {
+    const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
+    let state = 0x50798ef8;
+    for (let iteration = 0; iteration < 100; iteration++) {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      const owner = `owner-${state.toString(36)}`;
+      expect(
+        classifyCargoSource(
+          "stella-random",
+          `git+https://github.com/${owner}/repo#${commit}`,
+        ).kind,
+      ).not.toBe("first-party-git");
+    }
+  });
+  test("accepts pinned first-party git crates without quarantine entries", () => {
+    const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
+    const lockfile = [
+      cargoGitLock(
+        "stella-stdnum",
+        `git+https://github.com/stella/stdnum?tag=v2.1.3#${commit}`,
+      ),
+      cargoGitLock(
+        "stella_internal",
+        `git+https://github.com/stella/internal?rev=${commit}#${commit}`,
+      ),
+    ].join("\n");
+    expect(
+      checkCargoPolicy({
+        quarantine: "excludes = []",
+        config: '[registry]\nglobal-min-publish-age = "5 days"',
+        lockfiles: new Map([["Cargo.lock", lockfile]]),
+        now: NOW,
+      }).errors,
+    ).toEqual([]);
+  });
+  test("does not release-age screen pinned first-party git crates", async () => {
+    const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
+    const result = await checkNewCargoReleaseAges({
+      lockfiles: new Map([
+        [
+          "Cargo.lock",
+          cargoGitLock(
+            "stella-stdnum",
+            `git+https://github.com/stella/stdnum?tag=v2.1.3#${commit}`,
+          ),
+        ],
+      ]),
+      loadApi: async () => {
+        throw new Error("unexpected crates.io API lookup");
+      },
+      loadIndex: async () => {
+        throw new Error("unexpected crates.io index lookup");
+      },
+      now: NOW,
+    });
+    expect(result).toEqual({ checked: 0, errors: [] });
   });
   test("warns for expired exceptions on push and schedule", () => {
     const input = {

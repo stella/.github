@@ -10,6 +10,7 @@ import {
   REQUIRED_RELEASE_AGE_SECONDS,
 } from "./check";
 import {
+  classifyCargoSource,
   readCargoPackages,
   readPnpmLockedRegistryVersions,
 } from "./ecosystems";
@@ -111,10 +112,7 @@ export const checkNewCargoReleaseAges = async ({
     for (const pkg of readCargoPackages(contents)) {
       const key = `${pkg.name}@${pkg.version}`;
       if (
-        pkg.source !== undefined &&
-        (pkg.source ===
-          "registry+https://github.com/rust-lang/crates.io-index" ||
-          pkg.source === "sparse+https://index.crates.io/") &&
+        classifyCargoSource(pkg.name, pkg.source).kind === "crates-io" &&
         !base.has(key) &&
         !excluded.has(key) &&
         !excluded.has(pkg.name)

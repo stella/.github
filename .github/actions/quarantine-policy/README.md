@@ -52,8 +52,11 @@ excludes = [
 ]
 ```
 
-Only crates.io sources are accepted. Path and workspace packages have no source
-and are not screened.
+Crates.io sources are accepted. Path and workspace packages have no source and
+are not screened. First-party `stella-` and `stella_` crates may also use
+`git+https://github.com/stella/<repository>` with an optional `rev`, `tag`, or
+`branch` query when `Cargo.lock` pins the source to a full 40-character lowercase
+commit; these immutable sources do not need an exception or release-age check.
 
 ## Exceptions and pruning
 
