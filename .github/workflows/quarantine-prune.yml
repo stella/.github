@@ -9,10 +9,10 @@ on:
         type: string
         default: '["ubuntu-24.04"]'
       bun-roots:
-        description: "Newline- or space-separated Bun install roots"
+        description: "Newline- or space-separated Bun install roots; empty = the repository root when it has a tracked bun.lock"
         required: false
         type: string
-        default: "."
+        default: ""
     secrets:
       CHANGELOG_APP_ID:
         description: GitHub App ID used to maintain the removal PR.

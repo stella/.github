@@ -102,10 +102,12 @@ on:
 ```
 
 `bun-roots` accepts newline- or space-separated repository-relative directories
-and defaults to `.`. The repository root is always included. Every entry must be
-unique and normalised, must not be absolute or contain `..`, and must name an
-existing directory containing `bun.lock`. Pass the same input to the policy and
-prune workflows; the prune workflow forwards it to its policy job.
+and defaults to empty: empty = the repository root when it has a tracked
+`bun.lock`. The repository root is always included when it has a tracked
+`bun.lock`. Every entry must be unique and normalised, must not be absolute or
+contain `..`, and must name an existing directory containing `bun.lock`. Pass
+the same input to the policy and prune workflows; the prune workflow forwards
+it to its policy job.
 
 Repositories outside the `stella` organization need no prune caller and carry
 no schedule on their policy caller.
