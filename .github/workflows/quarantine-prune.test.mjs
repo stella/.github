@@ -18,7 +18,9 @@ const job = (name) => {
 };
 
 const steps = (jobBlock) => {
-  const starts = [...jobBlock.matchAll(/^      - /gm)].map(({ index }) => index);
+  const starts = [...jobBlock.matchAll(/^      - /gm)].map(
+    ({ index }) => index,
+  );
   return starts.map((start, index) => jobBlock.slice(start, starts[index + 1]));
 };
 
@@ -26,7 +28,9 @@ test("the repository-scoped app token is exposed only to the signed-commit step"
   const tokenAction = "uses: actions/create-github-app-token@";
   const tokenReference = "${{ steps.app-token.outputs.token }}";
   const proposeSteps = steps(job("propose"));
-  const tokenIndex = proposeSteps.findIndex((step) => step.includes(tokenAction));
+  const tokenIndex = proposeSteps.findIndex((step) =>
+    step.includes(tokenAction),
+  );
 
   assert.equal(
     workflow.split(tokenAction).length - 1,
@@ -37,7 +41,10 @@ test("the repository-scoped app token is exposed only to the signed-commit step"
 
   const tokenStep = proposeSteps[tokenIndex];
   assert.match(tokenStep, /\n {8}id: app-token$/m);
-  assert.match(tokenStep, /\n {10}owner: \$\{\{ github\.repository_owner \}\}$/m);
+  assert.match(
+    tokenStep,
+    /\n {10}owner: \$\{\{ github\.repository_owner \}\}$/m,
+  );
   assert.match(
     tokenStep,
     /\n {10}repositories: \$\{\{ github\.event\.repository\.name \}\}$/m,
@@ -51,11 +58,39 @@ test("the repository-scoped app token is exposed only to the signed-commit step"
     signedCommitStep,
     /uses: \.\/\.quarantine-policy\/\.github\/actions\/signed-commit/,
   );
-  assert.match(signedCommitStep, /\n {10}token: \$\{\{ steps\.app-token\.outputs\.token \}\}$/m);
+  assert.match(
+    signedCommitStep,
+    /\n {10}token: \$\{\{ steps\.app-token\.outputs\.token \}\}$/m,
+  );
 
   assert.equal(
     workflow.split(tokenReference).length - 1,
     1,
     "only the signed-commit step may reference the token output",
   );
+});
+
+test("every prune consumer uses the path list derived from the Bun roots", () => {
+  const prepare = job("prepare");
+  const propose = job("propose");
+  assert.match(
+    prepare,
+    /prune-paths: \$\{\{ steps\.bun-roots\.outputs\.prune-paths \}\}/,
+  );
+  assert.match(
+    prepare,
+    /QUARANTINE_PATHS: \$\{\{ steps\.bun-roots\.outputs\.prune-paths \}\}/,
+  );
+  assert.match(prepare, /git diff --quiet -- "\$\{quarantine_paths\[@\]\}"/);
+  assert.match(prepare, /git diff --binary -- "\$\{quarantine_paths\[@\]\}"/);
+  assert.match(
+    propose,
+    /ALLOWED_PATH_REGEX: \$\{\{ needs\.prepare\.outputs\.allowed-path-regex \}\}/,
+  );
+  assert.match(propose, /grep -Ev "\$ALLOWED_PATH_REGEX"/);
+  assert.match(
+    propose,
+    /paths: \$\{\{ needs\.prepare\.outputs\.prune-paths \}\}/,
+  );
+  assert.doesNotMatch(workflow, /git diff --(?:quiet|binary) -- bunfig\.toml/);
 });

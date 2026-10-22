@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +17,7 @@ import {
 import { pathEntryExists } from "./check";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
+const CHECK_ENTRY = join(import.meta.dir, "check-lock-age.ts");
 const lockfile = (...resolutions: string[]) => `{
   "lockfileVersion": 1,
   "packages": {
@@ -25,7 +33,78 @@ ${excludes}
 ]
 `;
 
+const runNestedRootCheck = (nestedExcludes = "") => {
+  const directory = mkdtempSync(join(tmpdir(), "quarantine-lock-age-roots-"));
+  const nestedRoot = join(directory, "plugins/vscode");
+  const baseNestedRoot = join(directory, ".quarantine-base/plugins/vscode");
+  mkdirSync(nestedRoot, { recursive: true });
+  mkdirSync(baseNestedRoot, { recursive: true });
+  writeFileSync(join(directory, "bun.lock"), lockfile("old-root@2.0.0"));
+  writeFileSync(join(directory, "bunfig.toml"), bunfig(""));
+  writeFileSync(join(nestedRoot, "bun.lock"), lockfile("young-nested@2.0.0"));
+  writeFileSync(join(nestedRoot, "bunfig.toml"), bunfig(nestedExcludes));
+  writeFileSync(join(directory, ".quarantine-base/bun.lock"), lockfile());
+  writeFileSync(join(directory, ".quarantine-base/bunfig.toml"), bunfig(""));
+  writeFileSync(join(baseNestedRoot, "bun.lock"), lockfile());
+  writeFileSync(join(baseNestedRoot, "bunfig.toml"), bunfig(""));
+  spawnSync("git", ["init", "-q"], { cwd: directory });
+  spawnSync("git", ["add", "bun.lock", "plugins/vscode/bun.lock"], {
+    cwd: directory,
+  });
+  const preload = join(directory, "registry-fixture.ts");
+  writeFileSync(
+    preload,
+    `globalThis.fetch = async (input) => {
+  const name = decodeURIComponent(new URL(String(input)).pathname.slice(1));
+  const published = name === "old-root"
+    ? "2020-01-01T00:00:00.000Z"
+    : new Date(Date.now() - 86_400_000).toISOString();
+  return Response.json({ time: { "2.0.0": published } });
+};\n`,
+  );
+  const result = spawnSync(
+    "bun",
+    [
+      "--preload",
+      preload,
+      CHECK_ENTRY,
+      ".quarantine-base/bun.lock",
+      ".quarantine-base/bunfig.toml",
+      ".quarantine-base/.npmrc",
+    ],
+    {
+      cwd: directory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BUN_ROOTS: ". plugins/vscode",
+        GITHUB_EVENT_NAME: "pull_request",
+      },
+    },
+  );
+  rmSync(directory, { force: true, recursive: true });
+  return result;
+};
+
 describe("locked package release age", () => {
+  test("screens newly locked versions in every declared Bun root", () => {
+    const result = runNestedRootCheck();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "plugins/vscode/bun.lock: young-nested@2.0.0",
+    );
+    expect(result.stderr).not.toContain("old-root@2.0.0");
+  });
+
+  test("accepts an active nested-root release-age exception", () => {
+    const result = runNestedRootCheck(
+      '  "young-nested@2.0.0", # quarantine-expires: 2026-10-23T00:00:00.000Z',
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("validated 1 newly locked registry version(s)");
+  });
+
   test("detects a base npmrc symlink without following its target", () => {
     const directory = mkdtempSync(join(tmpdir(), "quarantine-lock-age-"));
     try {

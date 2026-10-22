@@ -17,12 +17,14 @@ import {
   checkRepositoryPolicy,
   classifyCargoSource,
   pruneRepositoryExcludes,
+  readBunRoots,
   readCargoPackages,
   readPnpmLockedRegistryVersions,
 } from "./ecosystems";
 import { checkNewCargoReleaseAges, cratesIndexPath } from "./check-lock-age";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
+const CHECK_ENTRY = join(import.meta.dir, "check.ts");
 const pnpmLock = `lockfileVersion: '9.0'\npackages:\n  foo@1.2.3(peer@2.0.0): {}\n  '@scope/bar@2.0.0': {}\n`;
 const workspace = `minimumReleaseAge: 7200\nminimumReleaseAgeExclude:\n  - "hotfix@1.0.0" # quarantine-expires: 2026-08-30T12:00:00.000Z\nonlyBuiltDependencies:\n  - foo\n`;
 const cargoLock = (
@@ -34,6 +36,77 @@ const cargoGitLock = (name: string, source: string) =>
 const quarantine = (
   entry = '"crate@1.0.0", # quarantine-expires: 2026-08-30T12:00:00.000Z',
 ) => `excludes = [\n  ${entry}\n]\n`;
+
+const runBunRootsOutput = (root: string, bunRoots?: string) => {
+  const output = join(root, "github-output");
+  rmSync(output, { force: true });
+  const result = spawnSync("bun", [CHECK_ENTRY, "--bun-roots-output"], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: output,
+      ...(bunRoots === undefined ? {} : { BUN_ROOTS: bunRoots }),
+    },
+  });
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return readFileSync(output, "utf8");
+};
+
+test("CLI writes Bun root outputs for default and additional roots", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-cli-roots-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    writeFileSync(join(root, "plugins/vscode/bun.lock"), '{"packages":{}}');
+    spawnSync("git", ["add", "bun.lock", "plugins/vscode/bun.lock"], {
+      cwd: root,
+    });
+
+    expect(runBunRootsOutput(root)).toBe(
+      "sparse-checkout<<BUN_ROOTS_OUTPUT\n" +
+        "bun.lock\nbunfig.toml\npackage.json\n.npmrc\nBUN_ROOTS_OUTPUT\n" +
+        "prune-paths<<BUN_ROOTS_OUTPUT\n" +
+        "bunfig.toml\npnpm-workspace.yaml\n.cargo/quarantine.toml\n" +
+        "BUN_ROOTS_OUTPUT\n" +
+        "allowed-path-regex=^(bunfig\\.toml|pnpm-workspace\\.yaml|\\.cargo/quarantine\\.toml)$\n",
+    );
+    expect(runBunRootsOutput(root, ". plugins/vscode")).toBe(
+      "sparse-checkout<<BUN_ROOTS_OUTPUT\n" +
+        "bun.lock\nbunfig.toml\npackage.json\n.npmrc\n" +
+        "plugins/vscode/bun.lock\nplugins/vscode/bunfig.toml\n" +
+        "plugins/vscode/package.json\nplugins/vscode/.npmrc\nBUN_ROOTS_OUTPUT\n" +
+        "prune-paths<<BUN_ROOTS_OUTPUT\n" +
+        "bunfig.toml\nplugins/vscode/bunfig.toml\n" +
+        "pnpm-workspace.yaml\n.cargo/quarantine.toml\nBUN_ROOTS_OUTPUT\n" +
+        "allowed-path-regex=^(bunfig\\.toml|plugins/vscode/bunfig\\.toml|pnpm-workspace\\.yaml|\\.cargo/quarantine\\.toml)$\n",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ["Cargo", "Cargo.lock", "version = 3\n"],
+  ["pnpm", "pnpm-lock.yaml", "lockfileVersion: '9.0'\n"],
+])("CLI accepts a %s-only repository with default Bun roots", (_, file, body) => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-cli-non-bun-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, file), body);
+    spawnSync("git", ["add", file], { cwd: root });
+    expect(runBunRootsOutput(root)).toBe(
+      "sparse-checkout<<BUN_ROOTS_OUTPUT\n\nBUN_ROOTS_OUTPUT\n" +
+        "prune-paths<<BUN_ROOTS_OUTPUT\n" +
+        "pnpm-workspace.yaml\n.cargo/quarantine.toml\nBUN_ROOTS_OUTPUT\n" +
+        "allowed-path-regex=^(pnpm-workspace\\.yaml|\\.cargo/quarantine\\.toml)$\n",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("Bun requires explicit, current trusted dependencies", () => {
   const lock = '{"packages":{"foo":["foo@1.0.0",""]}}';
@@ -55,8 +128,9 @@ test("detects unsupported locks and unlocked manifests", () => {
   const root = mkdtempSync(join(tmpdir(), "quarantine-detect-"));
   try {
     spawnSync("git", ["init", "-q"], { cwd: root });
-    writeFileSync(join(root, "package.json"), "{}");
-    spawnSync("git", ["add", "package.json"], { cwd: root });
+    mkdirSync(join(root, "tools"));
+    writeFileSync(join(root, "tools/package.json"), "{}");
+    spawnSync("git", ["add", "tools/package.json"], { cwd: root });
     expect(
       checkRepositoryPolicy({ root, eventName: "push", now: NOW }).errors.join(
         "\n",
@@ -69,6 +143,67 @@ test("detects unsupported locks and unlocked manifests", () => {
         "\n",
       ),
     ).toContain("unsupported lockfiles");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("screens the root manifest independently from declared Bun roots", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-root-manifest-"));
+  const validBunfig =
+    "[install]\nminimumReleaseAge = 432000\nminimumReleaseAgeExcludes = []\n";
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    writeFileSync(join(root, "package.json"), "{}");
+    writeFileSync(join(root, "plugins/vscode/bun.lock"), '{"packages":{}}');
+    writeFileSync(join(root, "plugins/vscode/bunfig.toml"), validBunfig);
+    writeFileSync(
+      join(root, "plugins/vscode/package.json"),
+      '{"trustedDependencies":[]}',
+    );
+    spawnSync("git", ["add", "."], { cwd: root });
+
+    const nestedBunRoot = ["plugins/vscode"];
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots: nestedBunRoot,
+        eventName: "push",
+        now: NOW,
+      }).errors,
+    ).toContain("unlocked package manifest cannot be screened");
+
+    writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
+    writeFileSync(join(root, "bunfig.toml"), validBunfig);
+    writeFileSync(join(root, "package.json"), '{"trustedDependencies":[]}');
+    spawnSync("git", ["add", "."], { cwd: root });
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots: [".", ...nestedBunRoot],
+        eventName: "push",
+        now: NOW,
+      }).errors,
+    ).toEqual([]);
+
+    rmSync(join(root, "bun.lock"));
+    rmSync(join(root, "bunfig.toml"));
+    writeFileSync(
+      join(root, "package.json"),
+      '{"packageManager":"pnpm@10.16.0"}',
+    );
+    writeFileSync(join(root, "pnpm-lock.yaml"), pnpmLock);
+    writeFileSync(join(root, "pnpm-workspace.yaml"), workspace);
+    spawnSync("git", ["add", "-A"], { cwd: root });
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots: nestedBunRoot,
+        eventName: "push",
+        now: NOW,
+      }).errors,
+    ).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -128,6 +263,104 @@ test("prunes expired entries from all ecosystem files", () => {
     expect(
       readFileSync(join(root, ".cargo/quarantine.toml"), "utf8"),
     ).toContain("prefix-old@1.0.0");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validates additional Bun roots and defaults to the repository root", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-roots-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    expect(readBunRoots(root)).toEqual([]);
+    writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
+    spawnSync("git", ["add", "bun.lock"], { cwd: root });
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    writeFileSync(join(root, "plugins/vscode/bun.lock"), '{"packages":{}}');
+    expect(readBunRoots(root)).toEqual(["."]);
+    expect(readBunRoots(root, "plugins/vscode")).toEqual([
+      ".",
+      "plugins/vscode",
+    ]);
+    for (const invalid of ["..", "plugins/../vscode", "/absolute", "missing"]) {
+      expect(() => readBunRoots(root, invalid)).toThrow(invalid);
+    }
+    rmSync(join(root, "bun.lock"));
+    expect(() => readBunRoots(root, ". plugins/vscode")).toThrow(
+      'invalid Bun root ".": bun.lock does not exist',
+    );
+    spawnSync("git", ["rm", "--cached", "bun.lock"], { cwd: root });
+    writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
+    expect(() => readBunRoots(root, ". plugins/vscode")).toThrow(
+      'invalid Bun root ".": bun.lock is not tracked',
+    );
+    expect(readBunRoots(root, "plugins/vscode")).toEqual(["plugins/vscode"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checks and prunes every declared Bun root", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-multi-bun-"));
+  const valid =
+    "[install]\nminimumReleaseAge = 432000\nminimumReleaseAgeExcludes = []\n";
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    for (const bunRoot of [".", "plugins/vscode"]) {
+      writeFileSync(join(root, bunRoot, "bun.lock"), '{"packages":{}}');
+      writeFileSync(join(root, bunRoot, "bunfig.toml"), valid);
+      writeFileSync(
+        join(root, bunRoot, "package.json"),
+        '{"trustedDependencies":[]}',
+      );
+    }
+    spawnSync("git", ["add", "."], { cwd: root });
+    const bunRoots = readBunRoots(root, ". plugins/vscode");
+    expect(
+      checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
+        .errors,
+    ).toEqual([]);
+
+    writeFileSync(
+      join(root, "plugins/vscode/.npmrc"),
+      "registry=https://registry.example.com\n",
+    );
+    expect(
+      checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
+        .errors.join("\n"),
+    ).toContain(
+      "plugins/vscode/bunfig.toml quarantine policy does not allow a repository plugins/vscode/.npmrc",
+    );
+    rmSync(join(root, "plugins/vscode/.npmrc"));
+    expect(
+      checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
+        .errors,
+    ).toEqual([]);
+
+    const nested = join(root, "plugins/vscode/bunfig.toml");
+    writeFileSync(
+      nested,
+      valid.replace(
+        "[]",
+        '[\n  "old@1.0.0", # quarantine-expires: 2026-08-20T00:00:00.000Z\n]',
+      ),
+    );
+    expect(pruneRepositoryExcludes({ root, bunRoots, now: NOW })).toBe(1);
+    expect(readFileSync(join(root, "bunfig.toml"), "utf8")).toBe(valid);
+    expect(readFileSync(nested, "utf8")).not.toContain("old@1.0.0");
+
+    rmSync(nested);
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots,
+        eventName: "push",
+        now: NOW,
+      }).errors.join("\n"),
+    ).toContain(
+      "plugins/vscode/bunfig.toml is required for plugins/vscode/bun.lock",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -255,7 +488,8 @@ describe("Cargo quarantine", () => {
   });
   test("rejects non-canonical or unpinned first-party git sources", () => {
     const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
-    const secureShellSource = "git+ssh://git" + `@github.com/stella/x#${commit}`;
+    const secureShellSource =
+      "git+ssh://git" + `@github.com/stella/x#${commit}`;
     for (const [name, source] of [
       ["stella-x", `git+https://github.com/other/x#${commit}`],
       ["stella-x", secureShellSource],

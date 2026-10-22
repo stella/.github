@@ -1,7 +1,7 @@
 # Package quarantine checks
 
-The reusable policy discovers every supported ecosystem in a repository: a root
-`bun.lock`, a root `pnpm-lock.yaml`, and every tracked `Cargo.lock`. It runs all
+The reusable policy discovers every supported ecosystem in a repository: each
+declared Bun install root, a root `pnpm-lock.yaml`, and every tracked `Cargo.lock`. It runs all
 applicable checks in one job. npm, Yarn, unlocked JavaScript manifests, and
 unlocked Cargo manifests fail closed because they cannot be screened.
 
@@ -17,7 +17,7 @@ minimumReleaseAgeExcludes = [
 ]
 ```
 
-Root `package.json` must contain an explicit `trustedDependencies` string array.
+Each Bun root's `package.json` must contain an explicit `trustedDependencies` string array.
 An empty array disables Bun's built-in lifecycle-script allowlist.
 
 ### pnpm
@@ -85,6 +85,9 @@ jobs:
     uses: stella/.github/.github/workflows/quarantine-policy.yml@0123456789abcdef0123456789abcdef01234567
     with:
       runs-on: '["self-hosted", "linux", "x64"]'
+      bun-roots: |
+        .
+        plugins/vscode
 ```
 
 The default is `'["ubuntu-24.04"]'`. Policy callers retain `pull_request` and
@@ -97,6 +100,14 @@ on:
   schedule:
     - cron: "11 4 * * *"
 ```
+
+`bun-roots` accepts newline- or space-separated repository-relative directories
+and defaults to empty: empty = the repository root when it has a tracked
+`bun.lock`. The repository root is always included when it has a tracked
+`bun.lock`. Every entry must be unique and normalised, must not be absolute or
+contain `..`, and must name an existing directory containing `bun.lock`. Pass
+the same input to the policy and prune workflows; the prune workflow forwards
+it to its policy job.
 
 Repositories outside the `stella` organization need no prune caller and carry
 no schedule on their policy caller.

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -49,6 +49,43 @@ const read = (root: string, name: string): string | undefined => {
   const file = path.join(root, name);
   return existsSync(file) ? readFileSync(file, "utf8") : undefined;
 };
+
+export const readBunRoots = (root: string, input?: string): string[] => {
+  const declared = input?.trim();
+  const values = declared ? declared.split(/\s+/u) : [];
+  const rootLockfileTracked = tracked(root).includes("bun.lock");
+  const roots =
+    rootLockfileTracked && !values.includes(".") ? [".", ...values] : values;
+  const seen = new Set<string>();
+  for (const bunRoot of roots) {
+    const segments = bunRoot.split("/");
+    if (
+      path.posix.isAbsolute(bunRoot) ||
+      bunRoot !== path.posix.normalize(bunRoot) ||
+      segments.includes("..")
+    ) {
+      throw new Error(
+        `invalid Bun root "${bunRoot}": must be a normalised repository-relative directory without ..`,
+      );
+    }
+    if (seen.has(bunRoot))
+      throw new Error(`invalid Bun root "${bunRoot}": roots must be unique`);
+    seen.add(bunRoot);
+    if (bunRoot === "." && !rootLockfileTracked)
+      throw new Error(`invalid Bun root ".": bun.lock is not tracked`);
+    const directory = path.join(root, bunRoot);
+    if (!existsSync(directory) || !statSync(directory).isDirectory())
+      throw new Error(
+        `invalid Bun root "${bunRoot}": directory does not exist`,
+      );
+    if (!existsSync(path.join(directory, "bun.lock")))
+      throw new Error(`invalid Bun root "${bunRoot}": bun.lock does not exist`);
+  }
+  return roots;
+};
+
+const bunPath = (bunRoot: string, file: string): string =>
+  bunRoot === "." ? file : path.posix.join(bunRoot, file);
 
 const tracked = (root: string): string[] => {
   const result = spawnSync("git", ["ls-files", "-z"], {
@@ -406,36 +443,37 @@ export const checkCargoPolicy = ({
 export const checkBunTrustedDependencies = (
   packageJson: string,
   lockfile: string,
+  file = "package.json",
 ): string[] => {
   const parsed = JSON.parse(packageJson) as Record<string, unknown>;
   if (
     !Array.isArray(parsed.trustedDependencies) ||
     parsed.trustedDependencies.some((v) => typeof v !== "string")
   )
-    return [
-      "package.json must declare trustedDependencies as an array of strings",
-    ];
+    return [`${file} must declare trustedDependencies as an array of strings`];
   const values = parsed.trustedDependencies as string[];
   const errors: string[] = [];
   if (new Set(values).size !== values.length)
-    errors.push("package.json trustedDependencies must not contain duplicates");
+    errors.push(`${file} trustedDependencies must not contain duplicates`);
   const locked = new Set(
     readLockedRegistryVersions(lockfile).map(({ name }) => name),
   );
   for (const name of values)
     if (!locked.has(name))
       errors.push(
-        `package.json trustedDependencies contains missing package: ${name}`,
+        `${file} trustedDependencies contains missing package: ${name}`,
       );
   return errors;
 };
 
 export const checkRepositoryPolicy = ({
   root,
+  bunRoots,
   eventName,
   now,
 }: {
   root: string;
+  bunRoots?: string[];
   eventName: string;
   now: Date;
 }): CheckResult => {
@@ -448,6 +486,8 @@ export const checkRepositoryPolicy = ({
   if (unsupported.length)
     errors.push(`unsupported lockfiles: ${unsupported.join(", ")}`);
   const cargoLocks = files.filter((file) => /(^|\/)Cargo\.lock$/u.test(file));
+  const effectiveBunRoots =
+    bunRoots ?? (files.includes("bun.lock") ? ["."] : []);
   const bun = files.includes("bun.lock");
   const pnpm = files.includes("pnpm-lock.yaml");
   if (
@@ -458,29 +498,38 @@ export const checkRepositoryPolicy = ({
   )
     errors.push("unlocked package manifest cannot be screened");
   const baseRoot = path.join(root, ".quarantine-base");
-  if (bun) {
-    const bunfig = read(root, "bunfig.toml");
-    const lockfile = read(root, "bun.lock")!;
-    const packageJson = read(root, "package.json");
+  for (const bunRoot of effectiveBunRoots) {
+    const bunfigPath = bunPath(bunRoot, "bunfig.toml");
+    const lockfilePath = bunPath(bunRoot, "bun.lock");
+    const packageJsonPath = bunPath(bunRoot, "package.json");
+    const npmrcPath = bunPath(bunRoot, ".npmrc");
+    const bunfig = read(root, bunfigPath);
+    const lockfile = read(root, lockfilePath)!;
+    const packageJson = read(root, packageJsonPath);
     if (bunfig === undefined)
-      errors.push("bunfig.toml is required for bun.lock");
+      errors.push(`${bunfigPath} is required for ${lockfilePath}`);
     else {
       const result = checkQuarantinePolicy({
         bunfig,
         lockfile,
         now,
         eventName,
-        baseBunfig: read(baseRoot, "bunfig.toml"),
-        baseLockfile: read(baseRoot, "bun.lock"),
-        npmrcPresent: pathEntryExists(path.join(root, ".npmrc")),
-        baseNpmrcPresent: pathEntryExists(path.join(baseRoot, ".npmrc")),
+        bunfigPath,
+        baseBunfig: read(baseRoot, bunfigPath),
+        baseLockfile: read(baseRoot, lockfilePath),
+        npmrcPresent: pathEntryExists(path.join(root, npmrcPath)),
+        npmrcPath,
+        baseNpmrcPresent: pathEntryExists(path.join(baseRoot, npmrcPath)),
       });
       errors.push(...result.errors);
       warnings.push(...result.warnings);
     }
     if (packageJson === undefined)
-      errors.push("package.json is required for bun.lock");
-    else errors.push(...checkBunTrustedDependencies(packageJson, lockfile));
+      errors.push(`${packageJsonPath} is required for ${lockfilePath}`);
+    else
+      errors.push(
+        ...checkBunTrustedDependencies(packageJson, lockfile, packageJsonPath),
+      );
   }
   if (pnpm) {
     const workspace = read(root, "pnpm-workspace.yaml");
@@ -528,20 +577,25 @@ export const checkRepositoryPolicy = ({
 
 export const pruneRepositoryExcludes = ({
   root,
+  bunRoots = ["."],
   now,
 }: {
   root: string;
+  bunRoots?: string[];
   now: Date;
 }): number => {
   let count = 0;
   for (const [file, key] of [
-    ["bunfig.toml", "minimumReleaseAgeExcludes"],
+    ...bunRoots.map(
+      (bunRoot) =>
+        [bunPath(bunRoot, "bunfig.toml"), "minimumReleaseAgeExcludes"] as const,
+    ),
     ["pnpm-workspace.yaml", "minimumReleaseAgeExclude"],
     [".cargo/quarantine.toml", "excludes"],
   ] as const) {
     const source = read(root, file);
     if (source === undefined) continue;
-    if (file === "bunfig.toml") {
+    if (file.endsWith("bunfig.toml")) {
       const result = pruneExpiredExcludes({ bunfig: source, now });
       if (result.pruned.length)
         writeFileSync(path.join(root, file), result.bunfig);

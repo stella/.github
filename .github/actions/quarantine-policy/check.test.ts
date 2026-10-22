@@ -127,7 +127,7 @@ describe("quarantine policy", () => {
       "utf8",
     );
     expect(source).toContain(
-      'npmrcPresent: pathEntryExists(path.join(root, ".npmrc"))',
+      "npmrcPresent: pathEntryExists(path.join(root, npmrcPath))",
     );
   });
 
@@ -317,14 +317,14 @@ describe("quarantine policy", () => {
     ).toContain("must use");
   });
 
-  test("allows self-hosted runner labels on both callers", () => {
+  test("allows runner labels and Bun roots on both callers", () => {
     const expectedRef = "a".repeat(40);
     const expectedRepository = "stella/example";
     const workflows = callerWorkflows({ expectedRef, expectedRepository });
     const withRunsOn = (workflow: string) =>
       workflow.replace(
         "    uses: stella/",
-        '    with:\n      runs-on: \'["self-hosted","linux"]\'\n    uses: stella/',
+        '    with:\n      runs-on: \'["self-hosted","linux"]\'\n      bun-roots: ". plugins/vscode"\n    uses: stella/',
       );
     expect(
       validateCallerWorkflowRefs({
@@ -618,8 +618,12 @@ describe("quarantine policy", () => {
     const prune = workflow.jobs.prepare.steps.find(
       (step: { id?: string }) => step.id === "prune",
     );
+    expect(prune.run).toContain('git diff --quiet -- "${quarantine_paths[@]}"');
     expect(prune.run).toContain(
-      "git diff --binary -- bunfig.toml pnpm-workspace.yaml .cargo/quarantine.toml",
+      'git diff --binary -- "${quarantine_paths[@]}"',
+    );
+    expect(prune.env.QUARANTINE_PATHS).toBe(
+      "${{ steps.bun-roots.outputs.prune-paths }}",
     );
     expect(encode.run).toContain("patch_size > 65536");
     expect(encode.run).toContain("base64 -w0");
@@ -701,7 +705,7 @@ describe("quarantine policy", () => {
       "persist-credentials": false,
       ref: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
       "sparse-checkout":
-        "bun.lock\nbunfig.toml\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\n.npmrc\n.cargo/quarantine.toml\n.cargo/config.toml\n**/Cargo.lock\n",
+        "${{ steps.bun-roots.outputs.sparse-checkout }}\npnpm-lock.yaml\npnpm-workspace.yaml\n.npmrc\n.cargo/quarantine.toml\n.cargo/config.toml\n**/Cargo.lock\n",
       "sparse-checkout-cone-mode": false,
     });
     const lockAge = workflow.jobs.enforce.steps.find(
