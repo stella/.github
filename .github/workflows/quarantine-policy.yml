@@ -6,6 +6,12 @@ on:
   push:
     branches: [main]
   workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner labels as a JSON array"
+        required: false
+        type: string
+        default: '["ubuntu-24.04"]'
 
 concurrency:
   group: quarantine-policy-${{ github.workflow }}-${{ (github.event_name == 'pull_request') && format('pr-{0}', github.event.pull_request.number || github.ref) || format('run-{0}', github.run_id) }}
@@ -17,7 +23,7 @@ jobs:
   enforce:
     name: Enforce package quarantine
     if: github.repository != 'stella/.github' || github.event_name == 'workflow_call'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -35,7 +41,13 @@ jobs:
           sparse-checkout: |
             bun.lock
             bunfig.toml
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
             .npmrc
+            .cargo/quarantine.toml
+            .cargo/config.toml
+            **/Cargo.lock
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Checkout immutable policy

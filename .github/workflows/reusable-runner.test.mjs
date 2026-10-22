@@ -5,6 +5,8 @@ import { test } from "node:test";
 const workflowDefaults = new Map([
   ["changeset-release-pr.yml", "ubuntu-latest"],
   ["dependabot-bun-dedupe.yml", "ubuntu-24.04"],
+  ["quarantine-policy.yml", "ubuntu-24.04"],
+  ["quarantine-prune.yml", "ubuntu-24.04"],
 ]);
 
 for (const [workflowFile, hostedDefault] of workflowDefaults) {
