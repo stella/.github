@@ -128,8 +128,9 @@ test("detects unsupported locks and unlocked manifests", () => {
   const root = mkdtempSync(join(tmpdir(), "quarantine-detect-"));
   try {
     spawnSync("git", ["init", "-q"], { cwd: root });
-    writeFileSync(join(root, "package.json"), "{}");
-    spawnSync("git", ["add", "package.json"], { cwd: root });
+    mkdirSync(join(root, "tools"));
+    writeFileSync(join(root, "tools/package.json"), "{}");
+    spawnSync("git", ["add", "tools/package.json"], { cwd: root });
     expect(
       checkRepositoryPolicy({ root, eventName: "push", now: NOW }).errors.join(
         "\n",
@@ -171,7 +172,7 @@ test("screens the root manifest independently from declared Bun roots", () => {
         eventName: "push",
         now: NOW,
       }).errors,
-    ).toContain("unlocked package manifest cannot be screened: package.json");
+    ).toContain("unlocked package manifest cannot be screened");
 
     writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
     writeFileSync(join(root, "bunfig.toml"), validBunfig);
