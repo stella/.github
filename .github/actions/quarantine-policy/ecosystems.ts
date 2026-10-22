@@ -12,6 +12,39 @@ import {
 } from "./check";
 import { readLockedRegistryVersions } from "./lockfile";
 
+export type CargoSource =
+  | { kind: "crates-io" }
+  | { kind: "path" }
+  | { kind: "first-party-git"; repository: string; commit: string }
+  | { kind: "unsupported"; source: string };
+
+const CARGO_REGISTRY_SOURCES = new Set([
+  "registry+https://github.com/rust-lang/crates.io-index",
+  "sparse+https://index.crates.io/",
+]);
+const FIRST_PARTY_CARGO_GIT_SOURCE =
+  /^git\+https:\/\/github\.com\/stella\/(?<repository>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\?(?:rev|tag|branch)=[^#]+)?#(?<commit>[0-9a-f]{40})$/u;
+
+export const classifyCargoSource = (
+  name: string,
+  source: string | undefined,
+): CargoSource => {
+  if (source === undefined) return { kind: "path" };
+  if (CARGO_REGISTRY_SOURCES.has(source)) return { kind: "crates-io" };
+  const match = FIRST_PARTY_CARGO_GIT_SOURCE.exec(source);
+  const repository = match?.groups?.repository;
+  const commit = match?.groups?.commit;
+  if (
+    repository !== undefined &&
+    commit !== undefined &&
+    !repository.toLowerCase().endsWith(".git") &&
+    (name.startsWith("stella-") || name.startsWith("stella_"))
+  ) {
+    return { kind: "first-party-git", repository, commit };
+  }
+  return { kind: "unsupported", source };
+};
+
 const read = (root: string, name: string): string | undefined => {
   const file = path.join(root, name);
   return existsSync(file) ? readFileSync(file, "utf8") : undefined;
@@ -344,14 +377,9 @@ export const checkCargoPolicy = ({
     for (const pkg of readCargoPackages(contents)) {
       const key = `${pkg.name}@${pkg.version}`;
       seen.add(key);
-      if (
-        pkg.source !== undefined &&
-        pkg.source !==
-          "registry+https://github.com/rust-lang/crates.io-index" &&
-        pkg.source !== "sparse+https://index.crates.io/" &&
-        !excludes.has(key)
-      )
-        errors.push(`${file} ${key} uses unsupported source ${pkg.source}`);
+      const source = classifyCargoSource(pkg.name, pkg.source);
+      if (source.kind === "unsupported" && !excludes.has(key))
+        errors.push(`${file} ${key} uses unsupported source ${source.source}`);
     }
   for (const entry of marked.entries) {
     const firstParty =
