@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 
-type Advisory = { crate?: string; id: string; title: string };
+type ErrorDiagnostic =
+  | { kind: "advisory"; crate?: string; id: string; title: string }
+  | { kind: "error"; code: string; message: string };
 type Result = { errors: string[]; warnings: string[] };
 type CommandResult = { exitCode: number; output: string };
 
@@ -27,8 +29,8 @@ const cratesFromGraphs = (graphsValue: unknown): string[] => {
   return [...crates];
 };
 
-export const parseAdvisories = (output: string): Advisory[] => {
-  const advisories: Advisory[] = [];
+export const parseErrorDiagnostics = (output: string): ErrorDiagnostic[] => {
+  const diagnostics: ErrorDiagnostic[] = [];
   for (const line of output.split(/\r?\n/u)) {
     if (line.trim() === "") continue;
     let value: unknown;
@@ -39,15 +41,20 @@ export const parseAdvisories = (output: string): Advisory[] => {
     }
     const diagnostic = record(value);
     const fields = record(diagnostic?.fields);
-    const advisory = record(fields?.advisory);
-    if (
-      diagnostic?.type !== "diagnostic" ||
-      fields?.severity !== "error" ||
-      typeof advisory?.id !== "string"
-    ) {
+    if (diagnostic?.type !== "diagnostic" || fields?.severity !== "error") {
+      continue;
+    }
+    const advisory = record(fields.advisory);
+    if (typeof advisory?.id !== "string") {
+      diagnostics.push({
+        kind: "error",
+        code: String(fields.code ?? "cargo-deny"),
+        message: String(fields.message ?? "cargo-deny reported an error"),
+      });
       continue;
     }
     const parsed = {
+      kind: "advisory" as const,
       id: advisory.id,
       title:
         typeof advisory.title === "string"
@@ -57,10 +64,10 @@ export const parseAdvisories = (output: string): Advisory[] => {
             : String(fields.code ?? "advisory"),
     };
     const crates = cratesFromGraphs(fields.graphs);
-    if (crates.length === 0) advisories.push(parsed);
-    else for (const crate of crates) advisories.push({ ...parsed, crate });
+    if (crates.length === 0) diagnostics.push(parsed);
+    else for (const crate of crates) diagnostics.push({ ...parsed, crate });
   }
-  return advisories;
+  return diagnostics;
 };
 
 export const lockedCrates = (lockfile: string): Set<string> => {
@@ -148,18 +155,25 @@ export const evaluate = ({
     }
   }
 
-  const advisories = parseAdvisories(cargoDeny.output);
-  if (cargoDeny.exitCode !== 0 && advisories.length === 0) {
+  const diagnostics = parseErrorDiagnostics(cargoDeny.output);
+  if (cargoDeny.exitCode !== 0 && diagnostics.length === 0) {
     errors.push("cargo-deny exited nonzero without a parseable error advisory diagnostic");
     return { errors, warnings };
   }
 
-  const attributedAdvisories: Array<Advisory & { crate: string }> = [];
-  for (const advisory of advisories) {
+  const attributedAdvisories: Array<
+    Extract<ErrorDiagnostic, { kind: "advisory" }> & { crate: string }
+  > = [];
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.kind === "error") {
+      errors.push(`${diagnostic.code}: ${diagnostic.message}`);
+      continue;
+    }
+    const advisory = diagnostic;
     if (advisory.crate === undefined) {
       errors.push(`${advisory.id}: cannot attribute advisory to a locked crate`);
     } else {
-      attributedAdvisories.push(advisory as Advisory & { crate: string });
+      attributedAdvisories.push(advisory);
     }
   }
 

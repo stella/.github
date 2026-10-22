@@ -82,6 +82,55 @@ describe("cargo-deny advisories gate", () => {
     );
   });
 
+  test("fails a change event when an advisory is accompanied by another error", () => {
+    const output = [
+      diagnostic,
+      JSON.stringify({
+        type: "diagnostic",
+        fields: {
+          severity: "error",
+          code: "advisory-db-fetch",
+          message: "failed to fetch the advisory database",
+        },
+      }),
+    ].join("\n");
+    const result = evaluate({
+      ...common,
+      baseConfig: config(),
+      baseLockfile: common.headLockfile,
+      cargoDeny: { exitCode: 1, output },
+      changeEvent: true,
+    });
+    expect(result.warnings.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(result.errors).toContain(
+      "advisory-db-fetch: failed to fetch the advisory database",
+    );
+  });
+
+  test("ignores warning diagnostics without an advisory", () => {
+    const output = [
+      diagnostic,
+      JSON.stringify({
+        type: "diagnostic",
+        fields: {
+          severity: "warning",
+          code: "advisory-db-stale",
+          message: "the advisory database is stale",
+        },
+      }),
+    ].join("\n");
+    const result = evaluate({
+      ...common,
+      baseConfig: config(),
+      baseLockfile: common.headLockfile,
+      cargoDeny: { exitCode: 1, output },
+      changeEvent: true,
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(result.warnings.join("\n")).not.toContain("advisory-db-stale");
+  });
+
   test("fails for the new version when one diagnostic affects two versions", () => {
     const output = JSON.stringify({
       type: "diagnostic",
