@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { evaluate } from "./check";
+import { baseInputs, evaluate } from "./check";
 
 const diagnostic = readFileSync(
   ".github/actions/cargo-deny-advisories/fixtures/advisory.jsonl",
@@ -20,6 +22,63 @@ const common = {
 };
 
 describe("cargo-deny advisories gate", () => {
+  test("reads base files from the checked-out directory", () => {
+    const directory = mkdtempSync(join(tmpdir(), "cargo-deny-base-"));
+    const lockfilePath = "nested/Cargo.lock";
+    const configPath = "policy/deny.toml";
+    mkdirSync(dirname(join(directory, lockfilePath)), { recursive: true });
+    mkdirSync(dirname(join(directory, configPath)), { recursive: true });
+    writeFileSync(join(directory, lockfilePath), "base lockfile");
+    writeFileSync(join(directory, configPath), "base config");
+
+    expect(baseInputs("a".repeat(40), directory, lockfilePath, configPath)).toEqual({
+      baseConfig: "base config",
+      baseLockfile: "base lockfile",
+    });
+  });
+
+  test("fails closed when the checked-out base lockfile is absent", () => {
+    const directory = mkdtempSync(join(tmpdir(), "cargo-deny-base-"));
+    const base = baseInputs("a".repeat(40), directory, "Cargo.lock", "deny.toml");
+    const result = evaluate({ ...common, ...base, changeEvent: true });
+    expect(result.errors).toContain("base lockfile could not be read");
+  });
+
+  test("rejects an invalid base SHA before reading base files", () => {
+    expect(() => baseInputs("ABC123", "/does/not/exist", "Cargo.lock", "deny.toml")).toThrow(
+      "base-sha must be 40 lowercase hex characters",
+    );
+  });
+
+  test("configures the trusted base checkout like quarantine policy", () => {
+    const action = Bun.YAML.parse(
+      readFileSync(".github/actions/cargo-deny-advisories/action.yml", "utf8"),
+    );
+    const workflow = Bun.YAML.parse(
+      readFileSync(".github/workflows/quarantine-policy.yml", "utf8"),
+    );
+    const checkout = action.runs.steps.find(
+      (step: { name?: string }) => step.name === "Checkout trusted target base",
+    );
+    const quarantineCheckout = workflow.jobs.enforce.steps.find(
+      (step: { name?: string }) => step.name === "Checkout trusted target base",
+    );
+    expect(checkout.uses).toBe(
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    );
+    expect(checkout.if).toBe("inputs.base-sha != ''");
+    expect(checkout.with.ref).toBe("${{ inputs.base-sha }}");
+    expect(checkout.with.path).toBe(".cargo-deny-base");
+    expect(checkout.with["sparse-checkout"]).toBe(
+      "${{ inputs.lockfile }}\n${{ inputs.config }}\n",
+    );
+
+    const omitted = new Set(["ref", "path", "sparse-checkout"]);
+    const unchanged = (withInputs: Record<string, unknown>): Record<string, unknown> =>
+      Object.fromEntries(Object.entries(withInputs).filter(([key]) => !omitted.has(key)));
+    expect(unchanged(checkout.with)).toEqual(unchanged(quarantineCheckout.with));
+  });
+
   test("fails a change event for an advisory on a new crate version", () => {
     const result = evaluate({
       ...common,

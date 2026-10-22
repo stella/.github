@@ -22,6 +22,8 @@ The optional `manifest-path`, `config`, and `lockfile` inputs default to
 `Cargo.toml`, `deny.toml`, and `Cargo.lock`. A change event fails closed when its
 base lockfile cannot be read or cargo-deny exits unsuccessfully without a
 parseable advisory diagnostic.
+The action checks out the base lockfile and config itself, so callers do not need
+a deep checkout.
 
 Waivers remain native cargo-deny entries. Every entry must identify an owner and
 an expiry in its reason:

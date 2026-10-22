@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 type ErrorDiagnostic =
   | { kind: "advisory"; crate?: string; id: string; title: string }
@@ -195,9 +196,37 @@ export const evaluate = ({
   return { errors, warnings };
 };
 
-const gitShow = (sha: string, file: string): string | undefined => {
-  const result = Bun.spawnSync(["git", "show", `${sha}:${file}`], { stdout: "pipe", stderr: "pipe" });
-  return result.exitCode === 0 ? result.stdout.toString() : undefined;
+const readOptional = (path: string): string | undefined => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+export const validateBaseSha = (sha: string): void => {
+  if (sha !== "" && !/^[0-9a-f]{40}$/u.test(sha)) {
+    fail("base-sha must be 40 lowercase hex characters");
+  }
+};
+
+export const readBaseFiles = (
+  directory: string,
+  lockfilePath: string,
+  configPath: string,
+): { baseConfig?: string; baseLockfile?: string } => ({
+  baseConfig: readOptional(join(directory, configPath)),
+  baseLockfile: readOptional(join(directory, lockfilePath)),
+});
+
+export const baseInputs = (
+  sha: string,
+  directory: string,
+  lockfilePath: string,
+  configPath: string,
+): { baseConfig?: string; baseLockfile?: string } => {
+  validateBaseSha(sha);
+  return sha === "" ? {} : readBaseFiles(directory, lockfilePath, configPath);
 };
 
 const run = (): void => {
@@ -205,14 +234,15 @@ const run = (): void => {
   const configPath = process.env.INPUT_CONFIG ?? "deny.toml";
   const lockfilePath = process.env.INPUT_LOCKFILE ?? "Cargo.lock";
   const baseSha = process.env.INPUT_BASE_SHA ?? "";
+  const baseDirectory = process.env.INPUT_BASE_DIRECTORY ?? ".cargo-deny-base";
+  const base = baseInputs(baseSha, baseDirectory, lockfilePath, configPath);
   const result = Bun.spawnSync(
     ["cargo", "deny", "--manifest-path", manifest, "--format", "json", "check", "--config", configPath, "advisories"],
     { stdout: "pipe", stderr: "pipe" },
   );
   const output = `${result.stdout.toString()}\n${result.stderr.toString()}`;
   const checked = evaluate({
-    baseConfig: baseSha === "" ? undefined : gitShow(baseSha, configPath),
-    baseLockfile: baseSha === "" ? undefined : gitShow(baseSha, lockfilePath),
+    ...base,
     cargoDeny: { exitCode: result.exitCode, output },
     changeEvent: baseSha !== "",
     config: readFileSync(configPath, "utf8"),

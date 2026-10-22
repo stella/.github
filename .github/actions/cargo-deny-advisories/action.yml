@@ -16,10 +16,22 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Checkout trusted target base
+      if: inputs.base-sha != ''
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ inputs.base-sha }}
+        path: .cargo-deny-base
+        sparse-checkout: |
+          ${{ inputs.lockfile }}
+          ${{ inputs.config }}
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
     - name: Check advisories introduced by this change
       shell: bash
       env:
         INPUT_BASE_SHA: ${{ inputs.base-sha }}
+        INPUT_BASE_DIRECTORY: .cargo-deny-base
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_LOCKFILE: ${{ inputs.lockfile }}
         INPUT_MANIFEST_PATH: ${{ inputs.manifest-path }}
