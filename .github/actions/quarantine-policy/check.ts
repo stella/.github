@@ -1,7 +1,11 @@
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { readNewLockedRegistryVersions } from "./lockfile";
-import { checkRepositoryPolicy, pruneRepositoryExcludes } from "./ecosystems";
+import {
+  checkRepositoryPolicy,
+  pruneRepositoryExcludes,
+  readBunRoots,
+} from "./ecosystems";
 
 export const isChangeEvent = (eventName: string): boolean =>
   eventName === "pull_request" || eventName === "merge_group";
@@ -174,6 +178,7 @@ export const checkQuarantinePolicy = ({
   lockfile,
   npmrcPresent = false,
   now,
+  bunfigPath = BUNFIG,
 }: {
   bunfig: string;
   baseBunfig?: string;
@@ -183,6 +188,7 @@ export const checkQuarantinePolicy = ({
   lockfile: string;
   npmrcPresent?: boolean;
   now: Date;
+  bunfigPath?: string;
 }): CheckResult => {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -191,20 +197,27 @@ export const checkQuarantinePolicy = ({
     excludes = readParsedExcludes(bunfig);
   } catch (error) {
     return {
-      errors: [error instanceof Error ? error.message : String(error)],
+      errors: [
+        (error instanceof Error ? error.message : String(error)).replaceAll(
+          BUNFIG,
+          bunfigPath,
+        ),
+      ],
       warnings,
     };
   }
   if (npmrcPresent) {
     errors.push(
-      `${BUNFIG} quarantine policy does not allow a repository .npmrc`,
+      `${bunfigPath} quarantine policy does not allow a repository .npmrc`,
     );
   }
 
   const range = findExcludeBlock(bunfig);
   if (range === undefined) {
     return {
-      errors: [`${BUNFIG} has an unterminated minimumReleaseAgeExcludes array`],
+      errors: [
+        `${bunfigPath} has an unterminated minimumReleaseAgeExcludes array`,
+      ],
       warnings,
     };
   }
@@ -217,7 +230,7 @@ export const checkQuarantinePolicy = ({
       const entry = parseEntry(line);
       if (entry === undefined) {
         errors.push(
-          `${BUNFIG} has an unannotated or malformed quarantine exclude: ${line.trim()}`,
+          `${bunfigPath} has an unannotated or malformed quarantine exclude: ${line.trim()}`,
         );
         return [];
       }
@@ -230,7 +243,7 @@ export const checkQuarantinePolicy = ({
     new Set(excludes).size !== excludes.length
   ) {
     errors.push(
-      `${BUNFIG} minimumReleaseAgeExcludes must not contain duplicates`,
+      `${bunfigPath} minimumReleaseAgeExcludes must not contain duplicates`,
     );
   }
   const parsedSet = new Set(excludes);
@@ -238,7 +251,7 @@ export const checkQuarantinePolicy = ({
   const unrecognized = excludes.filter((name) => !declaredSet.has(name));
   const phantom = declared.filter((name) => !parsedSet.has(name));
   if (unrecognized.length > 0 || phantom.length > 0) {
-    errors.push(`${BUNFIG} must declare one annotated package per line`);
+    errors.push(`${bunfigPath} must declare one annotated package per line`);
   }
 
   // Only a complete trusted base can establish that an expired exception is inherited.
@@ -262,7 +275,7 @@ export const checkQuarantinePolicy = ({
   for (const entry of entries) {
     if (!exactTimestamp(entry.timestamp)) {
       errors.push(
-        `${BUNFIG} quarantine exclude "${entry.name}" has an invalid UTC timestamp: ${entry.timestamp}`,
+        `${bunfigPath} quarantine exclude "${entry.name}" has an invalid UTC timestamp: ${entry.timestamp}`,
       );
       continue;
     }
@@ -270,30 +283,30 @@ export const checkQuarantinePolicy = ({
     if (entry.name.startsWith("@stll/")) {
       if (entry.annotation !== "excluded-since") {
         errors.push(
-          `${BUNFIG} first-party quarantine exclude "${entry.name}" must use ${EXCLUDED_SINCE_MARKER}`,
+          `${bunfigPath} first-party quarantine exclude "${entry.name}" must use ${EXCLUDED_SINCE_MARKER}`,
         );
       } else if (timestampMs > nowMs) {
         temporalIssue(
           entry,
-          `${BUNFIG} first-party quarantine exclude "${entry.name}" has a future exclusion date`,
+          `${bunfigPath} first-party quarantine exclude "${entry.name}" has a future exclusion date`,
         );
       }
       continue;
     }
     if (entry.annotation !== "expires") {
       errors.push(
-        `${BUNFIG} third-party quarantine exclude "${entry.name}" must use ${EXPIRY_MARKER}`,
+        `${bunfigPath} third-party quarantine exclude "${entry.name}" must use ${EXPIRY_MARKER}`,
       );
       continue;
     }
     if (nowMs >= timestampMs) {
       warnings.push(
-        `${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`,
+        `${bunfigPath} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`,
       );
     } else if (timestampMs > nowMs + REQUIRED_RELEASE_AGE_SECONDS * 1000) {
       temporalIssue(
         entry,
-        `${BUNFIG} temporary quarantine exclude "${entry.name}" expires more than ${REQUIRED_RELEASE_AGE_SECONDS} seconds after the policy clock`,
+        `${bunfigPath} temporary quarantine exclude "${entry.name}" expires more than ${REQUIRED_RELEASE_AGE_SECONDS} seconds after the policy clock`,
       );
     }
   }
@@ -303,7 +316,7 @@ export const checkQuarantinePolicy = ({
     .sort();
   if (missing.length > 0) {
     errors.push(
-      `${BUNFIG} is missing registry-backed first-party quarantine excludes: ${missing.join(", ")}`,
+      `${bunfigPath} is missing registry-backed first-party quarantine excludes: ${missing.join(", ")}`,
     );
   }
 
@@ -487,32 +500,42 @@ export const validateCallerWorkflowRefs = ({
       ];
     }
     if ("with" in job) {
-      if (
-        typeof job.with !== "object" ||
-        job.with === null ||
-        Object.keys(job.with).join(",") !== "runs-on" ||
-        typeof job.with["runs-on"] !== "string"
-      ) {
+      if (typeof job.with !== "object" || job.with === null) {
         return [
-          `.github/workflows/${name} with must contain only a string runs-on JSON array`,
+          `.github/workflows/${name} with must contain only string runs-on and bun-roots inputs`,
         ];
       }
-      let runsOn: unknown;
-      try {
-        runsOn = JSON.parse(job.with["runs-on"]);
-      } catch {
-        return [
-          `.github/workflows/${name} runs-on must be a non-empty JSON array of non-empty strings`,
-        ];
-      }
+      const inputs = job.with as Record<string, unknown>;
       if (
-        !Array.isArray(runsOn) ||
-        runsOn.length === 0 ||
-        runsOn.some((label) => typeof label !== "string" || label.length === 0)
+        Object.keys(inputs).some(
+          (key) => key !== "runs-on" && key !== "bun-roots",
+        ) ||
+        Object.values(inputs).some((value) => typeof value !== "string")
       ) {
         return [
-          `.github/workflows/${name} runs-on must be a non-empty JSON array of non-empty strings`,
+          `.github/workflows/${name} with must contain only string runs-on and bun-roots inputs`,
         ];
+      }
+      if (inputs["runs-on"] !== undefined) {
+        let runsOn: unknown;
+        try {
+          runsOn = JSON.parse(inputs["runs-on"] as string);
+        } catch {
+          return [
+            `.github/workflows/${name} runs-on must be a non-empty JSON array of non-empty strings`,
+          ];
+        }
+        if (
+          !Array.isArray(runsOn) ||
+          runsOn.length === 0 ||
+          runsOn.some(
+            (label) => typeof label !== "string" || label.length === 0,
+          )
+        ) {
+          return [
+            `.github/workflows/${name} runs-on must be a non-empty JSON array of non-empty strings`,
+          ];
+        }
       }
     }
     const expectedCondition = `github.repository == '${expectedRepository}'`;
@@ -572,14 +595,53 @@ export const validateCallerWorkflowRefs = ({
 
 const run = () => {
   const root = process.cwd();
+  const bunRoots = readBunRoots(root, process.env.BUN_ROOTS);
+  if (process.argv.includes("--bun-roots-output")) {
+    const output = process.env.GITHUB_OUTPUT;
+    if (output === undefined) fail("GITHUB_OUTPUT is required");
+    const bunfigs = bunRoots.map((bunRoot) =>
+      bunRoot === "." ? "bunfig.toml" : `${bunRoot}/bunfig.toml`,
+    );
+    const sparse = bunRoots.flatMap((bunRoot) =>
+      ["bun.lock", "bunfig.toml", "package.json"].map((file) =>
+        bunRoot === "." ? file : `${bunRoot}/${file}`,
+      ),
+    );
+    const prunePaths = [
+      ...bunfigs,
+      "pnpm-workspace.yaml",
+      ".cargo/quarantine.toml",
+    ];
+    const delimiter = "BUN_ROOTS_OUTPUT";
+    const append = (name: string, values: string[]) =>
+      writeFileSync(
+        output,
+        `${name}<<${delimiter}\n${values.join("\n")}\n${delimiter}\n`,
+        { flag: "a" },
+      );
+    append("sparse-checkout", sparse);
+    append("prune-paths", prunePaths);
+    const escaped = prunePaths.map((value) =>
+      value.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"),
+    );
+    writeFileSync(output, `allowed-path-regex=^(${escaped.join("|")})$\n`, {
+      flag: "a",
+    });
+    return;
+  }
   if (process.argv.includes("--prune")) {
-    const result = pruneRepositoryExcludes({ root, now: new Date() });
+    const result = pruneRepositoryExcludes({ root, bunRoots, now: new Date() });
     console.log(`removed ${result} expired quarantine exclude(s)`);
     return;
   }
 
   const eventName = process.env.GITHUB_EVENT_NAME ?? "push";
-  const result = checkRepositoryPolicy({ root, eventName, now: new Date() });
+  const result = checkRepositoryPolicy({
+    root,
+    bunRoots,
+    eventName,
+    now: new Date(),
+  });
   const expectedRef = process.argv[2];
   if (expectedRef !== undefined) {
     const expectedRepository = process.argv[3];

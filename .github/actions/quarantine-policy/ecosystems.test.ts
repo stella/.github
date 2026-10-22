@@ -17,6 +17,7 @@ import {
   checkRepositoryPolicy,
   classifyCargoSource,
   pruneRepositoryExcludes,
+  readBunRoots,
   readCargoPackages,
   readPnpmLockedRegistryVersions,
 } from "./ecosystems";
@@ -128,6 +129,75 @@ test("prunes expired entries from all ecosystem files", () => {
     expect(
       readFileSync(join(root, ".cargo/quarantine.toml"), "utf8"),
     ).toContain("prefix-old@1.0.0");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validates additional Bun roots and defaults to the repository root", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-roots-"));
+  try {
+    writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    writeFileSync(join(root, "plugins/vscode/bun.lock"), '{"packages":{}}');
+    expect(readBunRoots(root)).toEqual(["."]);
+    expect(readBunRoots(root, "plugins/vscode")).toEqual([
+      ".",
+      "plugins/vscode",
+    ]);
+    for (const invalid of ["..", "plugins/../vscode", "/absolute", "missing"]) {
+      expect(() => readBunRoots(root, invalid)).toThrow(invalid);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checks and prunes every declared Bun root", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-multi-bun-"));
+  const valid =
+    "[install]\nminimumReleaseAge = 432000\nminimumReleaseAgeExcludes = []\n";
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    for (const bunRoot of [".", "plugins/vscode"]) {
+      writeFileSync(join(root, bunRoot, "bun.lock"), '{"packages":{}}');
+      writeFileSync(join(root, bunRoot, "bunfig.toml"), valid);
+      writeFileSync(
+        join(root, bunRoot, "package.json"),
+        '{"trustedDependencies":[]}',
+      );
+    }
+    spawnSync("git", ["add", "."], { cwd: root });
+    const bunRoots = readBunRoots(root, ". plugins/vscode");
+    expect(
+      checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
+        .errors,
+    ).toEqual([]);
+
+    const nested = join(root, "plugins/vscode/bunfig.toml");
+    writeFileSync(
+      nested,
+      valid.replace(
+        "[]",
+        '[\n  "old@1.0.0", # quarantine-expires: 2026-08-20T00:00:00.000Z\n]',
+      ),
+    );
+    expect(pruneRepositoryExcludes({ root, bunRoots, now: NOW })).toBe(1);
+    expect(readFileSync(join(root, "bunfig.toml"), "utf8")).toBe(valid);
+    expect(readFileSync(nested, "utf8")).not.toContain("old@1.0.0");
+
+    rmSync(nested);
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots,
+        eventName: "push",
+        now: NOW,
+      }).errors.join("\n"),
+    ).toContain(
+      "plugins/vscode/bunfig.toml is required for plugins/vscode/bun.lock",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -255,7 +325,8 @@ describe("Cargo quarantine", () => {
   });
   test("rejects non-canonical or unpinned first-party git sources", () => {
     const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
-    const secureShellSource = "git+ssh://git" + `@github.com/stella/x#${commit}`;
+    const secureShellSource =
+      "git+ssh://git" + `@github.com/stella/x#${commit}`;
     for (const [name, source] of [
       ["stella-x", `git+https://github.com/other/x#${commit}`],
       ["stella-x", secureShellSource],

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { readNewLockedRegistryVersions } from "./lockfile";
 import {
@@ -13,6 +14,7 @@ import {
   classifyCargoSource,
   readCargoPackages,
   readPnpmLockedRegistryVersions,
+  readBunRoots,
 } from "./ecosystems";
 
 export {
@@ -311,6 +313,7 @@ export const checkNewLockedRegistryReleaseAges = async ({
   loadMetadata = loadRegistryMetadata,
   lockfile,
   now,
+  bunfigPath = BUNFIG,
 }: {
   eventName?: string;
   baseBunfig?: string;
@@ -320,8 +323,19 @@ export const checkNewLockedRegistryReleaseAges = async ({
   loadMetadata?: LoadPackageMetadata;
   lockfile: string;
   now: Date;
+  bunfigPath?: string;
 }): Promise<{ checked: number; errors: string[] }> => {
-  const excludes = new Set(readParsedExcludes(bunfig));
+  let excludes: Set<string>;
+  try {
+    excludes = new Set(readParsedExcludes(bunfig));
+  } catch (error) {
+    throw new Error(
+      (error instanceof Error ? error.message : String(error)).replaceAll(
+        BUNFIG,
+        bunfigPath,
+      ),
+    );
+  }
   const baseExcludes = baseNpmrcPresent
     ? undefined
     : readTrustedBaseExcludes(baseBunfig);
@@ -405,22 +419,32 @@ const run = async () => {
   const eventName = process.env.GITHUB_EVENT_NAME ?? "push";
   const now = new Date();
   const results: Array<{ checked: number; errors: string[] }> = [];
-  if (existsSync(LOCKFILE))
-    results.push(
-      await checkNewLockedRegistryReleaseAges({
-        eventName,
-        now,
-        baseBunfig: existsSync(baseBunfigPath)
-          ? readFileSync(baseBunfigPath, "utf8")
-          : undefined,
-        baseLockfile: existsSync(baseLockfilePath)
-          ? readFileSync(baseLockfilePath, "utf8")
-          : undefined,
-        baseNpmrcPresent: pathEntryExists(baseNpmrcPath),
-        bunfig: readFileSync(BUNFIG, "utf8"),
-        lockfile: readFileSync(LOCKFILE, "utf8"),
-      }),
-    );
+  const bunRoots = readBunRoots(process.cwd(), process.env.BUN_ROOTS);
+  for (const bunRoot of bunRoots) {
+    const lockfile = path.join(bunRoot, LOCKFILE);
+    const bunfig = path.join(bunRoot, BUNFIG);
+    const baseLockfile = path.join(".quarantine-base", bunRoot, LOCKFILE);
+    const baseBunfig = path.join(".quarantine-base", bunRoot, BUNFIG);
+    const result = await checkNewLockedRegistryReleaseAges({
+      eventName,
+      now,
+      baseBunfig: existsSync(baseBunfig)
+        ? readFileSync(baseBunfig, "utf8")
+        : undefined,
+      baseLockfile: existsSync(baseLockfile)
+        ? readFileSync(baseLockfile, "utf8")
+        : undefined,
+      baseNpmrcPresent: pathEntryExists(baseNpmrcPath),
+      bunfig: readFileSync(bunfig, "utf8"),
+      bunfigPath: bunRoot === "." ? BUNFIG : bunfig,
+      lockfile: readFileSync(lockfile, "utf8"),
+    });
+    const label = bunRoot === "." ? LOCKFILE : lockfile;
+    results.push({
+      checked: result.checked,
+      errors: result.errors.map((error) => `${label}: ${error}`),
+    });
+  }
   if (existsSync("pnpm-lock.yaml"))
     results.push(
       await checkNewPnpmReleaseAges({
