@@ -84,4 +84,7 @@ jobs:
 
 The default is `'["ubuntu-24.04"]'`. Policy callers retain `pull_request` and
 `merge_group` triggers; prune callers retain one hourly schedule. A `push`
-trigger, when present, must be restricted to `main`.
+trigger, when present, must be restricted to `main`. Repositories outside the
+`stella` organization do not need a prune caller; instead, add a `schedule`
+trigger with exactly one hourly cron expression to the policy caller so expired
+exceptions are still enforced promptly.

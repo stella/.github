@@ -14,9 +14,11 @@ export const REQUIRED_RELEASE_AGE_SECONDS = 5 * 24 * 60 * 60;
 export const NPM_REGISTRY = "https://registry.npmjs.org";
 const EXPIRY_MARKER = "quarantine-expires:";
 const EXCLUDED_SINCE_MARKER = "quarantine-excluded-since:";
-export const EXACT_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+export const EXACT_UTC_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
-const REGISTRY_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const REGISTRY_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const HOURLY_CRON = /^(?:[0-9]|[1-5][0-9]) \* \* \* \*$/u;
 
 type BlockRange = { end: number; start: number };
@@ -83,9 +85,10 @@ type Entry = {
 };
 
 const parseEntry = (line: string): Entry | undefined => {
-  const match = /^\s*"(?<name>[^"]+)"\s*,?\s*#\s*(?<marker>quarantine-expires:|quarantine-excluded-since:)\s*(?<timestamp>\S+)\s*$/u.exec(
-    line,
-  );
+  const match =
+    /^\s*"(?<name>[^"]+)"\s*,?\s*#\s*(?<marker>quarantine-expires:|quarantine-excluded-since:)\s*(?<timestamp>\S+)\s*$/u.exec(
+      line,
+    );
   if (match?.groups === undefined) return undefined;
   return {
     annotation:
@@ -97,7 +100,11 @@ const parseEntry = (line: string): Entry | undefined => {
 
 export const readParsedExcludes = (bunfig: string): string[] => {
   const parsed = Bun.TOML.parse(bunfig);
-  if (!("install" in parsed) || typeof parsed.install !== "object" || parsed.install === null) {
+  if (
+    !("install" in parsed) ||
+    typeof parsed.install !== "object" ||
+    parsed.install === null
+  ) {
     fail(`${BUNFIG} must contain an [install] table`);
   }
   const install = parsed.install;
@@ -114,7 +121,9 @@ export const readParsedExcludes = (bunfig: string): string[] => {
     !("minimumReleaseAge" in install) ||
     install.minimumReleaseAge !== REQUIRED_RELEASE_AGE_SECONDS
   ) {
-    fail(`${BUNFIG} must set minimumReleaseAge = ${REQUIRED_RELEASE_AGE_SECONDS}`);
+    fail(
+      `${BUNFIG} must set minimumReleaseAge = ${REQUIRED_RELEASE_AGE_SECONDS}`,
+    );
   }
   if (
     !("minimumReleaseAgeExcludes" in install) ||
@@ -133,20 +142,22 @@ export const readParsedExcludes = (bunfig: string): string[] => {
 
 const readRegistryFirstPartyPackages = (lockfile: string): Set<string> =>
   new Set(
-    [...lockfile.matchAll(/"[^"\n]+":\s*\["(?<name>@stll\/[^"@]+)@(?<source>[^"]+)"/gu)].flatMap(
-      (match) => {
-        const name = match.groups?.name;
-        const source = match.groups?.source;
-        if (
-          name === undefined ||
-          source === undefined ||
-          !REGISTRY_VERSION.test(source)
-        ) {
-          return [];
-        }
-        return [name];
-      },
-    ),
+    [
+      ...lockfile.matchAll(
+        /"[^"\n]+":\s*\["(?<name>@stll\/[^"@]+)@(?<source>[^"]+)"/gu,
+      ),
+    ].flatMap((match) => {
+      const name = match.groups?.name;
+      const source = match.groups?.source;
+      if (
+        name === undefined ||
+        source === undefined ||
+        !REGISTRY_VERSION.test(source)
+      ) {
+        return [];
+      }
+      return [name];
+    }),
   );
 
 export type CheckResult = {
@@ -179,15 +190,23 @@ export const checkQuarantinePolicy = ({
   try {
     excludes = readParsedExcludes(bunfig);
   } catch (error) {
-    return { errors: [error instanceof Error ? error.message : String(error)], warnings };
+    return {
+      errors: [error instanceof Error ? error.message : String(error)],
+      warnings,
+    };
   }
   if (npmrcPresent) {
-    errors.push(`${BUNFIG} quarantine policy does not allow a repository .npmrc`);
+    errors.push(
+      `${BUNFIG} quarantine policy does not allow a repository .npmrc`,
+    );
   }
 
   const range = findExcludeBlock(bunfig);
   if (range === undefined) {
-    return { errors: [`${BUNFIG} has an unterminated minimumReleaseAgeExcludes array`], warnings };
+    return {
+      errors: [`${BUNFIG} has an unterminated minimumReleaseAgeExcludes array`],
+      warnings,
+    };
   }
 
   const entries = bunfig
@@ -197,15 +216,22 @@ export const checkQuarantinePolicy = ({
       if (!/^\s*"/u.test(line)) return [];
       const entry = parseEntry(line);
       if (entry === undefined) {
-        errors.push(`${BUNFIG} has an unannotated or malformed quarantine exclude: ${line.trim()}`);
+        errors.push(
+          `${BUNFIG} has an unannotated or malformed quarantine exclude: ${line.trim()}`,
+        );
         return [];
       }
       return [entry];
     });
 
   const declared = entries.map(({ name }) => name);
-  if (new Set(declared).size !== declared.length || new Set(excludes).size !== excludes.length) {
-    errors.push(`${BUNFIG} minimumReleaseAgeExcludes must not contain duplicates`);
+  if (
+    new Set(declared).size !== declared.length ||
+    new Set(excludes).size !== excludes.length
+  ) {
+    errors.push(
+      `${BUNFIG} minimumReleaseAgeExcludes must not contain duplicates`,
+    );
   }
   const parsedSet = new Set(excludes);
   const declaredSet = new Set(declared);
@@ -226,34 +252,50 @@ export const checkQuarantinePolicy = ({
     ? readNewLockedRegistryVersions({ baseLockfile, lockfile })
     : [];
   const temporalIssue = (entry: Entry, message: string) => {
-    const dependencyChanged = changedVersions.some(({ name, version }) =>
-      entry.name === name || entry.name === `${name}@${version}`,
+    const dependencyChanged = changedVersions.some(
+      ({ name, version }) =>
+        entry.name === name || entry.name === `${name}@${version}`,
     );
     (inherited && !dependencyChanged ? warnings : errors).push(message);
   };
   const nowMs = now.getTime();
   for (const entry of entries) {
     if (!exactTimestamp(entry.timestamp)) {
-      errors.push(`${BUNFIG} quarantine exclude "${entry.name}" has an invalid UTC timestamp: ${entry.timestamp}`);
+      errors.push(
+        `${BUNFIG} quarantine exclude "${entry.name}" has an invalid UTC timestamp: ${entry.timestamp}`,
+      );
       continue;
     }
     const timestampMs = Date.parse(entry.timestamp);
     if (entry.name.startsWith("@stll/")) {
       if (entry.annotation !== "excluded-since") {
-        errors.push(`${BUNFIG} first-party quarantine exclude "${entry.name}" must use ${EXCLUDED_SINCE_MARKER}`);
+        errors.push(
+          `${BUNFIG} first-party quarantine exclude "${entry.name}" must use ${EXCLUDED_SINCE_MARKER}`,
+        );
       } else if (timestampMs > nowMs) {
-        temporalIssue(entry, `${BUNFIG} first-party quarantine exclude "${entry.name}" has a future exclusion date`);
+        temporalIssue(
+          entry,
+          `${BUNFIG} first-party quarantine exclude "${entry.name}" has a future exclusion date`,
+        );
       }
       continue;
     }
     if (entry.annotation !== "expires") {
-      errors.push(`${BUNFIG} third-party quarantine exclude "${entry.name}" must use ${EXPIRY_MARKER}`);
+      errors.push(
+        `${BUNFIG} third-party quarantine exclude "${entry.name}" must use ${EXPIRY_MARKER}`,
+      );
       continue;
     }
     if (nowMs >= timestampMs) {
-      temporalIssue(entry, `${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`);
+      temporalIssue(
+        entry,
+        `${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`,
+      );
     } else if (timestampMs > nowMs + REQUIRED_RELEASE_AGE_SECONDS * 1000) {
-      temporalIssue(entry, `${BUNFIG} temporary quarantine exclude "${entry.name}" expires more than ${REQUIRED_RELEASE_AGE_SECONDS} seconds after the policy clock`);
+      temporalIssue(
+        entry,
+        `${BUNFIG} temporary quarantine exclude "${entry.name}" expires more than ${REQUIRED_RELEASE_AGE_SECONDS} seconds after the policy clock`,
+      );
     }
   }
 
@@ -261,7 +303,9 @@ export const checkQuarantinePolicy = ({
     .filter((name) => !parsedSet.has(name))
     .sort();
   if (missing.length > 0) {
-    errors.push(`${BUNFIG} is missing registry-backed first-party quarantine excludes: ${missing.join(", ")}`);
+    errors.push(
+      `${BUNFIG} is missing registry-backed first-party quarantine excludes: ${missing.join(", ")}`,
+    );
   }
 
   return { errors, warnings };
@@ -309,18 +353,26 @@ export const validateCallerWorkflowRefs = ({
   expectedRef: string;
   expectedRepository: string;
   policyWorkflow: string;
-  pruneWorkflow: string;
+  pruneWorkflow?: string;
 }): string[] => {
   if (!/^[0-9a-f]{40}$/u.test(expectedRef)) {
     return ["the shared quarantine policy ref must be a full commit SHA"];
   }
-  if (!/^stella\/[a-z0-9._-]+$/u.test(expectedRepository)) {
-    return ["the quarantine caller repository must be an explicit stella repository"];
+  if (!/^[a-z0-9._-]+\/[a-z0-9._-]+$/u.test(expectedRepository)) {
+    return ["the quarantine caller repository must be an explicit repository"];
   }
-  const expected = [
+  const owner = expectedRepository.split("/")[0];
+  if (owner === "stella" && pruneWorkflow === undefined) {
+    return [
+      ".github/workflows/quarantine-prune.yml is required for stella repositories",
+    ];
+  }
+  const expected: [string, string, readonly string[]][] = [
     ["quarantine-policy.yml", policyWorkflow, ["merge_group", "pull_request"]],
-    ["quarantine-prune.yml", pruneWorkflow, ["schedule"]],
-  ] as const;
+  ];
+  if (pruneWorkflow !== undefined) {
+    expected.push(["quarantine-prune.yml", pruneWorkflow, ["schedule"]]);
+  }
   return expected.flatMap(([name, workflow, expectedTriggers]) => {
     const target = `${SHARED_WORKFLOW_PREFIX}${name}@${expectedRef}`;
     let parsed: unknown;
@@ -334,31 +386,49 @@ export const validateCallerWorkflowRefs = ({
     }
     const workflowKeys = Object.keys(parsed).sort();
     if (workflowKeys.join(",") !== "jobs,name,on,permissions") {
-      return [`.github/workflows/${name} must contain only name, triggers, permissions, and jobs`];
+      return [
+        `.github/workflows/${name} must contain only name, triggers, permissions, and jobs`,
+      ];
     }
-    if (!("on" in parsed) || typeof parsed.on !== "object" || parsed.on === null) {
+    if (
+      !("on" in parsed) ||
+      typeof parsed.on !== "object" ||
+      parsed.on === null
+    ) {
       return [`.github/workflows/${name} must declare required triggers`];
     }
     // Existing pinned callers remain valid; new callers can also enforce main pushes.
     const { push, ...otherTriggers } = parsed.on as Record<string, unknown>;
-    if (push !== undefined && JSON.stringify(push) !== JSON.stringify({ branches: ["main"] })) {
+    if (
+      push !== undefined &&
+      JSON.stringify(push) !== JSON.stringify({ branches: ["main"] })
+    ) {
       return [`.github/workflows/${name} must restrict push to main`];
     }
-    const triggers = Object.keys(otherTriggers).sort();
+    const { schedule, ...requiredTriggers } = otherTriggers;
+    const allowedSchedule =
+      name === "quarantine-policy.yml" && schedule !== undefined;
+    const triggers = Object.keys(
+      allowedSchedule ? requiredTriggers : otherTriggers,
+    ).sort();
     if (triggers.join(",") !== [...expectedTriggers].sort().join(",")) {
-      return [`.github/workflows/${name} must declare only ${expectedTriggers.join(" and ")}`];
+      return [
+        `.github/workflows/${name} must declare only ${expectedTriggers.join(" and ")}`,
+      ];
     }
     if (name === "quarantine-policy.yml") {
-      const invalidTrigger = Object.values(otherTriggers).some(
+      const invalidTrigger = Object.values(requiredTriggers).some(
         (value) =>
           value !== null &&
           (typeof value !== "object" || Object.keys(value).length !== 0),
       );
       if (invalidTrigger) {
-        return [`.github/workflows/${name} must not filter enforcement triggers`];
+        return [
+          `.github/workflows/${name} must not filter enforcement triggers`,
+        ];
       }
-    } else {
-      const schedule = parsed.on.schedule;
+    }
+    if (name === "quarantine-prune.yml" || allowedSchedule) {
       if (
         !Array.isArray(schedule) ||
         schedule.length !== 1 ||
@@ -372,7 +442,11 @@ export const validateCallerWorkflowRefs = ({
         return [`.github/workflows/${name} must declare one hourly schedule`];
       }
     }
-    if (!("permissions" in parsed) || typeof parsed.permissions !== "object" || parsed.permissions === null) {
+    if (
+      !("permissions" in parsed) ||
+      typeof parsed.permissions !== "object" ||
+      parsed.permissions === null
+    ) {
       return [`.github/workflows/${name} must grant only contents read`];
     }
     const workflowPermissions = Object.entries(parsed.permissions);
@@ -387,25 +461,79 @@ export const validateCallerWorkflowRefs = ({
       return [`.github/workflows/${name} must declare one caller job`];
     }
     const jobs = parsed.jobs;
-    if (typeof jobs !== "object" || jobs === null || Object.keys(jobs).length !== 1) {
+    if (
+      typeof jobs !== "object" ||
+      jobs === null ||
+      Object.keys(jobs).length !== 1
+    ) {
       return [`.github/workflows/${name} must declare one caller job`];
     }
     const job = Object.values(jobs).at(0);
-    if (typeof job !== "object" || job === null || !("uses" in job) || job.uses !== target) {
+    if (
+      typeof job !== "object" ||
+      job === null ||
+      !("uses" in job) ||
+      job.uses !== target
+    ) {
       return [`.github/workflows/${name} must use ${target} exactly once`];
     }
-    const expectedJobKeys = name === "quarantine-policy.yml"
-      ? ["if", "name", "permissions", "uses"]
-      : ["if", "name", "permissions", "secrets", "uses"];
-    if (Object.keys(job).sort().join(",") !== expectedJobKeys.join(",")) {
-      return [`.github/workflows/${name} must contain only the canonical caller job fields`];
+    const expectedJobKeys =
+      name === "quarantine-policy.yml"
+        ? ["if", "name", "permissions", "uses"]
+        : ["if", "name", "permissions", "secrets", "uses"];
+    const jobKeys = Object.keys(job).sort();
+    const withIndex = jobKeys.indexOf("with");
+    if (withIndex !== -1) {
+      jobKeys.splice(withIndex, 1);
+    }
+    if (jobKeys.join(",") !== expectedJobKeys.join(",")) {
+      return [
+        `.github/workflows/${name} must contain only the canonical caller job fields`,
+      ];
+    }
+    if ("with" in job) {
+      if (
+        typeof job.with !== "object" ||
+        job.with === null ||
+        Object.keys(job.with).join(",") !== "runs-on" ||
+        typeof job.with["runs-on"] !== "string"
+      ) {
+        return [
+          `.github/workflows/${name} with must contain only a string runs-on JSON array`,
+        ];
+      }
+      let runsOn: unknown;
+      try {
+        runsOn = JSON.parse(job.with["runs-on"]);
+      } catch {
+        return [
+          `.github/workflows/${name} runs-on must be a non-empty JSON array of non-empty strings`,
+        ];
+      }
+      if (
+        !Array.isArray(runsOn) ||
+        runsOn.length === 0 ||
+        runsOn.some((label) => typeof label !== "string" || label.length === 0)
+      ) {
+        return [
+          `.github/workflows/${name} runs-on must be a non-empty JSON array of non-empty strings`,
+        ];
+      }
     }
     const expectedCondition = `github.repository == '${expectedRepository}'`;
     if (!("if" in job) || job.if !== expectedCondition) {
-      return [`.github/workflows/${name} must use only the exact repository guard ${expectedCondition}`];
+      return [
+        `.github/workflows/${name} must use only the exact repository guard ${expectedCondition}`,
+      ];
     }
-    if (!("permissions" in job) || typeof job.permissions !== "object" || job.permissions === null) {
-      return [`.github/workflows/${name} caller job must grant only contents read`];
+    if (
+      !("permissions" in job) ||
+      typeof job.permissions !== "object" ||
+      job.permissions === null
+    ) {
+      return [
+        `.github/workflows/${name} caller job must grant only contents read`,
+      ];
     }
     const jobPermissions = Object.entries(job.permissions);
     if (
@@ -413,19 +541,34 @@ export const validateCallerWorkflowRefs = ({
       jobPermissions[0]?.[0] !== "contents" ||
       jobPermissions[0]?.[1] !== "read"
     ) {
-      return [`.github/workflows/${name} caller job must grant only contents read`];
+      return [
+        `.github/workflows/${name} caller job must grant only contents read`,
+      ];
     }
     if (name === "quarantine-prune.yml") {
-      if (!("secrets" in job) || typeof job.secrets !== "object" || job.secrets === null) {
-        return [`.github/workflows/${name} must pass only the quarantine App secrets`];
+      if (
+        !("secrets" in job) ||
+        typeof job.secrets !== "object" ||
+        job.secrets === null
+      ) {
+        return [
+          `.github/workflows/${name} must pass only the quarantine App secrets`,
+        ];
       }
-      const secrets = Object.entries(job.secrets).sort(([left], [right]) => left.localeCompare(right));
+      const secrets = Object.entries(job.secrets).sort(([left], [right]) =>
+        left.localeCompare(right),
+      );
       const expectedSecrets = [
         ["CHANGELOG_APP_ID", "${{ secrets.CHANGELOG_APP_ID }}"],
-        ["CHANGELOG_APP_PRIVATE_KEY", "${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}"],
+        [
+          "CHANGELOG_APP_PRIVATE_KEY",
+          "${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}",
+        ],
       ];
       if (JSON.stringify(secrets) !== JSON.stringify(expectedSecrets)) {
-        return [`.github/workflows/${name} must pass only the quarantine App secrets`];
+        return [
+          `.github/workflows/${name} must pass only the quarantine App secrets`,
+        ];
       }
     }
     return [];
@@ -456,14 +599,19 @@ const run = () => {
           path.join(root, ".github/workflows/quarantine-policy.yml"),
           "utf8",
         ),
-        pruneWorkflow: readFileSync(
+        pruneWorkflow: pathEntryExists(
           path.join(root, ".github/workflows/quarantine-prune.yml"),
-          "utf8",
-        ),
+        )
+          ? readFileSync(
+              path.join(root, ".github/workflows/quarantine-prune.yml"),
+              "utf8",
+            )
+          : undefined,
       }),
     );
   }
-  for (const warning of result.warnings) console.warn(warningAnnotation(warning));
+  for (const warning of result.warnings)
+    console.warn(warningAnnotation(warning));
   if (result.errors.length > 0) fail(result.errors.join("\n\n"));
   console.log(`package quarantine policy validated`);
 };
