@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { baseInputs, evaluate } from "./check";
+import { baseInputs, cargoDenyArgs, evaluate } from "./check";
 
 const diagnostic = readFileSync(
   ".github/actions/cargo-deny-advisories/fixtures/advisory.jsonl",
@@ -17,11 +17,40 @@ const NOW = new Date("2026-10-22T12:00:00Z");
 const common = {
   cargoDeny: { exitCode: 1, output: diagnostic },
   config: config(),
-  headLockfile: lockfile(["application", "1.0.0"], ["affected", "2.0.0"]),
+  headLockfile: lockfile(["application", "1.0.0"], ["unsafe-libyaml", "0.2.11"]),
   now: NOW,
 };
 
 describe("cargo-deny advisories gate", () => {
+  test("places every global option before the advisories check", () => {
+    expect(cargoDenyArgs()).toEqual([
+      "cargo",
+      "deny",
+      "--manifest-path",
+      "Cargo.toml",
+      "--config",
+      "deny.toml",
+      "--format",
+      "json",
+      "check",
+      "advisories",
+    ]);
+    const custom = cargoDenyArgs("workspace/Cargo.toml", "policy/deny.toml");
+    expect(custom).toEqual([
+      "cargo",
+      "deny",
+      "--manifest-path",
+      "workspace/Cargo.toml",
+      "--config",
+      "policy/deny.toml",
+      "--format",
+      "json",
+      "check",
+      "advisories",
+    ]);
+    expect(custom.slice(custom.indexOf("check") + 1)).toEqual(["advisories"]);
+  });
+
   test("reads base files from the checked-out directory", () => {
     const directory = mkdtempSync(join(tmpdir(), "cargo-deny-base-"));
     const lockfilePath = "nested/Cargo.lock";
@@ -86,27 +115,27 @@ describe("cargo-deny advisories gate", () => {
       baseLockfile: lockfile(["application", "1.0.0"]),
       changeEvent: true,
     });
-    expect(result.errors.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(result.errors.join("\n")).toContain("RUSTSEC-2024-0449");
   });
 
   test("warns for a pre-existing crate on a change event and fails on push", () => {
     const baseLockfile = common.headLockfile;
     const change = evaluate({ ...common, baseConfig: config(), baseLockfile, changeEvent: true });
     expect(change.errors).toEqual([]);
-    expect(change.warnings.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(change.warnings.join("\n")).toContain("RUSTSEC-2024-0449");
 
     const push = evaluate({ ...common, changeEvent: false });
-    expect(push.errors.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(push.errors.join("\n")).toContain("RUSTSEC-2024-0449");
   });
 
   test("treats an affected crate version bump as new", () => {
     const result = evaluate({
       ...common,
       baseConfig: config(),
-      baseLockfile: lockfile(["application", "1.0.0"], ["affected", "1.0.0"]),
+      baseLockfile: lockfile(["application", "1.0.0"], ["unsafe-libyaml", "0.2.10"]),
       changeEvent: true,
     });
-    expect(result.errors.join("\n")).toContain("affected@2.0.0");
+    expect(result.errors.join("\n")).toContain("unsafe-libyaml@0.2.11");
   });
 
   test("fails a change event when any advisory cannot be attributed", () => {
@@ -160,7 +189,7 @@ describe("cargo-deny advisories gate", () => {
       cargoDeny: { exitCode: 1, output },
       changeEvent: true,
     });
-    expect(result.warnings.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(result.warnings.join("\n")).toContain("RUSTSEC-2024-0449");
     expect(result.errors).toContain(
       "advisory-db-fetch: failed to fetch the advisory database",
     );
@@ -186,7 +215,7 @@ describe("cargo-deny advisories gate", () => {
       changeEvent: true,
     });
     expect(result.errors).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("RUSTSEC-2026-0001");
+    expect(result.warnings.join("\n")).toContain("RUSTSEC-2024-0449");
     expect(result.warnings.join("\n")).not.toContain("advisory-db-stale");
   });
 
@@ -208,6 +237,11 @@ describe("cargo-deny advisories gate", () => {
       baseLockfile: lockfile(["application", "1.0.0"], ["affected", "1.0.0"]),
       cargoDeny: { exitCode: 1, output },
       changeEvent: true,
+      headLockfile: lockfile(
+        ["application", "1.0.0"],
+        ["affected", "1.0.0"],
+        ["affected", "2.0.0"],
+      ),
     });
     expect(result.errors).toEqual([
       "RUSTSEC-2026-0003 affects affected@2.0.0: Multiple versions",
@@ -223,12 +257,14 @@ describe("cargo-deny advisories gate", () => {
   });
 
   test("fails closed on a nonzero cargo-deny exit without diagnostics", () => {
+    const stderr = "error: unexpected argument '--config' found";
     const result = evaluate({
       ...common,
-      cargoDeny: { exitCode: 2, output: "database failed" },
+      cargoDeny: { exitCode: 2, output: stderr, stderr },
       changeEvent: false,
     });
-    expect(result.errors.join("\n")).toContain("without a parseable");
+    expect(result.errors.join("\n")).toContain("code 2");
+    expect(result.errors.join("\n")).toContain(stderr);
   });
 
   test("fails an ignore entry without an owner", () => {
