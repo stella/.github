@@ -51,8 +51,11 @@ const read = (root: string, name: string): string | undefined => {
 };
 
 export const readBunRoots = (root: string, input?: string): string[] => {
-  const values = (input?.trim() || ".").split(/\s+/u);
-  const roots = values.includes(".") ? values : [".", ...values];
+  const declared = input?.trim();
+  const values = declared ? declared.split(/\s+/u) : [];
+  const rootLockfileTracked = tracked(root).includes("bun.lock");
+  const roots =
+    rootLockfileTracked && !values.includes(".") ? [".", ...values] : values;
   const seen = new Set<string>();
   for (const bunRoot of roots) {
     const segments = bunRoot.split("/");
@@ -68,6 +71,8 @@ export const readBunRoots = (root: string, input?: string): string[] => {
     if (seen.has(bunRoot))
       throw new Error(`invalid Bun root "${bunRoot}": roots must be unique`);
     seen.add(bunRoot);
+    if (bunRoot === "." && !rootLockfileTracked)
+      throw new Error(`invalid Bun root ".": bun.lock is not tracked`);
     const directory = path.join(root, bunRoot);
     if (!existsSync(directory) || !statSync(directory).isDirectory())
       throw new Error(
