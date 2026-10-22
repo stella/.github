@@ -330,6 +330,44 @@ describe("Cargo quarantine", () => {
     });
     expect(result).toEqual({ checked: 0, errors: [] });
   });
+  test("only crates.io base packages exempt matching head packages", async () => {
+    const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
+    const registryPackage = cargoGitLock(
+      "stella-x",
+      "registry+https://github.com/rust-lang/crates.io-index",
+    );
+    const basePackages = [
+      cargoGitLock(
+        "stella-x",
+        `git+https://github.com/stella/x?tag=v1.0.0#${commit}`,
+      ),
+      '[[package]]\nname = "stella-x"\nversion = "1.0.0"\n',
+      registryPackage,
+    ];
+    const expectedChecks = [1, 1, 0];
+
+    for (const [index, basePackage] of basePackages.entries()) {
+      let indexLookups = 0;
+      const result = await checkNewCargoReleaseAges({
+        lockfiles: new Map([["Cargo.lock", registryPackage]]),
+        baseLockfiles: new Map([["Cargo.lock", basePackage]]),
+        baseQuarantine: "excludes = []",
+        loadApi: async () => {
+          throw new Error("unexpected crates.io API lookup");
+        },
+        loadIndex: async () => {
+          indexLookups++;
+          return JSON.stringify({
+            vers: "1.0.0",
+            pubtime: "2026-08-20T12:00:00.000Z",
+          });
+        },
+        now: NOW,
+      });
+      expect(result).toEqual({ checked: expectedChecks[index], errors: [] });
+      expect(indexLookups).toBe(expectedChecks[index]);
+    }
+  });
   test("warns for expired exceptions on push and schedule", () => {
     const input = {
       quarantine: quarantine(

@@ -104,6 +104,8 @@ export const checkNewCargoReleaseAges = async ({
         : readCargoPackages(baseLockfiles.get(file) ?? "")
             .filter(
               (pkg) =>
+                classifyCargoSource(pkg.name, pkg.source).kind ===
+                  "crates-io" &&
                 !baseExcludes.has(pkg.name) &&
                 !baseExcludes.has(`${pkg.name}@${pkg.version}`),
             )
