@@ -147,6 +147,67 @@ test("detects unsupported locks and unlocked manifests", () => {
   }
 });
 
+test("screens the root manifest independently from declared Bun roots", () => {
+  const root = mkdtempSync(join(tmpdir(), "quarantine-root-manifest-"));
+  const validBunfig =
+    "[install]\nminimumReleaseAge = 432000\nminimumReleaseAgeExcludes = []\n";
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "plugins/vscode"), { recursive: true });
+    writeFileSync(join(root, "package.json"), "{}");
+    writeFileSync(join(root, "plugins/vscode/bun.lock"), '{"packages":{}}');
+    writeFileSync(join(root, "plugins/vscode/bunfig.toml"), validBunfig);
+    writeFileSync(
+      join(root, "plugins/vscode/package.json"),
+      '{"trustedDependencies":[]}',
+    );
+    spawnSync("git", ["add", "."], { cwd: root });
+
+    const nestedBunRoot = ["plugins/vscode"];
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots: nestedBunRoot,
+        eventName: "push",
+        now: NOW,
+      }).errors,
+    ).toContain("unlocked package manifest cannot be screened: package.json");
+
+    writeFileSync(join(root, "bun.lock"), '{"packages":{}}');
+    writeFileSync(join(root, "bunfig.toml"), validBunfig);
+    writeFileSync(join(root, "package.json"), '{"trustedDependencies":[]}');
+    spawnSync("git", ["add", "."], { cwd: root });
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots: [".", ...nestedBunRoot],
+        eventName: "push",
+        now: NOW,
+      }).errors,
+    ).toEqual([]);
+
+    rmSync(join(root, "bun.lock"));
+    rmSync(join(root, "bunfig.toml"));
+    writeFileSync(
+      join(root, "package.json"),
+      '{"packageManager":"pnpm@10.16.0"}',
+    );
+    writeFileSync(join(root, "pnpm-lock.yaml"), pnpmLock);
+    writeFileSync(join(root, "pnpm-workspace.yaml"), workspace);
+    spawnSync("git", ["add", "-A"], { cwd: root });
+    expect(
+      checkRepositoryPolicy({
+        root,
+        bunRoots: nestedBunRoot,
+        eventName: "push",
+        now: NOW,
+      }).errors,
+    ).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("reports a dangling repository .npmrc symlink", () => {
   const root = mkdtempSync(join(tmpdir(), "quarantine-npmrc-"));
   try {

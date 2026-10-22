@@ -488,15 +488,15 @@ export const checkRepositoryPolicy = ({
   const cargoLocks = files.filter((file) => /(^|\/)Cargo\.lock$/u.test(file));
   const effectiveBunRoots =
     bunRoots ?? (files.includes("bun.lock") ? ["."] : []);
-  const bun = effectiveBunRoots.length > 0;
+  const bun = files.includes("bun.lock");
   const pnpm = files.includes("pnpm-lock.yaml");
-  if (
-    !bun &&
-    !pnpm &&
-    cargoLocks.length === 0 &&
-    files.some((file) => /(^|\/)(?:package\.json|Cargo\.toml)$/u.test(file))
-  )
-    errors.push("unlocked package manifest cannot be screened");
+  const unlockedRootManifest = ["package.json", "Cargo.toml"].find((file) =>
+    files.includes(file),
+  );
+  if (!bun && !pnpm && !files.includes("Cargo.lock") && unlockedRootManifest)
+    errors.push(
+      `unlocked package manifest cannot be screened: ${unlockedRootManifest}`,
+    );
   const baseRoot = path.join(root, ".quarantine-base");
   for (const bunRoot of effectiveBunRoots) {
     const bunfigPath = bunPath(bunRoot, "bunfig.toml");
