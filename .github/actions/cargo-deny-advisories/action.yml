@@ -1,0 +1,26 @@
+name: Cargo deny advisories gate
+description: Fail change events only for advisories introduced by their lockfile change
+inputs:
+  manifest-path:
+    description: Path to the Cargo manifest
+    default: Cargo.toml
+  config:
+    description: Path to the cargo-deny configuration
+    default: deny.toml
+  lockfile:
+    description: Path to Cargo.lock
+    default: Cargo.lock
+  base-sha:
+    description: Base commit for pull requests and merge groups
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Check advisories introduced by this change
+      shell: bash
+      env:
+        INPUT_BASE_SHA: ${{ inputs.base-sha }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_LOCKFILE: ${{ inputs.lockfile }}
+        INPUT_MANIFEST_PATH: ${{ inputs.manifest-path }}
+      run: bun "${GITHUB_ACTION_PATH}/check.ts"

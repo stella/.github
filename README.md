@@ -35,6 +35,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `npm-publish-hardened` | Publish pre-packed npm tarballs through trusted publishing |
 | `sync-cargo-workspace-lock` | Synchronize inherited Cargo workspace versions in Cargo.lock |
 | `signed-commit` | Commit working-tree changes through the GitHub API (signed by GitHub) and keep one refresh pull request open |
+| `cargo-deny-advisories` | Fail change events only for advisories affecting crate versions newly added to Cargo.lock |
 
 ### Templates
 
