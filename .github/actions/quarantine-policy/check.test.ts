@@ -1,4 +1,12 @@
-import { readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
   checkQuarantinePolicy,
@@ -45,7 +53,7 @@ jobs:
   pruneWorkflow: `name: Package quarantine prune
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "11 4 * * *"
 permissions:
   contents: read
 jobs:
@@ -123,7 +131,7 @@ describe("quarantine policy", () => {
     );
   });
 
-  test("scopes expired exceptions to the change on PR and merge queue events", () => {
+  test("warns for expired exceptions on PR and merge queue events", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-20T00:00:00.000Z',
     );
@@ -149,9 +157,9 @@ describe("quarantine policy", () => {
         { baseNpmrcPresent: true },
       ];
       for (const change of affectingChanges) {
-        expect(
-          checkQuarantinePolicy({ ...input, ...change }).errors,
-        ).toHaveLength(1);
+        const changed = checkQuarantinePolicy({ ...input, ...change });
+        expect(changed.errors).toEqual([]);
+        expect(changed.warnings).toHaveLength(1);
       }
       expect(
         checkQuarantinePolicy({
@@ -168,15 +176,15 @@ describe("quarantine policy", () => {
     }
   });
 
-  test("expiry fails immediately on main and schedule and can be pruned", () => {
+  test("expiry warns on main and schedule and can be pruned", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-29T12:00:00.000Z',
     );
     for (const eventName of ["push", "schedule"]) {
       const input = { bunfig: candidate, lockfile: "", eventName, now: NOW };
-      expect(checkQuarantinePolicy(input).errors.join("\n")).toContain(
-        "expired",
-      );
+      const result = checkQuarantinePolicy(input);
+      expect(result.errors).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("expired");
       const pruned = pruneExpiredExcludes({ bunfig: candidate, now: NOW });
       expect(pruned.pruned).toEqual(["third-party"]);
       expect(
@@ -388,21 +396,34 @@ describe("quarantine policy", () => {
     ).toContain("must be valid YAML");
   });
 
-  test("allows one hourly schedule on the policy caller", () => {
+  test("accepts exactly one daily prune schedule", () => {
+    const expectedRef = "a".repeat(40);
+    const expectedRepository = "stella/example";
+    const workflows = callerWorkflows({ expectedRef, expectedRepository });
+    expect(
+      validateCallerWorkflowRefs({
+        expectedRef,
+        expectedRepository,
+        ...workflows,
+      }),
+    ).toEqual([]);
+  });
+
+  test("rejects a schedule on the policy caller", () => {
     const expectedRef = "a".repeat(40);
     const expectedRepository = "example/project";
     const workflows = callerWorkflows({ expectedRef, expectedRepository });
     const policyWorkflow = workflows.policyWorkflow.replace(
       "on:\n",
-      'on:\n  schedule:\n    - cron: "17 * * * *"\n',
+      'on:\n  schedule:\n    - cron: "11 4 * * *"\n',
     );
     expect(
       validateCallerWorkflowRefs({
         expectedRef,
         expectedRepository,
         policyWorkflow,
-      }),
-    ).toEqual([]);
+      }).join("\n"),
+    ).toContain("must declare only merge_group and pull_request");
   });
 
   test("rejects caller trigger and condition bypasses", () => {
@@ -455,22 +476,22 @@ describe("quarantine policy", () => {
       {
         expectedError: "must declare required triggers",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          '  schedule:\n    - cron: "17 * * * *"\n',
+          '  schedule:\n    - cron: "11 4 * * *"\n',
           "",
         ),
       },
       {
-        expectedError: "must declare one hourly schedule",
+        expectedError: "must declare one daily schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          "17 * * * *",
-          "17 0 * * *",
+          "11 4 * * *",
+          "11 * * * *",
         ),
       },
       {
-        expectedError: "must declare one hourly schedule",
+        expectedError: "must declare one daily schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          '    - cron: "17 * * * *"\n',
-          '    - cron: "17 * * * *"\n    - cron: "47 * * * *"\n',
+          '    - cron: "11 4 * * *"\n',
+          '    - cron: "11 4 * * *"\n    - cron: "41 16 * * *"\n',
         ),
       },
       {
@@ -566,9 +587,11 @@ describe("quarantine policy", () => {
   });
 
   test("runs strict enforcement independently of pruning on schedule and main push", () => {
-    const workflow = Bun.YAML.parse(
-      readFileSync(".github/workflows/quarantine-prune.yml", "utf8"),
+    const source = readFileSync(
+      ".github/workflows/quarantine-prune.yml",
+      "utf8",
     );
+    const workflow = Bun.YAML.parse(source);
     expect(workflow.concurrency).toEqual({
       "cancel-in-progress": false,
       group: "quarantine-prune-${{ github.repository }}",
@@ -585,6 +608,82 @@ describe("quarantine policy", () => {
     expect(workflow.jobs.propose.if).toBe(
       "(github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && needs.prepare.outputs.changed == 'true'",
     );
+    expect(workflow.jobs.prepare.outputs.patch).toBe(
+      "${{ steps.patch.outputs.patch }}",
+    );
+    const encode = workflow.jobs.prepare.steps.find(
+      (step: { id?: string }) => step.id === "patch",
+    );
+    expect(encode.if).toBe("steps.prune.outputs.changed == 'true'");
+    const prune = workflow.jobs.prepare.steps.find(
+      (step: { id?: string }) => step.id === "prune",
+    );
+    expect(prune.run).toContain(
+      "git diff --binary -- bunfig.toml pnpm-workspace.yaml .cargo/quarantine.toml",
+    );
+    expect(encode.run).toContain("patch_size > 65536");
+    expect(encode.run).toContain("base64 -w0");
+
+    const decode = workflow.jobs.propose.steps.find(
+      (step: { name?: string }) => step.name === "Decode exact removal patch",
+    );
+    expect(decode.env).toEqual({ PATCH: "${{ needs.prepare.outputs.patch }}" });
+    expect(decode.run).toContain(
+      `printf '%s' "$PATCH" | base64 --decode > "$RUNNER_TEMP/quarantine.patch"`,
+    );
+    expect(decode.run).not.toContain("${{");
+    expect(source).not.toContain("actions/upload-artifact");
+    expect(source).not.toContain("actions/download-artifact");
+  });
+
+  test("round-trips binary prune patches through the workflow output commands", () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(".github/workflows/quarantine-prune.yml", "utf8"),
+    );
+    const encode = workflow.jobs.prepare.steps.find(
+      (step: { id?: string }) => step.id === "patch",
+    ).run;
+    const decode = workflow.jobs.propose.steps.find(
+      (step: { name?: string }) => step.name === "Decode exact removal patch",
+    ).run;
+    const directory = mkdtempSync(join(tmpdir(), "quarantine-patch-"));
+    const output = join(directory, "github-output");
+
+    try {
+      writeFileSync(
+        join(directory, "quarantine.patch"),
+        Buffer.concat([
+          Buffer.from("$HOME; $(false); `false`; ' \\"),
+          Buffer.from([0xff]),
+        ]),
+      );
+
+      const encoded = Bun.spawnSync(["bash", "-c", encode], {
+        cwd: directory,
+        env: { ...process.env, GITHUB_OUTPUT: output, RUNNER_TEMP: directory },
+      });
+      expect(encoded.exitCode).toBe(0);
+      const expected = readFileSync(join(directory, "quarantine.patch"));
+      const outputLine = readFileSync(output, "utf8");
+      expect(outputLine).toMatch(/^patch=[A-Za-z0-9+/=]+\n$/);
+      unlinkSync(join(directory, "quarantine.patch"));
+
+      const decoded = Bun.spawnSync(["bash", "-c", decode], {
+        cwd: directory,
+        env: {
+          ...process.env,
+          PATCH: outputLine.trimEnd().slice("patch=".length),
+          RUNNER_TEMP: directory,
+        },
+      });
+      expect(decoded.exitCode).toBe(0);
+      expect(readFileSync(join(directory, "quarantine.patch"))).toEqual(
+        expected,
+      );
+      expect(expected.includes(0xff)).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("checks newly locked versions against the trusted merge base", () => {

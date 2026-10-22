@@ -21,6 +21,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
 | `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
 | `package-consumer-compat.yml` | Check packed packages on the consumer toolchain nightly |
+| `quarantine-prune.yml` | Remove expired dependency-quarantine exceptions without storing artifacts, including for private self-hosted callers |
 
 ### Composite Actions
 

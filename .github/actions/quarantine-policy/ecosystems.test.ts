@@ -157,6 +157,23 @@ describe("pnpm quarantine", () => {
       }).errors.join("\n"),
     ).toContain("10.16.0");
   });
+  test("warns for expired exceptions on push and schedule", () => {
+    const expiredWorkspace = workspace.replace(
+      "2026-08-30T12:00:00.000Z",
+      "2026-08-20T12:00:00.000Z",
+    );
+    for (const eventName of ["push", "schedule"]) {
+      const result = checkPnpmPolicy({
+        workspace: expiredWorkspace,
+        lockfile: pnpmLock,
+        packageJson: '{"packageManager":"pnpm@10.16.0"}',
+        eventName,
+        now: NOW,
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("expired");
+    }
+  });
   test("requires every exclusion shape to be an annotated double-quoted line", () => {
     const input = {
       workspace,
@@ -217,6 +234,21 @@ describe("Cargo quarantine", () => {
     expect(
       readCargoPackages(cargoLock()).find((p) => p.name === "local")?.source,
     ).toBeUndefined();
+  });
+  test("warns for expired exceptions on push and schedule", () => {
+    const input = {
+      quarantine: quarantine(
+        '"crate@1.0.0", # quarantine-expires: 2026-08-20T12:00:00.000Z',
+      ),
+      config: '[registry]\nglobal-min-publish-age = "5 days"',
+      lockfiles: new Map([["Cargo.lock", cargoLock()]]),
+      now: NOW,
+    };
+    for (const eventName of ["push", "schedule"]) {
+      const result = checkCargoPolicy({ ...input, eventName });
+      expect(result.errors).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("expired");
+    }
   });
   test("rejects stale excludes and caps new expiry while warning on inherited expiry", () => {
     const input = {

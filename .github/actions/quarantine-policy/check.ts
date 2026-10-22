@@ -19,7 +19,7 @@ export const EXACT_UTC_TIMESTAMP =
 const SHARED_WORKFLOW_PREFIX = "stella/.github/.github/workflows/";
 const REGISTRY_VERSION =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const HOURLY_CRON = /^(?:[0-9]|[1-5][0-9]) \* \* \* \*$/u;
+const DAILY_CRON = /^(?:[0-9]|[1-5][0-9]) (?:[0-9]|1[0-9]|2[0-3]) \* \* \*$/u;
 
 type BlockRange = { end: number; start: number };
 
@@ -287,8 +287,7 @@ export const checkQuarantinePolicy = ({
       continue;
     }
     if (nowMs >= timestampMs) {
-      temporalIssue(
-        entry,
+      warnings.push(
         `${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`,
       );
     } else if (timestampMs > nowMs + REQUIRED_RELEASE_AGE_SECONDS * 1000) {
@@ -405,19 +404,14 @@ export const validateCallerWorkflowRefs = ({
     ) {
       return [`.github/workflows/${name} must restrict push to main`];
     }
-    const { schedule, ...requiredTriggers } = otherTriggers;
-    const allowedSchedule =
-      name === "quarantine-policy.yml" && schedule !== undefined;
-    const triggers = Object.keys(
-      allowedSchedule ? requiredTriggers : otherTriggers,
-    ).sort();
+    const triggers = Object.keys(otherTriggers).sort();
     if (triggers.join(",") !== [...expectedTriggers].sort().join(",")) {
       return [
         `.github/workflows/${name} must declare only ${expectedTriggers.join(" and ")}`,
       ];
     }
     if (name === "quarantine-policy.yml") {
-      const invalidTrigger = Object.values(requiredTriggers).some(
+      const invalidTrigger = Object.values(otherTriggers).some(
         (value) =>
           value !== null &&
           (typeof value !== "object" || Object.keys(value).length !== 0),
@@ -428,7 +422,8 @@ export const validateCallerWorkflowRefs = ({
         ];
       }
     }
-    if (name === "quarantine-prune.yml" || allowedSchedule) {
+    if (name === "quarantine-prune.yml") {
+      const schedule = otherTriggers.schedule;
       if (
         !Array.isArray(schedule) ||
         schedule.length !== 1 ||
@@ -437,9 +432,9 @@ export const validateCallerWorkflowRefs = ({
         !("cron" in schedule[0]) ||
         typeof schedule[0].cron !== "string" ||
         Object.keys(schedule[0]).length !== 1 ||
-        !HOURLY_CRON.test(schedule[0].cron)
+        !DAILY_CRON.test(schedule[0].cron)
       ) {
-        return [`.github/workflows/${name} must declare one hourly schedule`];
+        return [`.github/workflows/${name} must declare one daily schedule`];
       }
     }
     if (
