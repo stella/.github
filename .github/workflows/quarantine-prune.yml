@@ -2,6 +2,12 @@ name: Package quarantine prune
 
 on:
   workflow_call:
+    inputs:
+      runs-on:
+        description: "Runner labels as a JSON array"
+        required: false
+        type: string
+        default: '["ubuntu-24.04"]'
     secrets:
       CHANGELOG_APP_ID:
         description: GitHub App ID used to maintain the removal PR.
@@ -26,11 +32,13 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/quarantine-policy.yml
+    with:
+      runs-on: ${{ inputs.runs-on }}
 
   prepare:
     name: Prepare expired exception removal
     if: github.repository_owner == 'stella' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -60,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           bun .quarantine-policy/.github/actions/quarantine-policy/check.ts --prune
-          if git diff --quiet -- bunfig.toml; then
+          if git diff --quiet -- bunfig.toml pnpm-workspace.yaml .cargo/quarantine.toml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -68,20 +76,20 @@ jobs:
           bun .quarantine-policy/.github/actions/quarantine-policy/check.ts \
             "${{ job.workflow_sha }}" \
             "${{ github.repository }}"
-          git diff --binary -- bunfig.toml > "$RUNNER_TEMP/bunfig.patch"
+          git diff --binary -- bunfig.toml pnpm-workspace.yaml .cargo/quarantine.toml > "$RUNNER_TEMP/quarantine.patch"
       - name: Upload exact removal patch
         if: steps.prune.outputs.changed == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: quarantine-prune-${{ github.run_id }}
-          path: ${{ runner.temp }}/bunfig.patch
+          path: ${{ runner.temp }}/quarantine.patch
           if-no-files-found: error
 
   propose:
     name: Propose expired exception removal
     needs: prepare
     if: (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && needs.prepare.outputs.changed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -108,12 +116,13 @@ jobs:
       - name: Validate exact removal
         run: |
           set -euo pipefail
-          git apply --check "$RUNNER_TEMP/quarantine-prune/bunfig.patch"
-          git apply "$RUNNER_TEMP/quarantine-prune/bunfig.patch"
+          git apply --check "$RUNNER_TEMP/quarantine-prune/quarantine.patch"
+          git apply "$RUNNER_TEMP/quarantine-prune/quarantine.patch"
           bun .quarantine-policy/.github/actions/quarantine-policy/check.ts \
             "${{ job.workflow_sha }}" \
             "${{ github.repository }}"
-          test "$(git diff --name-only)" = "bunfig.toml"
+          test -n "$(git diff --name-only)"
+          test -z "$(git diff --name-only | grep -Ev '^(bunfig.toml|pnpm-workspace.yaml|.cargo/quarantine.toml)$')"
           git diff --check
       - name: Mint narrow release app token
         id: app-token
@@ -130,7 +139,7 @@ jobs:
           mode: refresh-pr
           branch: ${{ env.PRUNE_BRANCH }}
           base: ${{ github.event.repository.default_branch }}
-          paths: bunfig.toml
+          paths: bunfig.toml pnpm-workspace.yaml .cargo/quarantine.toml
           commit-message: "chore(deps): remove expired quarantine excludes"
           pr-title: "chore(deps): remove expired quarantine excludes"
-          pr-body: "Expired temporary exceptions are removed once Bun's normal five-day release-age gate admits the pinned versions."
+          pr-body: "Expired temporary exceptions are removed once the ecosystem's normal five-day release-age gate admits the pinned versions."

@@ -106,11 +106,11 @@ describe("quarantine policy", () => {
 
   test("uses non-following current npmrc detection", () => {
     const source = readFileSync(
-      ".github/actions/quarantine-policy/check.ts",
+      ".github/actions/quarantine-policy/ecosystems.ts",
       "utf8",
     );
     expect(source).toContain(
-      'npmrcPresent: pathEntryExists(path.join(root, ".npmrc"))',
+      'npmrcPresent: existsSync(path.join(root, ".npmrc"))',
     );
   });
 
@@ -448,7 +448,7 @@ describe("quarantine policy", () => {
       path: ".quarantine-base",
       "persist-credentials": false,
       ref: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
-      "sparse-checkout": "bun.lock\nbunfig.toml\n.npmrc\n",
+      "sparse-checkout": "bun.lock\nbunfig.toml\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\n.npmrc\n.cargo/quarantine.toml\n.cargo/config.toml\n**/Cargo.lock\n",
       "sparse-checkout-cone-mode": false,
     });
     const lockAge = workflow.jobs.enforce.steps.find(

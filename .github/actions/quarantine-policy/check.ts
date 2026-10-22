@@ -1,6 +1,7 @@
-import { lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { readNewLockedRegistryVersions } from "./lockfile";
+import { checkRepositoryPolicy, pruneRepositoryExcludes } from "./ecosystems";
 
 export const isChangeEvent = (eventName: string): boolean =>
   eventName === "pull_request" || eventName === "merge_group";
@@ -9,7 +10,6 @@ export const warningAnnotation = (message: string): string =>
   `::warning::${message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`;
 
 const BUNFIG = "bunfig.toml";
-const LOCKFILE = "bun.lock";
 export const REQUIRED_RELEASE_AGE_SECONDS = 5 * 24 * 60 * 60;
 export const NPM_REGISTRY = "https://registry.npmjs.org";
 const EXPIRY_MARKER = "quarantine-expires:";
@@ -252,6 +252,8 @@ export const checkQuarantinePolicy = ({
     }
     if (nowMs >= timestampMs) {
       temporalIssue(entry, `${BUNFIG} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`);
+    } else if (timestampMs > nowMs + REQUIRED_RELEASE_AGE_SECONDS * 1000) {
+      temporalIssue(entry, `${BUNFIG} temporary quarantine exclude "${entry.name}" expires more than ${REQUIRED_RELEASE_AGE_SECONDS} seconds after the policy clock`);
     }
   }
 
@@ -432,30 +434,14 @@ export const validateCallerWorkflowRefs = ({
 
 const run = () => {
   const root = process.cwd();
-  const bunfigPath = path.join(root, BUNFIG);
-  const bunfig = readFileSync(bunfigPath, "utf8");
   if (process.argv.includes("--prune")) {
-    const result = pruneExpiredExcludes({ bunfig, now: new Date() });
-    if (result.pruned.length > 0) writeFileSync(bunfigPath, result.bunfig);
-    console.log(`${BUNFIG}: removed ${result.pruned.length} expired quarantine exclude(s)`);
+    const result = pruneRepositoryExcludes({ root, now: new Date() });
+    console.log(`removed ${result} expired quarantine exclude(s)`);
     return;
   }
 
   const eventName = process.env.GITHUB_EVENT_NAME ?? "push";
-  const readBase = (name: string): string | undefined => {
-    const file = path.join(root, ".quarantine-base", name);
-    return pathEntryExists(file) ? readFileSync(file, "utf8") : undefined;
-  };
-  const result = checkQuarantinePolicy({
-    bunfig,
-    eventName,
-    now: new Date(),
-    baseBunfig: isChangeEvent(eventName) ? readBase(BUNFIG) : undefined,
-    baseLockfile: isChangeEvent(eventName) ? readBase(LOCKFILE) : undefined,
-    baseNpmrcPresent: isChangeEvent(eventName) && pathEntryExists(path.join(root, ".quarantine-base", ".npmrc")),
-    lockfile: readFileSync(path.join(root, LOCKFILE), "utf8"),
-    npmrcPresent: pathEntryExists(path.join(root, ".npmrc")),
-  });
+  const result = checkRepositoryPolicy({ root, eventName, now: new Date() });
   const expectedRef = process.argv[2];
   if (expectedRef !== undefined) {
     const expectedRepository = process.argv[3];
@@ -479,7 +465,7 @@ const run = () => {
   }
   for (const warning of result.warnings) console.warn(warningAnnotation(warning));
   if (result.errors.length > 0) fail(result.errors.join("\n\n"));
-  console.log(`${BUNFIG}: package quarantine policy validated`);
+  console.log(`package quarantine policy validated`);
 };
 
 if (import.meta.main) run();
