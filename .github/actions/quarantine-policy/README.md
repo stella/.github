@@ -60,14 +60,16 @@ and are not screened.
 For a security hotfix, add the exact `"name@version"` with
 `quarantine-expires:` set to its publication time plus five days. An expiry more
 than five days after the check clock is rejected, preventing a standing bypass.
-The hourly prune workflow removes the entry at that instant. First-party
+The daily prune workflow removes the entry after that instant. First-party
 `@stll/` packages and `stella-` or `stella_` crates instead use a bare name with
 `quarantine-excluded-since:`.
 
-On pull requests and merge groups, unchanged expired exceptions produce warning
-annotations; new or changed exceptions and affected locked versions fail. A
-missing or invalid trusted base fails closed. Main and scheduled checks fail on
-all expired entries.
+Expired temporary exceptions produce warning annotations on every event. They
+are harmless because each exception names one exact version and expires at that
+version's publication time plus five days, when the normal release-age gate
+admits it. New or changed exceptions that expire more than five days after the
+policy clock still fail, as do affected newly locked versions and a missing or
+invalid trusted base.
 
 ## Reusable workflows
 
@@ -83,11 +85,18 @@ jobs:
 ```
 
 The default is `'["ubuntu-24.04"]'`. Policy callers retain `pull_request` and
-`merge_group` triggers; prune callers retain one hourly schedule. A `push`
-trigger, when present, must be restricted to `main`. Repositories outside the
-`stella` organization do not need a prune caller; instead, add a `schedule`
-trigger with exactly one hourly cron expression to the policy caller so expired
-exceptions are still enforced promptly.
+`merge_group` triggers and must not declare a schedule. A `push` trigger, when
+present, must be restricted to `main`. Prune callers use exactly one daily
+schedule, for example:
+
+```yaml
+on:
+  schedule:
+    - cron: "11 4 * * *"
+```
+
+Repositories outside the `stella` organization need no prune caller and carry
+no schedule on their policy caller.
 
 The prune workflow stores no artifacts, so private repositories can call it on
 self-hosted runners that forbid artifact storage.

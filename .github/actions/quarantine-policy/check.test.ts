@@ -53,7 +53,7 @@ jobs:
   pruneWorkflow: `name: Package quarantine prune
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "11 4 * * *"
 permissions:
   contents: read
 jobs:
@@ -131,7 +131,7 @@ describe("quarantine policy", () => {
     );
   });
 
-  test("scopes expired exceptions to the change on PR and merge queue events", () => {
+  test("warns for expired exceptions on PR and merge queue events", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-20T00:00:00.000Z',
     );
@@ -157,9 +157,9 @@ describe("quarantine policy", () => {
         { baseNpmrcPresent: true },
       ];
       for (const change of affectingChanges) {
-        expect(
-          checkQuarantinePolicy({ ...input, ...change }).errors,
-        ).toHaveLength(1);
+        const changed = checkQuarantinePolicy({ ...input, ...change });
+        expect(changed.errors).toEqual([]);
+        expect(changed.warnings).toHaveLength(1);
       }
       expect(
         checkQuarantinePolicy({
@@ -176,15 +176,15 @@ describe("quarantine policy", () => {
     }
   });
 
-  test("expiry fails immediately on main and schedule and can be pruned", () => {
+  test("expiry warns on main and schedule and can be pruned", () => {
     const candidate = bunfig(
       '  "third-party", # quarantine-expires: 2026-08-29T12:00:00.000Z',
     );
     for (const eventName of ["push", "schedule"]) {
       const input = { bunfig: candidate, lockfile: "", eventName, now: NOW };
-      expect(checkQuarantinePolicy(input).errors.join("\n")).toContain(
-        "expired",
-      );
+      const result = checkQuarantinePolicy(input);
+      expect(result.errors).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("expired");
       const pruned = pruneExpiredExcludes({ bunfig: candidate, now: NOW });
       expect(pruned.pruned).toEqual(["third-party"]);
       expect(
@@ -396,21 +396,34 @@ describe("quarantine policy", () => {
     ).toContain("must be valid YAML");
   });
 
-  test("allows one hourly schedule on the policy caller", () => {
+  test("accepts exactly one daily prune schedule", () => {
+    const expectedRef = "a".repeat(40);
+    const expectedRepository = "stella/example";
+    const workflows = callerWorkflows({ expectedRef, expectedRepository });
+    expect(
+      validateCallerWorkflowRefs({
+        expectedRef,
+        expectedRepository,
+        ...workflows,
+      }),
+    ).toEqual([]);
+  });
+
+  test("rejects a schedule on the policy caller", () => {
     const expectedRef = "a".repeat(40);
     const expectedRepository = "example/project";
     const workflows = callerWorkflows({ expectedRef, expectedRepository });
     const policyWorkflow = workflows.policyWorkflow.replace(
       "on:\n",
-      'on:\n  schedule:\n    - cron: "17 * * * *"\n',
+      'on:\n  schedule:\n    - cron: "11 4 * * *"\n',
     );
     expect(
       validateCallerWorkflowRefs({
         expectedRef,
         expectedRepository,
         policyWorkflow,
-      }),
-    ).toEqual([]);
+      }).join("\n"),
+    ).toContain("must declare only merge_group and pull_request");
   });
 
   test("rejects caller trigger and condition bypasses", () => {
@@ -463,22 +476,22 @@ describe("quarantine policy", () => {
       {
         expectedError: "must declare required triggers",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          '  schedule:\n    - cron: "17 * * * *"\n',
+          '  schedule:\n    - cron: "11 4 * * *"\n',
           "",
         ),
       },
       {
-        expectedError: "must declare one hourly schedule",
+        expectedError: "must declare one daily schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          "17 * * * *",
-          "17 0 * * *",
+          "11 4 * * *",
+          "11 * * * *",
         ),
       },
       {
-        expectedError: "must declare one hourly schedule",
+        expectedError: "must declare one daily schedule",
         pruneWorkflow: workflows.pruneWorkflow.replace(
-          '    - cron: "17 * * * *"\n',
-          '    - cron: "17 * * * *"\n    - cron: "47 * * * *"\n',
+          '    - cron: "11 4 * * *"\n',
+          '    - cron: "11 4 * * *"\n    - cron: "41 16 * * *"\n',
         ),
       },
       {

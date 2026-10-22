@@ -130,7 +130,7 @@ const validateMarkers = ({
         `${file} third-party quarantine exclude "${entry.name}" must use quarantine-expires:`,
       );
     } else if (time <= now.getTime()) {
-      temporal(
+      warnings.push(
         `${file} temporary quarantine exclude "${entry.name}" expired at ${entry.timestamp} and is still present`,
       );
     } else if (time > now.getTime() + REQUIRED_RELEASE_AGE_SECONDS * 1000) {
