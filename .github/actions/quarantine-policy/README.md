@@ -88,3 +88,6 @@ trigger, when present, must be restricted to `main`. Repositories outside the
 `stella` organization do not need a prune caller; instead, add a `schedule`
 trigger with exactly one hourly cron expression to the policy caller so expired
 exceptions are still enforced promptly.
+
+The prune workflow stores no artifacts, so private repositories can call it on
+self-hosted runners that forbid artifact storage.
