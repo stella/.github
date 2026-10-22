@@ -1,1 +1,1 @@
-{"type":"diagnostic","fields":{"severity":"error","code":"vulnerability","advisory":{"id":"RUSTSEC-2026-0001","title":"Example vulnerability"},"graph":{"nodes":[{"krate":{"name":"affected","version":"2.0.0"}},{"krate":{"name":"application","version":"1.0.0"}}]}}}
+{"type":"diagnostic","fields":{"severity":"error","code":"vulnerability","advisory":{"id":"RUSTSEC-2026-0001","title":"Example vulnerability"},"graphs":[{"Krate":{"name":"affected","version":"2.0.0"},"parents":[]}]}}

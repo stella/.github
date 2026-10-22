@@ -50,6 +50,65 @@ describe("cargo-deny advisories gate", () => {
     expect(result.errors.join("\n")).toContain("affected@2.0.0");
   });
 
+  test("fails a change event when any advisory cannot be attributed", () => {
+    const output = [
+      JSON.stringify({
+        type: "diagnostic",
+        fields: {
+          severity: "error",
+          advisory: { id: "RUSTSEC-2026-0001", title: "Attributed" },
+          graphs: [{ Krate: { name: "affected", version: "2.0.0" }, parents: [] }],
+        },
+      }),
+      JSON.stringify({
+        type: "diagnostic",
+        fields: {
+          severity: "error",
+          advisory: { id: "RUSTSEC-2026-0002", title: "Unattributed" },
+          graphs: [],
+        },
+      }),
+    ].join("\n");
+    const result = evaluate({
+      ...common,
+      baseConfig: config(),
+      baseLockfile: common.headLockfile,
+      cargoDeny: { exitCode: 1, output },
+      changeEvent: true,
+    });
+    expect(result.warnings.join("\n")).toContain("RUSTSEC-2026-0001 affects affected@2.0.0");
+    expect(result.errors).toContain(
+      "RUSTSEC-2026-0002: cannot attribute advisory to a locked crate",
+    );
+  });
+
+  test("fails for the new version when one diagnostic affects two versions", () => {
+    const output = JSON.stringify({
+      type: "diagnostic",
+      fields: {
+        severity: "error",
+        advisory: { id: "RUSTSEC-2026-0003", title: "Multiple versions" },
+        graphs: [
+          { Krate: { name: "affected", version: "1.0.0" }, parents: [] },
+          { krate: { name: "affected", version: "2.0.0" }, parents: [] },
+        ],
+      },
+    });
+    const result = evaluate({
+      ...common,
+      baseConfig: config(),
+      baseLockfile: lockfile(["application", "1.0.0"], ["affected", "1.0.0"]),
+      cargoDeny: { exitCode: 1, output },
+      changeEvent: true,
+    });
+    expect(result.errors).toEqual([
+      "RUSTSEC-2026-0003 affects affected@2.0.0: Multiple versions",
+    ]);
+    expect(result.warnings).toEqual([
+      "RUSTSEC-2026-0003 affects affected@1.0.0: Multiple versions",
+    ]);
+  });
+
   test("fails closed when the base lockfile is unreadable", () => {
     const result = evaluate({ ...common, baseConfig: config(), changeEvent: true });
     expect(result.errors).toContain("base lockfile could not be read");
@@ -94,5 +153,17 @@ describe("cargo-deny advisories gate", () => {
 
     const push = evaluate({ ...input, changeEvent: false });
     expect(push.errors.join("\n")).toContain("expired");
+  });
+
+  test("accepts semicolon-separated waiver metadata", () => {
+    const result = evaluate({
+      ...common,
+      cargoDeny: { exitCode: 0, output: "" },
+      changeEvent: false,
+      config: config(
+        '{ id = "RUSTSEC-1", reason = "owner: supply-chain; expires: 2026-11-01; no fix released" }',
+      ),
+    });
+    expect(result.errors).toEqual([]);
   });
 });

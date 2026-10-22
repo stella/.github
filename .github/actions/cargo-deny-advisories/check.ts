@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-type Advisory = { crate: string; id: string; title: string };
+type Advisory = { crate?: string; id: string; title: string };
 type Result = { errors: string[]; warnings: string[] };
 type CommandResult = { exitCode: number; output: string };
 
@@ -13,19 +13,18 @@ const record = (value: unknown): Record<string, unknown> | undefined =>
     ? (value as Record<string, unknown>)
     : undefined;
 
-const crateFromGraph = (graphValue: unknown): string | undefined => {
-  const graph = record(graphValue);
-  const nodes = graph?.nodes;
-  if (!Array.isArray(nodes)) return undefined;
+const cratesFromGraphs = (graphsValue: unknown): string[] => {
+  if (!Array.isArray(graphsValue)) return [];
 
-  for (const nodeValue of nodes) {
-    const node = record(nodeValue);
-    const crate = record(node?.krate) ?? record(node?.crate) ?? node;
+  const crates = new Set<string>();
+  for (const graphValue of graphsValue) {
+    const graph = record(graphValue);
+    const crate = record(graph?.Krate) ?? record(graph?.krate);
     if (typeof crate?.name === "string" && typeof crate.version === "string") {
-      return `${crate.name}@${crate.version}`;
+      crates.add(`${crate.name}@${crate.version}`);
     }
   }
-  return undefined;
+  return [...crates];
 };
 
 export const parseAdvisories = (output: string): Advisory[] => {
@@ -48,10 +47,7 @@ export const parseAdvisories = (output: string): Advisory[] => {
     ) {
       continue;
     }
-    const crate = crateFromGraph(fields.graph);
-    if (crate === undefined) continue;
-    advisories.push({
-      crate,
+    const parsed = {
       id: advisory.id,
       title:
         typeof advisory.title === "string"
@@ -59,7 +55,10 @@ export const parseAdvisories = (output: string): Advisory[] => {
           : typeof fields.message === "string"
             ? fields.message
             : String(fields.code ?? "advisory"),
-    });
+    };
+    const crates = cratesFromGraphs(fields.graphs);
+    if (crates.length === 0) advisories.push(parsed);
+    else for (const crate of crates) advisories.push({ ...parsed, crate });
   }
   return advisories;
 };
@@ -127,10 +126,10 @@ export const evaluate = ({
 
   for (const waiver of parsedWaivers) {
     const reason = waiver.reason ?? "";
-    if (!/(?:^|\s)owner:\s*\S+/u.test(reason)) {
+    if (!/(?:^|[;\s])owner:\s*[^;\s]+/u.test(reason)) {
       errors.push(`${waiver.id} waiver reason is missing owner: <name>`);
     }
-    const expiry = /(?:^|\s)expires:\s*(\d{4}-\d{2}-\d{2})(?:\s|$)/u.exec(reason)?.[1];
+    const expiry = /(?:^|[;\s])expires:\s*(\d{4}-\d{2}-\d{2})(?=[;\s]|$)/u.exec(reason)?.[1];
     if (expiry === undefined) {
       errors.push(`${waiver.id} waiver reason is missing expires: YYYY-MM-DD`);
       continue;
@@ -155,6 +154,15 @@ export const evaluate = ({
     return { errors, warnings };
   }
 
+  const attributedAdvisories: Array<Advisory & { crate: string }> = [];
+  for (const advisory of advisories) {
+    if (advisory.crate === undefined) {
+      errors.push(`${advisory.id}: cannot attribute advisory to a locked crate`);
+    } else {
+      attributedAdvisories.push(advisory as Advisory & { crate: string });
+    }
+  }
+
   let newCrates = new Set<string>();
   if (changeEvent) {
     if (baseLockfile === undefined) {
@@ -165,7 +173,7 @@ export const evaluate = ({
     newCrates = new Set([...lockedCrates(headLockfile)].filter((crate) => !base.has(crate)));
   }
 
-  for (const advisory of advisories) {
+  for (const advisory of attributedAdvisories) {
     const message = `${advisory.id} affects ${advisory.crate}: ${advisory.title}`;
     if (!changeEvent || newCrates.has(advisory.crate)) errors.push(message);
     else warnings.push(message);

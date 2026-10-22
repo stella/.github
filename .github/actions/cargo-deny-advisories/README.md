@@ -29,9 +29,11 @@ an expiry in its reason:
 ```toml
 [advisories]
 ignore = [
-  { id = "RUSTSEC-2026-0001", reason = "owner: platform expires: 2026-12-01" },
+  { id = "RUSTSEC-2026-0001", reason = "owner: supply-chain; expires: 2026-11-01; no fix released" },
 ]
 ```
+
+Separate `owner:` and `expires:` with whitespace or a semicolon.
 
 Missing metadata always fails. An expired waiver fails routine runs; on a change
 event it warns only when the complete entry is unchanged from the base config.
