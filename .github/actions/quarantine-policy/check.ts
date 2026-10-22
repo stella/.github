@@ -177,6 +177,7 @@ export const checkQuarantinePolicy = ({
   eventName = "push",
   lockfile,
   npmrcPresent = false,
+  npmrcPath = ".npmrc",
   now,
   bunfigPath = BUNFIG,
 }: {
@@ -187,6 +188,7 @@ export const checkQuarantinePolicy = ({
   eventName?: string;
   lockfile: string;
   npmrcPresent?: boolean;
+  npmrcPath?: string;
   now: Date;
   bunfigPath?: string;
 }): CheckResult => {
@@ -208,7 +210,7 @@ export const checkQuarantinePolicy = ({
   }
   if (npmrcPresent) {
     errors.push(
-      `${bunfigPath} quarantine policy does not allow a repository .npmrc`,
+      `${bunfigPath} quarantine policy does not allow a repository ${npmrcPath}`,
     );
   }
 
@@ -603,7 +605,7 @@ const run = () => {
       bunRoot === "." ? "bunfig.toml" : `${bunRoot}/bunfig.toml`,
     );
     const sparse = bunRoots.flatMap((bunRoot) =>
-      ["bun.lock", "bunfig.toml", "package.json"].map((file) =>
+      ["bun.lock", "bunfig.toml", "package.json", ".npmrc"].map((file) =>
         bunRoot === "." ? file : `${bunRoot}/${file}`,
       ),
     );

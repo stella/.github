@@ -127,7 +127,7 @@ describe("quarantine policy", () => {
       "utf8",
     );
     expect(source).toContain(
-      'npmrcPresent: pathEntryExists(path.join(root, ".npmrc"))',
+      "npmrcPresent: pathEntryExists(path.join(root, npmrcPath))",
     );
   });
 

@@ -502,6 +502,7 @@ export const checkRepositoryPolicy = ({
     const bunfigPath = bunPath(bunRoot, "bunfig.toml");
     const lockfilePath = bunPath(bunRoot, "bun.lock");
     const packageJsonPath = bunPath(bunRoot, "package.json");
+    const npmrcPath = bunPath(bunRoot, ".npmrc");
     const bunfig = read(root, bunfigPath);
     const lockfile = read(root, lockfilePath)!;
     const packageJson = read(root, packageJsonPath);
@@ -516,8 +517,9 @@ export const checkRepositoryPolicy = ({
         bunfigPath,
         baseBunfig: read(baseRoot, bunfigPath),
         baseLockfile: read(baseRoot, lockfilePath),
-        npmrcPresent: pathEntryExists(path.join(root, ".npmrc")),
-        baseNpmrcPresent: pathEntryExists(path.join(baseRoot, ".npmrc")),
+        npmrcPresent: pathEntryExists(path.join(root, npmrcPath)),
+        npmrcPath,
+        baseNpmrcPresent: pathEntryExists(path.join(baseRoot, npmrcPath)),
       });
       errors.push(...result.errors);
       warnings.push(...result.warnings);

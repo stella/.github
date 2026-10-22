@@ -425,6 +425,11 @@ const run = async () => {
     const bunfig = path.join(bunRoot, BUNFIG);
     const baseLockfile = path.join(".quarantine-base", bunRoot, LOCKFILE);
     const baseBunfig = path.join(".quarantine-base", bunRoot, BUNFIG);
+    const baseRootNpmrc = path.join(
+      path.dirname(baseNpmrcPath),
+      bunRoot,
+      path.basename(baseNpmrcPath),
+    );
     const result = await checkNewLockedRegistryReleaseAges({
       eventName,
       now,
@@ -434,7 +439,7 @@ const run = async () => {
       baseLockfile: existsSync(baseLockfile)
         ? readFileSync(baseLockfile, "utf8")
         : undefined,
-      baseNpmrcPresent: pathEntryExists(baseNpmrcPath),
+      baseNpmrcPresent: pathEntryExists(baseRootNpmrc),
       bunfig: readFileSync(bunfig, "utf8"),
       bunfigPath: bunRoot === "." ? BUNFIG : bunfig,
       lockfile: readFileSync(lockfile, "utf8"),

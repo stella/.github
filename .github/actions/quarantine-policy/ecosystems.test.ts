@@ -67,7 +67,7 @@ test("CLI writes Bun root outputs for default and additional roots", () => {
 
     expect(runBunRootsOutput(root)).toBe(
       "sparse-checkout<<BUN_ROOTS_OUTPUT\n" +
-        "bun.lock\nbunfig.toml\npackage.json\nBUN_ROOTS_OUTPUT\n" +
+        "bun.lock\nbunfig.toml\npackage.json\n.npmrc\nBUN_ROOTS_OUTPUT\n" +
         "prune-paths<<BUN_ROOTS_OUTPUT\n" +
         "bunfig.toml\npnpm-workspace.yaml\n.cargo/quarantine.toml\n" +
         "BUN_ROOTS_OUTPUT\n" +
@@ -75,9 +75,9 @@ test("CLI writes Bun root outputs for default and additional roots", () => {
     );
     expect(runBunRootsOutput(root, ". plugins/vscode")).toBe(
       "sparse-checkout<<BUN_ROOTS_OUTPUT\n" +
-        "bun.lock\nbunfig.toml\npackage.json\n" +
+        "bun.lock\nbunfig.toml\npackage.json\n.npmrc\n" +
         "plugins/vscode/bun.lock\nplugins/vscode/bunfig.toml\n" +
-        "plugins/vscode/package.json\nBUN_ROOTS_OUTPUT\n" +
+        "plugins/vscode/package.json\nplugins/vscode/.npmrc\nBUN_ROOTS_OUTPUT\n" +
         "prune-paths<<BUN_ROOTS_OUTPUT\n" +
         "bunfig.toml\nplugins/vscode/bunfig.toml\n" +
         "pnpm-workspace.yaml\n.cargo/quarantine.toml\nBUN_ROOTS_OUTPUT\n" +
@@ -255,6 +255,22 @@ test("checks and prunes every declared Bun root", () => {
     }
     spawnSync("git", ["add", "."], { cwd: root });
     const bunRoots = readBunRoots(root, ". plugins/vscode");
+    expect(
+      checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
+        .errors,
+    ).toEqual([]);
+
+    writeFileSync(
+      join(root, "plugins/vscode/.npmrc"),
+      "registry=https://registry.example.com\n",
+    );
+    expect(
+      checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
+        .errors.join("\n"),
+    ).toContain(
+      "plugins/vscode/bunfig.toml quarantine policy does not allow a repository plugins/vscode/.npmrc",
+    );
+    rmSync(join(root, "plugins/vscode/.npmrc"));
     expect(
       checkRepositoryPolicy({ root, bunRoots, eventName: "push", now: NOW })
         .errors,

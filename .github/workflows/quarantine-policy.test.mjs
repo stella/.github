@@ -38,7 +38,7 @@ const noBunOutput =
   "allowed-path-regex=^(pnpm-workspace\\.yaml|\\.cargo/quarantine\\.toml)$\n";
 const rootBunOutput =
   "sparse-checkout<<BUN_ROOTS_OUTPUT\n" +
-  "bun.lock\nbunfig.toml\npackage.json\nBUN_ROOTS_OUTPUT\n" +
+  "bun.lock\nbunfig.toml\npackage.json\n.npmrc\nBUN_ROOTS_OUTPUT\n" +
   "prune-paths<<BUN_ROOTS_OUTPUT\n" +
   "bunfig.toml\npnpm-workspace.yaml\n.cargo/quarantine.toml\nBUN_ROOTS_OUTPUT\n" +
   "allowed-path-regex=^(bunfig\\.toml|pnpm-workspace\\.yaml|\\.cargo/quarantine\\.toml)$\n";
