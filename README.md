@@ -50,46 +50,18 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 
 ## Usage
 
-### Rust NAPI Typecheck and Nightly Parity
+### Rust NAPI Typecheck
 
 Set `typecheck: true` on a trusted `rust-napi-ci.yml` caller to run
-`bun run typecheck` and a seeded-error rejection probe on every call. The
-`Typecheck and parity` job runs `bun run check:typecheck-parity` only when the
-declared Bun or TypeScript toolchain versions differ from the PR base, push
-predecessor, or merge-group base. The comparison also covers Bun types and the
-shared compiler configuration/policy packages. If the base is unavailable, it
-runs parity. The default `parity` mode is `changed`; `always` forces parity. Dependency
-installation is always `bun install --frozen-lockfile`; callers may set the
-structured `install-ignore-scripts` boolean but cannot replace the install
-command. The workflow detects changes to Cargo manifests and lockfiles, Rust
-toolchain files, `crates/**`, and `src/**/*.rs` from the merge base. The
-`rust-changed` input can add a Rust run but cannot suppress one detected by the
-workflow.
-
-Add a separate nightly caller with `parity: always` and `typecheck-only: true`
-to avoid running the native build/test matrix. Pin both callers to the same
-reviewed merge commit. The caller must provide the existing `typecheck`,
-`check:typecheck-parity`, and `check:toolchain` scripts, a pinned Bun
-`packageManager`, and a `src/**/*.ts` input for the rejection probe.
-
-```yaml
-name: Nightly compiler parity
-on:
-  schedule:
-    - cron: "17 2 * * *"
-  workflow_dispatch:
-permissions:
-  contents: read
-jobs:
-  napi-ci:
-    uses: stella/.github/.github/workflows/rust-napi-ci.yml@<reviewed-merge-commit>
-    with:
-      trusted: "true"
-      typecheck: true
-      typecheck-only: true
-      parity: always
-      install-ignore-scripts: false
-```
+`bun run check:toolchain`, `bun run typecheck`, and a seeded-error rejection
+probe on every call. The caller must provide the `typecheck` and
+`check:toolchain` scripts, a pinned Bun `packageManager`, and a `src/**/*.ts`
+input for the rejection probe. Dependency installation is always
+`bun install --frozen-lockfile`; callers may set the structured
+`install-ignore-scripts` boolean but cannot replace the install command. The
+workflow detects changes to Cargo manifests and lockfiles, Rust toolchain
+files, `crates/**`, and `src/**/*.rs` from the merge base. The `rust-changed`
+input can add a Rust run but cannot suppress one detected by the workflow.
 
 ### Package Consumer Compatibility
 
