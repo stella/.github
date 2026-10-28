@@ -148,7 +148,7 @@ jobs:
     if: inputs.trusted == 'true'
     runs-on: ${{ matrix.os }}
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
     permissions:
       contents: read
       packages: read
@@ -169,9 +169,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           targets: wasm32-wasip1-threads
       - name: Ensure cargo on PATH
         # dtolnay/rust-toolchain only prepends $CARGO_HOME/bin to PATH when it
@@ -238,13 +238,13 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
       STELLA_SOURCE_LINT_REV: a1bd81740ecb4b66999f56d1716e1190c4e7272f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           components: clippy, rustfmt
       - name: Ensure cargo on PATH
         # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
@@ -340,7 +340,7 @@ jobs:
     needs: [detect]
     runs-on: macos-15
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
       BUILD_TARGET: x86_64-apple-darwin
       BUILD_KIND: native
     permissions:
@@ -350,9 +350,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           targets: ${{ env.BUILD_TARGET }}
       - name: Ensure cargo on PATH
         # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
@@ -405,7 +405,7 @@ jobs:
     needs: [detect]
     runs-on: macos-15
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
       BUILD_TARGET: aarch64-apple-darwin
       BUILD_KIND: native
     permissions:
@@ -418,7 +418,7 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
       BUILD_TARGET: x86_64-unknown-linux-gnu
       BUILD_KIND: native
     permissions:
@@ -431,7 +431,7 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
       BUILD_TARGET: aarch64-unknown-linux-gnu
       BUILD_KIND: cross
     permissions:
@@ -444,7 +444,7 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.0
+      RUSTUP_TOOLCHAIN: 1.99.1
       BUILD_TARGET: wasm32-wasip1-threads
       BUILD_KIND: wasm
     permissions:

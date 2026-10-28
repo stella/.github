@@ -125,7 +125,7 @@ test("build jobs share steps and keep target, runner and build kind consistent",
     assert.equal(envTarget, target, "artifact target must match the required check");
     const kind = section.match(/BUILD_KIND: ([^\n]+)/u)[1];
     assert.equal(kind, target.startsWith("wasm") ? "wasm" : target === "aarch64-unknown-linux-gnu" ? "cross" : "native");
-    assert.match(section, /RUSTUP_TOOLCHAIN: 1\.99\.0/u);
+    assert.equal(section.match(/RUSTUP_TOOLCHAIN: ([^\n]+)/u)[1], build.match(/toolchain: ([^\n]+)/u)[1]);
     assert.equal(section.match(/runs-on: ([^\n]+)/u)[1], target.includes("apple") ? "macos-15" : "ubuntu-latest");
     if (id !== "build") assert.match(section, /steps: \*build-steps/u);
   }
