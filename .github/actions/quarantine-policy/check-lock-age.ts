@@ -56,6 +56,30 @@ export const loadRegistryMetadata: LoadPackageMetadata = async (name) => {
   throw new Error(lastError);
 };
 
+export const loadCargoRegistryText = async (
+  url: string,
+  headers: Record<string, string> = {},
+) => {
+  let failure = "unknown registry failure";
+  for (let attempt = 0; attempt < MAX_REGISTRY_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers,
+        redirect: "error",
+        signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
+      });
+      if (response.ok) return await response.text();
+      failure = `HTTP ${response.status}`;
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    if (attempt + 1 < MAX_REGISTRY_ATTEMPTS) {
+      await Bun.sleep(REGISTRY_RETRY_DELAY_MS * 2 ** attempt);
+    }
+  }
+  throw new Error(failure);
+};
+
 export const cratesIndexPath = (name: string): string => {
   const value = name.toLowerCase();
   if (value.length === 1) return `1/${value}`;
@@ -475,29 +499,6 @@ const run = async () => {
     .stdout.split("\0")
     .filter(Boolean);
   if (cargoFiles.length) {
-    const fetchWithRetry = async (
-      url: string,
-      headers: Record<string, string> = {},
-    ) => {
-      let failure = "unknown registry failure";
-      for (let attempt = 0; attempt < MAX_REGISTRY_ATTEMPTS; attempt++) {
-        try {
-          const response = await fetch(url, {
-            headers,
-            redirect: "error",
-            signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
-          });
-          if (response.ok) return response;
-          failure = `HTTP ${response.status}`;
-        } catch (error) {
-          failure = error instanceof Error ? error.message : String(error);
-        }
-        if (attempt + 1 < MAX_REGISTRY_ATTEMPTS) {
-          await Bun.sleep(REGISTRY_RETRY_DELAY_MS * 2 ** attempt);
-        }
-      }
-      throw new Error(failure);
-    };
     const quarantine = Bun.TOML.parse(
       readFileSync(".cargo/quarantine.toml", "utf8"),
     ) as { excludes?: string[] };
@@ -525,17 +526,17 @@ const run = async () => {
           ),
         ),
         loadIndex: async (_name, indexPath) =>
-          (await fetchWithRetry(`https://index.crates.io/${indexPath}`)).text(),
+          loadCargoRegistryText(`https://index.crates.io/${indexPath}`),
         loadApi: async (name, version) =>
-          (
-            await fetchWithRetry(
+          JSON.parse(
+            await loadCargoRegistryText(
               `https://crates.io/api/v1/crates/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
               {
                 "User-Agent":
                   "stella-quarantine-policy (https://github.com/stella/.github)",
               },
-            )
-          ).json(),
+            ),
+          ),
       }),
     );
   }

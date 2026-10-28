@@ -87,11 +87,13 @@ const runNestedRootCheck = (nestedExcludes = "") => {
 };
 
 describe("registry metadata retries", () => {
-  for (const scenario of ["recover", "exhaust", "terminal-http"] as const) {
-    test(`${scenario} preserves the bounded registry retry policy`, () => {
-      const script = `
-        import { loadRegistryMetadata } from ${JSON.stringify(CHECK_ENTRY)};
+  for (const registry of ["npm", "cargo"] as const) {
+    for (const scenario of ["recover", "exhaust", "terminal-http"] as const) {
+      test(`${registry} ${scenario} preserves the bounded registry retry policy`, () => {
+        const script = `
+        import { loadRegistryMetadata, loadCargoRegistryText } from ${JSON.stringify(CHECK_ENTRY)};
         const scenario = ${JSON.stringify(scenario)};
+        const registry = ${JSON.stringify(registry)};
         let calls = 0;
         globalThis.fetch = async () => {
           calls++;
@@ -104,33 +106,38 @@ describe("registry metadata retries", () => {
           }));
         };
         try {
-          const metadata = await loadRegistryMetadata("retry-fixture");
+          const metadata = registry === "npm"
+            ? await loadRegistryMetadata("retry-fixture")
+            : JSON.parse(await loadCargoRegistryText("https://index.crates.io/re/tr/retry-fixture"));
           console.log(JSON.stringify({ calls, metadata }));
         } catch (error) {
           console.log(JSON.stringify({ calls, error: error.message }));
         }
       `;
-      const result = spawnSync("bun", ["--eval", script], {
-        encoding: "utf8",
-        timeout: 5000,
+        const result = spawnSync("bun", ["--eval", script], {
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        expect(result.status).toBe(0);
+        const value = JSON.parse(result.stdout);
+        if (scenario === "recover") {
+          expect(value).toEqual({
+            calls: 2,
+            metadata: { time: { "1.0.0": "2020-01-01T00:00:00.000Z" } },
+          });
+        } else {
+          expect(value).toEqual({
+            calls: scenario === "exhaust" || registry === "cargo" ? 3 : 1,
+            error:
+              scenario === "exhaust"
+                ? "metadata body timed out"
+                : registry === "npm"
+                  ? "npm registry returned HTTP 404"
+                  : "HTTP 404",
+          });
+        }
       });
-      expect(result.status).toBe(0);
-      const value = JSON.parse(result.stdout);
-      if (scenario === "recover") {
-        expect(value).toEqual({
-          calls: 2,
-          metadata: { time: { "1.0.0": "2020-01-01T00:00:00.000Z" } },
-        });
-      } else {
-        expect(value).toEqual({
-          calls: scenario === "exhaust" ? 3 : 1,
-          error:
-            scenario === "exhaust"
-              ? "metadata body timed out"
-              : "npm registry returned HTTP 404",
-        });
-      }
-    });
+    }
   }
 });
 
