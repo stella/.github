@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { PYPI_PUBLISH_USE, readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
+import { cratesPublisherRustToolchain, PYPI_PUBLISH_USE, readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
 
 const ref = "1".repeat(40);
 const base = `name: Release
@@ -611,7 +611,8 @@ jobs:
       id-token: write
 `;
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
-    for (const toolchain of ["1.99.0", "stable", "nightly", "1.98.0", "1.99"]) {
+    const expected = cratesPublisherRustToolchain();
+    for (const toolchain of [expected, "stable", "nightly", "0.0.0", "1.99"]) {
       const validate = () =>
         validateReleaseWorkflow(
           workflow.replace(
@@ -620,8 +621,8 @@ jobs:
           ),
           ref,
         );
-      if (toolchain === "1.99.0") expect(validate).not.toThrow();
-      else expect(validate).toThrow("rust-toolchain must be 1.99.0");
+      if (toolchain === expected) expect(validate).not.toThrow();
+      else expect(validate).toThrow(`rust-toolchain must be ${expected}`);
     }
 
     expect(() =>
