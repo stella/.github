@@ -46,8 +46,8 @@ const releaseSecretSource = (name: string, expression: unknown) =>
 const DOWNLOAD_ARTIFACT_USE =
   "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
 const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
-const PYPI_PUBLISH_USE =
-  "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33";
+export const PYPI_PUBLISH_USE =
+  "pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086";
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -748,6 +748,18 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
   validateSecretPairs(secrets, `${label}.secrets`, "required");
 };
 
+export const cratesPublisherRustToolchain = () => {
+  const source = YAML.parse(readFileSync(new URL("../../workflows/crates-io-publish.yml", import.meta.url), "utf8"));
+  const workflow = object(source, "shared crates publisher");
+  const trigger = object(workflow.on, "shared crates publisher.on");
+  const call = object(trigger.workflow_call, "shared crates publisher.workflow_call");
+  const inputs = object(call.inputs, "shared crates publisher.inputs");
+  const input = object(inputs["rust-toolchain"], "shared crates publisher.rust-toolchain");
+  const version = staticString(input.default, "shared crates publisher.rust-toolchain.default");
+  if (!EXACT_RUNTIME_VERSION.test(version)) fail("shared crates publisher must pin an exact Rust version");
+  return version;
+};
+
 const validateCratesPublisher = (job: JsonObject, ref: string, label: string) => {
   rejectUnexpectedKeys(job, REUSABLE_JOB_KEYS, label);
   if (job.uses !== expectedSharedUse("workflows/crates-io-publish.yml", ref)) {
@@ -778,8 +790,9 @@ const validateCratesPublisher = (job: JsonObject, ref: string, label: string) =>
   }
   if ("rust-toolchain" in inputs) {
     const toolchain = staticString(inputs["rust-toolchain"], `${label}.with.rust-toolchain`);
-    if (toolchain !== "1.99.0") {
-      fail(`${label}.with.rust-toolchain must be 1.99.0`);
+    const expected = cratesPublisherRustToolchain();
+    if (toolchain !== expected) {
+      fail(`${label}.with.rust-toolchain must be ${expected}`);
     }
   }
   if ("environment" in inputs && inputs.environment !== "crates-io") {
