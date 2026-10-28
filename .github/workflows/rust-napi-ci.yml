@@ -395,6 +395,7 @@ jobs:
             *.wasm
             !*.debug.wasm
             *.cjs
+            *.wasi*.d.cts
             *.wasi-browser.js
             wasi-worker*.mjs
           if-no-files-found: error
@@ -482,6 +483,7 @@ jobs:
             cp -- "$dir"/*.node . 2>/dev/null || true
             cp -- "$dir"/*.wasm . 2>/dev/null || true
             cp -- "$dir"/*.cjs . 2>/dev/null || true
+            cp -- "$dir"/*.wasi*.d.cts . 2>/dev/null || true
             cp -- "$dir"/*.wasi-browser.js . 2>/dev/null || true
             cp -- "$dir"/wasi-worker*.mjs . 2>/dev/null || true
           done

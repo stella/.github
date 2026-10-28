@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
@@ -135,7 +135,17 @@ test("build jobs share steps and keep target, runner and build kind consistent",
   assert.match(build, /if: env.BUILD_KIND == 'cross'\n[^]*?--use-napi-cross/u);
   assert.match(build, /if: env.BUILD_KIND == 'wasm'\n        run: bun run build:wasm/u);
   assert.match(build, /name: bindings-\$\{\{ env.BUILD_TARGET \}\}/u);
-  assert.match(build, /path: \|\n            \*\.node\n            \*\.wasm\n            !\*\.debug.wasm\n            \*\.cjs\n            \*\.wasi-browser.js\n            wasi-worker\*\.mjs\n          if-no-files-found: error/u);
+  const paths = build.match(/          path: \|\n((?:            [^\n]+\n)+)/u)[1].trim().split(/\s+/u);
+  const selected = (file) => paths.some((pattern) => !pattern.startsWith("!") && matchesGlob(file, pattern)) && !paths.some((pattern) => pattern.startsWith("!") && matchesGlob(file, pattern.slice(1)));
+  for (const binary of ["binding", "custom-native-name"]) {
+    // NAPI's artifact collector consumes the declaration together with each
+    // WASI loader; a successful runtime-only smoke cannot prove this bundle.
+    for (const file of [`${binary}.wasm32-wasi.wasm`, `${binary}.wasi.cjs`, `${binary}.wasi.d.cts`, `${binary}.wasi-browser.js`, "wasi-worker.mjs", "wasi-worker-browser.mjs"]) {
+      assert.ok(selected(file), `artifact bundle omits ${file}`);
+    }
+    assert.equal(selected(`${binary}.debug.wasm`), false);
+  }
+  assert.match(build, /if-no-files-found: error/u);
 });
 
 test("test jobs share artifact handling and run extra property tests only on Linux", () => {
