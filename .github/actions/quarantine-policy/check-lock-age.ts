@@ -41,7 +41,9 @@ export const loadRegistryMetadata: LoadPackageMetadata = async (name) => {
         redirect: "error",
         signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
       });
-      if (response.ok) return response.json();
+      // The timeout also covers body consumption; keep its rejection inside the
+      // attempt so a stalled body receives the same bounded retry as headers.
+      if (response.ok) return await response.json();
       lastError = `npm registry returned HTTP ${response.status}`;
       if (response.status !== 429 && response.status < 500) break;
     } catch (error) {
