@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
+import { PYPI_PUBLISH_USE, readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
 
 const ref = "1".repeat(40);
 const base = `name: Release
@@ -38,7 +38,7 @@ jobs:
           distribution-name: example
           expected-version: 1.2.3
           wheel-contract: '{"python-wheel-linux":["manylinux_2_17_x86_64"]}'
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+      - uses: ${PYPI_PUBLISH_USE}
         with:
           packages-dir: dist
           skip-existing: true
@@ -695,15 +695,15 @@ jobs:
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
     ["dual Bun version sources", bunFileBase.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
-    ["publisher command", base.replace(`      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33`, "      - run: npm install")],
+    ["publisher command", base.replace(`      - uses: ${PYPI_PUBLISH_USE}`, "      - run: npm install")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)", "    if: true")],
     ["publisher guard bypass", base.replace("github.ref == 'refs/heads/main' && (true)", "github.ref == 'refs/heads/main' && (true) || true")],
     ["publisher secret inheritance", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi-publish-hardened", "    secrets: inherit\n    steps:\n      - uses: stella/.github/.github/actions/pypi-publish-hardened")],
     ["unexpected PyPI input", base.replace("      wheel-contract:", "      attacker-input: value\n      wheel-contract:")],
     ["empty wheel contract", base.replace("'{\"python-wheel-linux\":[\"manylinux_2_17_x86_64\"]}'", "'{}'")],
-    ["publisher order drift", base.replace("      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33", `      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}`)],
-    ["publisher conditional step", base.replace("      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33", "      - if: always()\n        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33")],
+    ["publisher order drift", base.replace(`      - uses: ${PYPI_PUBLISH_USE}`, `      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}`)],
+    ["publisher conditional step", base.replace(`      - uses: ${PYPI_PUBLISH_USE}`, `      - if: always()\n        uses: ${PYPI_PUBLISH_USE}`)],
     ["publisher wrong directory", base.replace("          packages-dir: dist", "          packages-dir: wheel-artifacts")],
     ["publisher unsafe recovery", base.replace("          skip-existing: true", "          skip-existing: false")],
     ["publisher verification identity drift", base.replace(`      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}\n        with:\n          project-name: example`, `      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}\n        with:\n          project-name: attacker`)],

@@ -46,8 +46,8 @@ const releaseSecretSource = (name: string, expression: unknown) =>
 const DOWNLOAD_ARTIFACT_USE =
   "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
 const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
-const PYPI_PUBLISH_USE =
-  "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33";
+export const PYPI_PUBLISH_USE =
+  "pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086";
 
 const fail = (message: string): never => {
   throw new Error(message);
