@@ -5,7 +5,7 @@ type ErrorDiagnostic =
   | { kind: "advisory"; crate?: string; id: string; title: string }
   | { kind: "error"; code: string; message: string };
 type Result = { errors: string[]; warnings: string[] };
-type CommandResult = { exitCode: number; output: string };
+type CommandResult = { exitCode: number; output: string; stderr?: string };
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -109,6 +109,21 @@ const waiverKey = ({ id, reason }: Waiver): string => `${id}\0${reason ?? ""}`;
 export const annotation = (level: "error" | "warning", message: string): string =>
   `::${level}::${message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`;
 
+const stderrTail = (stderr: string): string =>
+  stderr
+    .split(/\r?\n/u)
+    .filter((line) => {
+      if (line.trim() === "") return false;
+      try {
+        JSON.parse(line);
+        return false;
+      } catch {
+        return true;
+      }
+    })
+    .slice(-20)
+    .join("\n");
+
 export const evaluate = ({
   baseConfig,
   baseLockfile,
@@ -158,7 +173,10 @@ export const evaluate = ({
 
   const diagnostics = parseErrorDiagnostics(cargoDeny.output);
   if (cargoDeny.exitCode !== 0 && diagnostics.length === 0) {
-    errors.push("cargo-deny exited nonzero without a parseable error advisory diagnostic");
+    const detail = stderrTail(cargoDeny.stderr ?? cargoDeny.output);
+    errors.push(
+      `cargo-deny exited with code ${cargoDeny.exitCode} without a parseable error advisory diagnostic${detail === "" ? "" : `:\n${detail}`}`,
+    );
     return { errors, warnings };
   }
 
@@ -229,6 +247,22 @@ export const baseInputs = (
   return sha === "" ? {} : readBaseFiles(directory, lockfilePath, configPath);
 };
 
+export const cargoDenyArgs = (
+  manifest = "Cargo.toml",
+  config = "deny.toml",
+): string[] => [
+  "cargo",
+  "deny",
+  "--manifest-path",
+  manifest,
+  "--config",
+  config,
+  "--format",
+  "json",
+  "check",
+  "advisories",
+];
+
 const run = (): void => {
   const manifest = process.env.INPUT_MANIFEST_PATH ?? "Cargo.toml";
   const configPath = process.env.INPUT_CONFIG ?? "deny.toml";
@@ -236,14 +270,15 @@ const run = (): void => {
   const baseSha = process.env.INPUT_BASE_SHA ?? "";
   const baseDirectory = process.env.INPUT_BASE_DIRECTORY ?? ".cargo-deny-base";
   const base = baseInputs(baseSha, baseDirectory, lockfilePath, configPath);
-  const result = Bun.spawnSync(
-    ["cargo", "deny", "--manifest-path", manifest, "--format", "json", "check", "--config", configPath, "advisories"],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  const output = `${result.stdout.toString()}\n${result.stderr.toString()}`;
+  const result = Bun.spawnSync(cargoDenyArgs(manifest, configPath), {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stderr = result.stderr.toString();
+  const output = `${result.stdout.toString()}\n${stderr}`;
   const checked = evaluate({
     ...base,
-    cargoDeny: { exitCode: result.exitCode, output },
+    cargoDeny: { exitCode: result.exitCode, output, stderr },
     changeEvent: baseSha !== "",
     config: readFileSync(configPath, "utf8"),
     headLockfile: readFileSync(lockfilePath, "utf8"),
