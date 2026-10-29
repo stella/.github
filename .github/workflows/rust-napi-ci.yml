@@ -306,7 +306,7 @@ jobs:
           else
             bun install --frozen-lockfile
           fi
-      - uses: stella/.github/actions/provenance-check@636b7841096c8f0cc5a1572077b78768ef8fea42
+      - uses: stella/.github/actions/provenance-check@fc5f380b18234429cb60682ccfe1537561311e61
         with:
           provenance-version: ${{ inputs.provenance-version }}
 
