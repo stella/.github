@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
   buildCreateReleaseArgs,
   buildMarkLatestArgs,
   buildPublishReleaseArgs,
+  createDraft,
   listTarballs,
   releasePublishPlan,
   validateReleaseDependencies,
@@ -25,6 +26,161 @@ import {
 
 const githubSha = "1".repeat(40);
 const sourceSha = "2".repeat(40);
+
+const draftFixture = (t, { targets, existing = null, releaseError } = {}) => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "release-tag-test-"));
+  t.after(() => rmSync(temporaryDirectory, { recursive: true, force: true }));
+  const tag = "@scope/example@1.2.3";
+  const events = [];
+  let reads = 0;
+  let releases = 0;
+  return {
+    events,
+    tag,
+    options: {
+      asset: "package.tgz",
+      entry: { tag, tagTarget: existing, pkg: { version: "1.2.3" } },
+      head: sourceSha,
+      notes: "Release notes",
+      repository: "stella/example",
+      temporaryDirectory,
+      recheckDelays: [1, 2, 4],
+      wait: async (delay) => events.push(["wait", delay]),
+      readGithubJson: (endpoint) => {
+        assert.equal(endpoint, "repos/stella/example/git/ref/tags/%40scope%2Fexample%401.2.3");
+        const target = targets[Math.min(reads++, targets.length - 1)];
+        events.push(["read", target]);
+        return target === null ? null : { object: { type: "commit", sha: target } };
+      },
+      runCommand: (command, args) => {
+        assert.equal(command, "gh");
+        if (args[0] === "api") {
+          assert.deepEqual(args, [
+            "api", "--method", "POST", "repos/stella/example/git/refs",
+            "-f", `ref=refs/tags/${tag}`, "-f", `sha=${sourceSha}`,
+          ]);
+          events.push(["create-tag"]);
+          return;
+        }
+        assert.equal(args[0], "release");
+        assert.equal(args[1], "create");
+        assert.equal(args[2], tag);
+        assert.ok(args.includes("--verify-tag"));
+        events.push(["create-release"]);
+        const error = releaseError?.(releases++);
+        if (error) throw error;
+      },
+    },
+  };
+};
+
+test("draft creation waits for the encoded tag at the expected commit", async (t) => {
+  const fixture = draftFixture(t, { targets: [null, null, sourceSha] });
+  await createDraft(fixture.options);
+  assert.deepEqual(fixture.events, [
+    ["create-tag"], ["read", null], ["wait", 1], ["read", null],
+    ["wait", 2], ["read", sourceSha], ["create-release"],
+  ]);
+});
+
+test("draft creation rejects a tag at another commit immediately", async (t) => {
+  const fixture = draftFixture(t, { targets: [githubSha] });
+  await assert.rejects(createDraft(fixture.options), /resolves to .*expected .*refusing/);
+  assert.deepEqual(fixture.events, [["create-tag"], ["read", githubSha]]);
+});
+
+test("draft creation names an absent tag when the wait bound is exhausted", async (t) => {
+  const fixture = draftFixture(t, { targets: [null] });
+  await assert.rejects(createDraft(fixture.options), (error) => {
+    assert.ok(error.message.includes(fixture.tag));
+    assert.match(error.message, /Timed out/);
+    return true;
+  });
+  assert.deepEqual(fixture.events, [
+    ["create-tag"], ["read", null], ["wait", 1], ["read", null],
+    ["wait", 2], ["read", null], ["wait", 4], ["read", null],
+  ]);
+});
+
+test("draft creation reuses and verifies an earlier attempt's tag", async (t) => {
+  const fixture = draftFixture(t, { targets: [sourceSha], existing: sourceSha });
+  await createDraft(fixture.options);
+  assert.deepEqual(fixture.events, [["read", sourceSha], ["create-release"]]);
+});
+
+const missingReleaseTagError = () => Object.assign(new Error("gh exited with status 1"), {
+  stderr: Buffer.from("tag @scope/example@1.2.3 doesn't exist in the repo stella/example, aborting due to --verify-tag flag\n"),
+});
+
+test("draft creation retries only the exact verify-tag diagnostic and rechecks the commit", async (t) => {
+  const fixture = draftFixture(t, {
+    targets: [null, sourceSha, sourceSha],
+    releaseError: (attempt) => attempt === 0 ? missingReleaseTagError() : null,
+  });
+  await createDraft(fixture.options);
+  assert.deepEqual(fixture.events, [
+    ["create-tag"], ["read", null], ["wait", 1], ["read", sourceSha],
+    ["create-release"], ["wait", 2], ["read", sourceSha], ["create-release"],
+  ]);
+});
+
+test("verify-tag retries share the tag visibility wait bound", async (t) => {
+  const fixture = draftFixture(t, {
+    targets: [null, null, null, sourceSha],
+    releaseError: missingReleaseTagError,
+  });
+  await assert.rejects(createDraft(fixture.options), /Timed out.*@scope\/example@1.2.3/);
+  assert.deepEqual(fixture.events.filter(([event]) => event === "wait"), [
+    ["wait", 1], ["wait", 2], ["wait", 4],
+  ]);
+  assert.equal(fixture.events.filter(([event]) => event === "create-release").length, 1);
+});
+
+test("a commit mismatch after a verify-tag retry stops release creation", async (t) => {
+  const fixture = draftFixture(t, {
+    targets: [sourceSha, githubSha], releaseError: missingReleaseTagError,
+  });
+  await assert.rejects(createDraft(fixture.options), /refusing to create a release/);
+  assert.deepEqual(fixture.events, [
+    ["create-tag"], ["read", sourceSha], ["create-release"],
+    ["wait", 1], ["read", githubSha],
+  ]);
+});
+
+test("other release errors propagate without retries", async (t) => {
+  for (const stderr of [
+    "HTTP 403: Resource not accessible by integration",
+    `${missingReleaseTagError().stderr.toString().trim()} (other error)`,
+  ]) {
+    const error = Object.assign(new Error("gh exited with status 1"), { stderr });
+    const fixture = draftFixture(t, { targets: [sourceSha], releaseError: () => error });
+    await assert.rejects(createDraft(fixture.options), (actual) => actual === error);
+    assert.deepEqual(fixture.events, [["create-tag"], ["read", sourceSha], ["create-release"]]);
+  }
+});
+
+test("staging awaits draft confirmation before starting the next release", async () => {
+  const error = new Error("Tag confirmation stopped");
+  const started = [];
+  await assert.rejects(stageReleaseEntries({
+    entries: ["first", "second"].map((name) => ({
+      pkg: { name, version: "1.2.3" },
+      manifest: {},
+      registry: { exists: true },
+      status: "stage-and-publish",
+      path: `${name}.tgz`,
+    })),
+    createNotes: () => "Release notes",
+    createDraftRelease: async ({ entry }) => {
+      started.push(entry.pkg.name);
+      await Promise.resolve();
+      throw error;
+    },
+    head: sourceSha,
+    repository: "stella/example",
+  }), (actual) => actual === error);
+  assert.deepEqual(started, ["first"]);
+});
 
 const assertLatestIsDisabled = (args) => {
   assert.deepEqual(
