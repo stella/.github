@@ -39,6 +39,9 @@ const MAX_BUFFER = 512 * 1024 * 1024;
 const STAGING_RECHECK_DELAYS_MILLISECONDS = [
   1_000, 2_000, 4_000, 8_000, 15_000,
 ];
+const TAG_RECHECK_DELAYS_MILLISECONDS = [
+  1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000,
+];
 const GITHUB_LATEST_POLICIES = new Set([
   "canonical-package",
   "preserve",
@@ -93,12 +96,12 @@ const githubJsonPages = (endpoint) => {
   fail(`GitHub API request failed for ${endpoint}: ${result.stderr.trim()}`);
 };
 
-const tagTarget = (repository, tag) => {
-  let ref = githubJson(`repos/${repository}/git/ref/tags/${apiPath(tag)}`);
+const tagTarget = (repository, tag, readGithubJson = githubJson) => {
+  const ref = readGithubJson(`repos/${repository}/git/ref/tags/${apiPath(tag)}`);
   if (!ref) return null;
   let object = ref.object;
   for (let depth = 0; object.type === "tag" && depth < 4; depth += 1) {
-    const annotated = githubJson(`repos/${repository}/git/tags/${object.sha}`);
+    const annotated = readGithubJson(`repos/${repository}/git/tags/${object.sha}`);
     if (!annotated) fail(`Annotated tag object ${object.sha} disappeared.`);
     object = annotated.object;
   }
@@ -234,8 +237,8 @@ const appendOutput = (name, value) => {
   );
 };
 
-const createTag = (repository, tag, head) => {
-  run("gh", [
+const createTag = (repository, tag, head, runCommand = run) => {
+  runCommand("gh", [
     "api",
     "--method",
     "POST",
@@ -376,31 +379,50 @@ export const selectLatestReleaseEntry = ({
   );
 };
 
-const createDraft = ({
+export const createDraft = async ({
   asset,
   entry,
   head,
   notes,
   repository,
   temporaryDirectory,
+  readGithubJson = githubJson,
+  runCommand = run,
+  recheckDelays = TAG_RECHECK_DELAYS_MILLISECONDS,
+  wait = sleep,
 }) => {
-  if (entry.tagTarget === null) createTag(repository, entry.tag, head);
+  if (entry.tagTarget === null) createTag(repository, entry.tag, head, runCommand);
   const notesPath = join(
     temporaryDirectory,
     `${createHash("sha256").update(entry.tag).digest("hex")}.md`,
   );
   mkdirSync(temporaryDirectory, { recursive: true });
   writeFileSync(notesPath, notes);
-  run(
-    "gh",
-    buildCreateReleaseArgs({
-      asset,
-      notesPath,
-      packageVersion: entry.pkg.version,
-      repository,
-      tag: entry.tag,
-    }),
-  );
+  const args = buildCreateReleaseArgs({
+    asset,
+    notesPath,
+    packageVersion: entry.pkg.version,
+    repository,
+    tag: entry.tag,
+  });
+  // The refs and release endpoints can expose a new tag at different times.
+  // Both checks share one bounded schedule; every retry revalidates provenance.
+  const missingTagError = `tag ${entry.tag} doesn't exist in the repo ${repository}, aborting due to --verify-tag flag`;
+  for (const delay of [0, ...recheckDelays]) {
+    if (delay > 0) await wait(delay);
+    const target = tagTarget(repository, entry.tag, readGithubJson);
+    if (target === null) continue;
+    if (target !== head) {
+      fail(`Tag ${entry.tag} resolves to ${target}, expected ${head}; refusing to create a release.`);
+    }
+    try {
+      runCommand("gh", args);
+      return;
+    } catch (error) {
+      if (error.stderr?.toString().trim() !== missingTagError) throw error;
+    }
+  }
+  fail(`Timed out waiting to create a release for tag ${entry.tag} at commit ${head}.`);
 };
 
 const load = () => {
@@ -582,7 +604,7 @@ export const stageReleaseEntries = async ({
     ) {
       continue;
     }
-    createDraftRelease({
+    await createDraftRelease({
       ...drafts.get(entry.pkg.name),
       entry,
       head,
