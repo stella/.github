@@ -27,6 +27,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 
 | Action | Description |
 |--------|-------------|
+| `partial-clone-checkout` | Check out a blobless partial clone and retry one transient checkout failure |
 | `typescript-checks` | Setup pnpm, install deps, run lint + format + typecheck |
 | `notify-failure` | Send failure notification to Google Chat webhook |
 | `provenance-check` | Install `stella/provenance` and verify committed provenance artifacts |

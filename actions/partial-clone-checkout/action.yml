@@ -1,0 +1,162 @@
+name: Partial-clone checkout with retry
+description: Check out a blobless partial clone and retry one failed checkout
+
+inputs:
+  repository:
+    description: Repository name with owner
+    required: false
+    default: ${{ github.repository }}
+  ref:
+    description: Branch, tag, or SHA to check out
+    required: false
+  token:
+    description: Token used to fetch the repository
+    required: false
+    default: ${{ github.token }}
+  ssh-key:
+    description: SSH key used to fetch the repository
+    required: false
+  ssh-known-hosts:
+    description: Additional SSH host keys
+    required: false
+  ssh-strict:
+    description: Whether to perform strict SSH host key checking
+    required: false
+    default: "true"
+  ssh-user:
+    description: User for SSH connections
+    required: false
+    default: git
+  persist-credentials:
+    description: Whether to configure the token or SSH key in local git config
+    required: false
+    default: "true"
+  path:
+    description: Relative path under GITHUB_WORKSPACE for the checkout
+    required: false
+  clean:
+    description: Whether to clean and reset the repository before fetching
+    required: false
+    default: "true"
+  sparse-checkout:
+    description: Newline-separated sparse checkout patterns
+    required: false
+  sparse-checkout-cone-mode:
+    description: Whether to use cone mode for sparse checkout
+    required: false
+    default: "true"
+  fetch-depth:
+    description: Number of commits to fetch; zero fetches all history
+    required: false
+    default: "1"
+  fetch-tags:
+    description: Whether to fetch tags when fetch-depth is greater than zero
+    required: false
+    default: "false"
+  show-progress:
+    description: Whether to show fetch progress
+    required: false
+    default: "true"
+  lfs:
+    description: Whether to download Git LFS files
+    required: false
+    default: "false"
+  submodules:
+    description: Whether to check out submodules
+    required: false
+    default: "false"
+  set-safe-directory:
+    description: Whether to add the repository path as a safe.directory
+    required: false
+    default: "true"
+  github-server-url:
+    description: Base URL of the GitHub instance
+    required: false
+  allow-unsafe-pr-checkout:
+    description: Whether trusted-context workflows may check out fork pull request code
+    required: false
+    default: "false"
+
+outputs:
+  ref:
+    description: The branch, tag, or SHA that was checked out
+    value: ${{ steps.retry.outputs.ref || steps.checkout.outputs.ref }}
+  commit:
+    description: The commit SHA that was checked out
+    value: ${{ steps.retry.outputs.commit || steps.checkout.outputs.commit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      id: checkout
+      continue-on-error: true
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        token: ${{ inputs.token }}
+        ssh-key: ${{ inputs.ssh-key }}
+        ssh-known-hosts: ${{ inputs.ssh-known-hosts }}
+        ssh-strict: ${{ inputs.ssh-strict }}
+        ssh-user: ${{ inputs.ssh-user }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+        path: ${{ inputs.path }}
+        clean: ${{ inputs.clean }}
+        filter: blob:none
+        sparse-checkout: ${{ inputs.sparse-checkout }}
+        sparse-checkout-cone-mode: ${{ inputs.sparse-checkout-cone-mode }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        fetch-tags: ${{ inputs.fetch-tags }}
+        show-progress: ${{ inputs.show-progress }}
+        lfs: ${{ inputs.lfs }}
+        submodules: ${{ inputs.submodules }}
+        set-safe-directory: ${{ inputs.set-safe-directory }}
+        github-server-url: ${{ inputs.github-server-url }}
+        allow-unsafe-pr-checkout: ${{ inputs.allow-unsafe-pr-checkout }}
+
+    - name: Retry checkout
+      id: retry
+      if: steps.checkout.outcome == 'failure'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        token: ${{ inputs.token }}
+        ssh-key: ${{ inputs.ssh-key }}
+        ssh-known-hosts: ${{ inputs.ssh-known-hosts }}
+        ssh-strict: ${{ inputs.ssh-strict }}
+        ssh-user: ${{ inputs.ssh-user }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+        path: ${{ inputs.path }}
+        clean: ${{ inputs.clean }}
+        filter: blob:none
+        sparse-checkout: ${{ inputs.sparse-checkout }}
+        sparse-checkout-cone-mode: ${{ inputs.sparse-checkout-cone-mode }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        fetch-tags: ${{ inputs.fetch-tags }}
+        show-progress: ${{ inputs.show-progress }}
+        lfs: ${{ inputs.lfs }}
+        submodules: ${{ inputs.submodules }}
+        set-safe-directory: ${{ inputs.set-safe-directory }}
+        github-server-url: ${{ inputs.github-server-url }}
+        allow-unsafe-pr-checkout: ${{ inputs.allow-unsafe-pr-checkout }}
+
+    - name: Verify checked out commit
+      shell: bash
+      env:
+        CHECKOUT_PATH: ${{ inputs.path }}
+        FIRST_OUTCOME: ${{ steps.checkout.outcome }}
+        FIRST_COMMIT: ${{ steps.checkout.outputs.commit }}
+        RETRY_COMMIT: ${{ steps.retry.outputs.commit }}
+      run: |
+        expected="$FIRST_COMMIT"
+        if [[ "$FIRST_OUTCOME" == "failure" ]]; then
+          expected="$RETRY_COMMIT"
+        fi
+
+        actual="$(git -C "$GITHUB_WORKSPACE/$CHECKOUT_PATH" rev-parse HEAD)"
+        if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+          echo "::error::checked out commit '$actual' does not match checkout output '$expected'"
+          exit 1
+        fi
