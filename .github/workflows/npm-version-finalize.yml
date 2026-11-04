@@ -125,10 +125,11 @@ jobs:
           node <<'NODE'
           const { execFileSync } = require("node:child_process");
           const { readdirSync, readFileSync, statSync, writeFileSync } = require("node:fs");
-          const { join } = require("node:path");
+          const { join, resolve } = require("node:path");
           const process = require("node:process");
-
-          const SEMVER_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.[0-9]+)?$/;
+          const { RELEASE_VERSION_PATTERN, releaseTagFor } = require(
+            resolve(".release-tooling/.github/actions/npm-visibility/release-state.mjs"),
+          );
 
           const lines = (value) =>
             (value ?? "")
@@ -190,7 +191,7 @@ jobs:
           };
 
           const version = readFileSync(process.env.VERSION_FILE, "utf8").trim();
-          if (!SEMVER_PATTERN.test(version)) {
+          if (!RELEASE_VERSION_PATTERN.test(version)) {
             fail(`${process.env.VERSION_FILE} contains invalid version '${version}'.`);
           }
 
@@ -295,7 +296,7 @@ jobs:
 
           const tarballLines = orderedPackageNames.map((name) => tarballPackages.get(name).tarball);
 
-          const tag = `v${version}`;
+          const tag = releaseTagFor(version);
           const prerelease = version.match(/-(alpha|beta|rc)\./)?.[1];
           const distTag = prerelease ?? "latest";
           const head = process.env.GITHUB_SHA;
@@ -411,26 +412,36 @@ jobs:
             "${release_flags[@]}"
 
       - name: Publish to npm
+        id: publish
         if: steps.validate.outputs.changed == 'true' && inputs.publish-to-npm
         uses: ./.release-tooling/.github/actions/npm-publish-hardened
         with:
           tarballs: ${{ steps.validate.outputs.tarballs }}
           tag: ${{ steps.validate.outputs.dist_tag }}
 
+      # npm can take close to an hour to list a version it accepted. When the
+      # wait ends with versions still unlisted, keep the GitHub release a draft
+      # and succeed; npm-release-reconcile.yml publishes it once npm lists every
+      # version. A failed publish never reaches this step.
       - name: Verify npm state
+        id: verify
         if: steps.validate.outputs.changed == 'true'
         shell: bash
         env:
           VERSION: ${{ steps.validate.outputs.version }}
+          RELEASE_TAG: ${{ steps.validate.outputs.tag }}
           PACKAGE_FILES: ${{ inputs.package-files }}
+          NPM_PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { execFileSync } from "node:child_process";
-          import { readFileSync } from "node:fs";
+          import { appendFileSync, readFileSync } from "node:fs";
           import process from "node:process";
           const { waitForNpmPackages } = await import(
             "./.release-tooling/.github/actions/npm-visibility/wait.mjs"
+          );
+          const { NPM_RELEASE_STATE, decideNpmReleaseState, readNpmVisibility } = await import(
+            "./.release-tooling/.github/actions/npm-visibility/release-state.mjs"
           );
 
           const lines = (value) =>
@@ -450,24 +461,30 @@ jobs:
           const missing = await waitForNpmPackages({
             packages,
             readNpmState: (name, version) => {
-              try {
-                execFileSync("npm", ["view", `${name}@${version}`, "version"], {
-                  stdio: "ignore",
-                });
-                return { exists: true };
-              } catch {
-                return { exists: false };
+              const state = readNpmVisibility(name, version);
+              if (state.error) {
+                console.log(`::warning::Could not read npm state for ${name}@${version}: ${state.error}`);
               }
+              return state;
             },
           });
-          for (const { name, version } of missing) {
-            console.error(`::error::npm is missing ${name}@${version}.`);
+          const decision = decideNpmReleaseState({
+            publishOutcome: process.env.NPM_PUBLISH_OUTCOME,
+            missing,
+          });
+          if (decision.state === NPM_RELEASE_STATE.pending) {
+            const specs = decision.pending.map(({ name, version }) => `${name}@${version}`).join(", ");
+            console.log(
+              `::warning::npm accepted every publish but does not list ${specs} yet. ` +
+                `GitHub release ${process.env.RELEASE_TAG} stays a draft; ` +
+                "npm-release-reconcile.yml publishes it once npm lists every version.",
+            );
           }
-          if (missing.length > 0) process.exit(1);
+          appendFileSync(process.env.GITHUB_OUTPUT, `npm-state=${decision.state}\n`);
           NODE
 
       - name: Publish GitHub release
-        if: steps.validate.outputs.changed == 'true'
+        if: steps.validate.outputs.changed == 'true' && steps.verify.outputs.npm-state == 'visible'
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token || github.token }}
           RELEASE_TAG: ${{ steps.validate.outputs.tag }}
