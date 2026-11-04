@@ -644,6 +644,40 @@ is executed after OIDC becomes available.
 `npm-version-finalize.yml` does not mutate pull requests. Post-release changelog
 automation remains a separate workflow and permission boundary.
 
+npm can take close to an hour to list a version it accepted. When every
+`npm publish` succeeds but npm does not list every version before the wait ends,
+the finalizer keeps the GitHub release a draft, warns with the pending versions,
+and succeeds. A failed publish still fails the job. `npm-release-reconcile.yml`
+publishes such drafts once npm lists every version; callers run it on a schedule
+with the same `package-files` list:
+
+```yaml
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    uses: stella/.github/.github/workflows/npm-release-reconcile.yml@<commit-sha>
+    permissions:
+      contents: read
+    with:
+      package-files: |
+        package.json
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+```
+
+It publishes a draft only when its `v<version>` tag points at a commit on the
+default branch and npm lists every public package version in the tagged
+manifests. The run fails while a draft stays incomplete past `max-pending-hours`
+(default 24) or its tag is outside the default branch.
+
 ### Apply Ruleset
 
 Create or update a GitHub ruleset from a JSON file. Idempotent:
