@@ -54,7 +54,10 @@ const assertCheckoutContract = (source) => {
   assert.equal(retry.if, "steps.checkout.outcome == 'failure'");
   assert.match(verify.env.FIRST_COMMIT, /steps\.checkout\.outputs\.commit/u);
   assert.match(verify.env.RETRY_COMMIT, /steps\.retry\.outputs\.commit/u);
-  assert.match(verify.run, /git -C .* rev-parse HEAD/u);
+  assert.match(
+    verify.run,
+    /git -c safe\.directory="\$directory" -C "\$directory" rev-parse HEAD/u,
+  );
 };
 
 test("both checkout attempts pass the complete pinned partial-clone contract", () => {
@@ -65,6 +68,14 @@ test("dropping any retry input violates the checkout contract", () => {
   const source = readFileSync(actionUrl, "utf8").replace(
     /(?<=    - name: Retry checkout[\s\S]*?      with:[\s\S]*?)^        repository:.*\n/mu,
     "",
+  );
+  assert.throws(() => assertCheckoutContract(source), assert.AssertionError);
+});
+
+test("reading the commit without trusting the directory violates the checkout contract", () => {
+  const source = readFileSync(actionUrl, "utf8").replace(
+    'git -c safe.directory="$directory" -C "$directory" rev-parse HEAD',
+    'git -C "$directory" rev-parse HEAD',
   );
   assert.throws(() => assertCheckoutContract(source), assert.AssertionError);
 });
