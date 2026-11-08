@@ -157,7 +157,8 @@ runs:
 
         # actions/checkout trusts the directory only during its own step; a
         # container job runs as another user, so name the directory as safe.
-        directory="$GITHUB_WORKSPACE/$CHECKOUT_PATH"
+        # Git compares safe.directory literally: no trailing slash for the root.
+        directory="$GITHUB_WORKSPACE${CHECKOUT_PATH:+/$CHECKOUT_PATH}"
         actual="$(git -c safe.directory="$directory" -C "$directory" rev-parse HEAD)"
         if [[ -z "$expected" || "$actual" != "$expected" ]]; then
           echo "::error::checked out commit '$actual' does not match checkout output '$expected'"

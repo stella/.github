@@ -79,3 +79,13 @@ test("reading the commit without trusting the directory violates the checkout co
   );
   assert.throws(() => assertCheckoutContract(source), assert.AssertionError);
 });
+
+test("the trusted directory names the workspace root without a trailing slash", () => {
+  const action = parse(readFileSync(actionUrl, "utf8"));
+  const verify = action.runs.steps.at(-1);
+  assert.match(
+    verify.run,
+    /directory="\$GITHUB_WORKSPACE\$\{CHECKOUT_PATH:\+\/\$CHECKOUT_PATH\}"/u,
+  );
+  assert.doesNotMatch(verify.run, /directory="\$GITHUB_WORKSPACE\/\$CHECKOUT_PATH"/u);
+});
