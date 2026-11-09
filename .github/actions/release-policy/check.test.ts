@@ -61,7 +61,7 @@ jobs:
 
 const approvedBun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6";
 const approvedNode = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1";
-const approvedPython = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97";
+const approvedPython = "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0";
 const bunFileBase = base.replace(`oven-sh/setup-bun@${"4".repeat(40)}`, approvedBun);
 
 describe("release policy", () => {
