@@ -64,7 +64,7 @@ jobs:
       dist-tag: ${{ steps.state.outputs.dist_tag }}
       already-released: ${{ steps.state.outputs.already_released }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 

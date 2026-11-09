@@ -2,7 +2,12 @@ version: 2
 
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # Composite actions pin third-party actions too; "/" alone only covers
+    # .github/workflows.
+    directories:
+      - "/"
+      - "/actions/*"
+      - "/.github/actions/*"
     schedule:
       interval: "cron"
       cronjob: "0 3 * * *"

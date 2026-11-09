@@ -23,7 +23,7 @@ test("the release App credentials are required workflow secrets", () => {
 test("the npm OIDC job does not persist a write-capable checkout token", () => {
   assert.match(
     workflow,
-    /- uses: actions\/checkout@[0-9a-f]{40} # v6\n\s+with:\n\s+fetch-depth: 0\n\s+persist-credentials: false\n\s+token:/,
+    /- uses: actions\/checkout@[0-9a-f]{40} # v[0-9.]+\n\s+with:\n\s+fetch-depth: 0\n\s+persist-credentials: false\n\s+token:/,
   );
   assert.doesNotMatch(workflow, /git\", \[\"fetch\"/);
 });
