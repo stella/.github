@@ -13,7 +13,7 @@ const PYTHON_FILE_SETUP_INPUTS = new Set(["python-version", "python-version-file
 export const FILE_SELECTOR_ACTIONS = new Set([
   "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
   "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
-  "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+  "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
 ]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
