@@ -138,7 +138,7 @@ jobs:
       - if: steps.lifecycle.outputs.may-update == 'true' && inputs.sync-cargo-inherited-lock
         name: Validate inherited Cargo lock versions
         id: cargo-sync
-        uses: stella/.github/.github/actions/sync-cargo-workspace-lock@c6d66dfa2a5ad1f96a21b819fe456fecdd3d6f6d
+        uses: stella/.github/.github/actions/sync-cargo-workspace-lock@28dce62a9e1916b19ce03c8c47a1c44e1a145fdf
         with:
           mode: check
           manifest: ${{ inputs.cargo-manifest }}
