@@ -13,7 +13,9 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `dependabot-bun-dedupe.yml` | Dedupe Bun lockfiles on trusted Dependabot pull requests |
 | `audit-branch-protection.yml` | Drift detection for GitHub rulesets (compliance evidence) |
 | `provenance-update.yml` | Reusable nightly/manual provenance refresh that opens a PR when `provenance/` drifts |
-| `provenance-sync.yml` | Refresh `provenance/` on a same-repository pull request branch as a GitHub App |
+| `provenance-sync.yml` | Regenerate `provenance/` on a same-repository pull request without secrets (`pull_request`) |
+| `provenance-commit.yml` | Commit that refresh to the pull request branch as a GitHub App (`workflow_run`) |
+| `cla.yml` | Verify contributor CLA signatures and report the CLA check (`workflow_run`, `issue_comment`, `merge_group`) |
 | `changeset-release-pr.yml` | Maintain a version-only Changesets PR with an app-scoped token |
 | `npm-independent-release.yml` | Publish independently versioned npm monorepos from caller-built tarballs |
 | `npm-artifact-publish.yml` | Publish one pre-packed npm artifact without exposing OIDC to its build |
@@ -284,21 +286,27 @@ gets no CI runs.
 ### Provenance Sync
 
 Regenerates `provenance/` on a same-repository pull request and commits any
-drift to the pull request branch as a GitHub App. The pull request's code runs
-only in the `generate` job, with a read-only token and no secrets; the `commit`
-job stages the generated files and commits them through the API. A commit
-owned by the App triggers the pull request's workflows for the new head, which
-a `GITHUB_TOKEN` push would not.
+drift to the pull request branch as a GitHub App, in two workflows:
 
-Callers trigger it from `pull_request_target` so Dependabot pull requests get
-the App credentials as well. Add the App's bot login to the CLA allowlist.
+- `provenance-sync.yml` runs from `pull_request`. The pull request's code runs
+  here with a read-only token and no secrets; drift is uploaded as the
+  `provenance` artifact.
+- `provenance-commit.yml` runs from `workflow_run` when that run succeeds, so
+  it is default-branch workflow code with the App credentials. It resolves the
+  pull request through the API, admits only plain files from the artifact and
+  commits them through the API. A commit owned by the App triggers the pull
+  request's workflows for the new head, which a `GITHUB_TOKEN` push would not.
+
+`workflow_run` takes effect only from the default branch, so the commit half
+starts working once the caller is merged. Add the App's bot login to the CLA
+allowlist.
 
 ```yaml
 # .github/workflows/provenance-sync.yml
 name: Provenance Sync
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "bun.lock"
@@ -318,17 +326,118 @@ jobs:
     with:
       install-command: bun install --frozen-lockfile
       provenance-version: v0.1.3
+```
+
+```yaml
+# .github/workflows/provenance-commit.yml
+name: Provenance Commit
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] the triggering run is untrusted data and nothing from it executes
+    workflows: [Provenance Sync]
+    types: [completed]
+
+concurrency:
+  group: provenance-commit-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  commit:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: stella/.github/.github/workflows/provenance-commit.yml@<commit-sha>
     secrets:
       app_id: ${{ secrets.CHANGELOG_APP_ID }}
       app_private_key: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}
 ```
 
-**Inputs:** `root`, `node-version`, `cdxgen-version`, `provenance-version`,
-`provenance-repository`, `install-command` (as above) and `commit-message`
+**Sync inputs:** `root`, `node-version`, `cdxgen-version`, `provenance-version`,
+`provenance-repository`, `install-command` (as above).
+
+**Commit inputs:** `root` (same value as the sync caller) and `commit-message`
 (default: `chore: refresh provenance artifacts`).
 
-**Required secrets:** `app_id`, `app_private_key`; the App needs
+**Required secrets (commit):** `app_id`, `app_private_key`; the App needs
 `contents: write` on the calling repository.
+
+### CLA
+
+Two workflows. `CLA Request` runs from `pull_request` with no secrets and a
+read-only token, so it is safe on fork pull requests; its job must not be
+named `cla`. Its completion triggers `CLA Assistant` from `workflow_run`,
+which runs default-branch code, resolves the pull requests from the run's head
+repository, branch and SHA, and posts the `check-name` check (plus
+`cla/pr-<number>`) on the head. `issue_comment` handles signing and `recheck`.
+Set `check-name` to the CLA context the repository's ruleset requires.
+
+```yaml
+# .github/workflows/cla-request.yml
+name: CLA Request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  request:
+    name: CLA request
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "The CLA Assistant workflow verifies this head."
+```
+
+```yaml
+# .github/workflows/cla.yml
+name: CLA Assistant
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_run: # zizmor: ignore[dangerous-triggers] API-only; the triggering run is untrusted data and nothing from it executes
+    workflows: [CLA Request]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  cla:
+    concurrency:
+      group: cla-${{ github.event.workflow_run.head_sha || github.event.issue.number || github.run_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+      pull-requests: read
+    if: >-
+      !github.event.repository.private
+      && (
+        (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.event == 'pull_request'
+        ) || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && (
+            github.event.comment.body == 'recheck'
+            || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'
+          )
+        )
+      )
+    uses: stella/.github/.github/workflows/cla.yml@<commit-sha>
+    with:
+      allowlist: dependabot[bot],renovate[bot],github-actions[bot],stella-provenance-updater[bot]
+      check-name: cla
+    secrets:
+      CLA_APP_PRIVATE_KEY: ${{ secrets.CLA_APP_PRIVATE_KEY }}
+```
 
 ### Changeset releases
 

@@ -1,0 +1,181 @@
+name: Provenance Commit
+
+# Privileged half of the provenance refresh. Callers trigger it from
+# `workflow_run` when their Provenance Sync workflow (provenance-sync.yml,
+# `pull_request`) completes, so this runs default-branch workflow code with the
+# App credentials. Everything from the triggering run is untrusted data: the
+# pull request is resolved through the API from the run's head repository,
+# branch and SHA; the `provenance` artifact admits only plain files under
+# relative paths; nothing from the pull request is executed. The App owns the
+# commit, so the new head gets a full set of checks.
+
+on:
+  workflow_call:
+    inputs:
+      root:
+        description: "Repository root the Provenance Sync caller scans"
+        required: false
+        type: string
+        default: "."
+      commit-message:
+        description: "Commit message for the refresh commit"
+        required: false
+        type: string
+        default: "chore: refresh provenance artifacts"
+    secrets:
+      app_id:
+        description: "GitHub App ID that owns the refresh commit"
+        required: true
+      app_private_key:
+        description: "GitHub App private key that owns the refresh commit"
+        required: true
+
+permissions: {}
+
+jobs:
+  commit:
+    name: Commit provenance
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # Downloads the triggering run's artifact.
+      contents: read
+      pull-requests: read # Resolves the pull request of the triggering run.
+    steps:
+      - name: Resolve pull request
+        id: pull
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            const self = `${owner}/${repo}`.toLowerCase();
+            if (run?.event !== "pull_request" || !Number.isSafeInteger(run.id) || run.id <= 0 ||
+                typeof run.head_sha !== "string" || !/^[0-9a-f]{40}$/u.test(run.head_sha) ||
+                typeof run.head_branch !== "string" || !run.head_branch ||
+                run.head_repository?.full_name?.toLowerCase() !== self) {
+              throw new Error("PROVENANCE_INVALID_TRIGGERING_RUN");
+            }
+            const { data: listed } = await github.request("GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", {
+              owner, repo, run_id: run.id, name: "provenance", per_page: 100,
+            });
+            const artifacts = (listed.artifacts ?? []).filter((artifact) => artifact.name === "provenance" && !artifact.expired);
+            if (!artifacts.length) {
+              core.notice("Provenance did not drift; nothing to commit.");
+              core.setOutput("changed", "false");
+              return;
+            }
+            if (artifacts.length !== 1) throw new Error("PROVENANCE_AMBIGUOUS_ARTIFACT");
+            const pulls = await github.paginate("GET /repos/{owner}/{repo}/pulls", {
+              owner, repo, state: "open", head: `${owner}:${run.head_branch}`, per_page: 100,
+            });
+            // Several pull requests can share one head branch; the commit goes
+            // to that branch once. None means the head moved on or closed: its
+            // newer head has its own run.
+            const matches = pulls.filter((pull) => pull.head?.sha === run.head_sha &&
+              pull.head.ref === run.head_branch && pull.head.repo?.full_name?.toLowerCase() === self &&
+              pull.base?.repo?.full_name?.toLowerCase() === self);
+            if (!matches.length) {
+              core.notice("No open pull request has this head any more; skipping the refresh.");
+              core.setOutput("changed", "false");
+              return;
+            }
+            core.setOutput("changed", "true");
+            core.setOutput("branch", run.head_branch);
+
+      # Checked out only as the commit base; nothing from it runs here.
+      - name: Checkout pull request head
+        if: steps.pull.outputs.changed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Download refreshed provenance
+        if: steps.pull.outputs.changed == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: provenance
+          path: ${{ runner.temp }}/provenance-archive
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Stage refreshed provenance
+        id: stage
+        if: steps.pull.outputs.changed == 'true'
+        shell: bash
+        env:
+          PROVENANCE_ROOT: ${{ inputs.root }}
+          ARCHIVE: ${{ runner.temp }}/provenance-archive/provenance.tar
+          REFRESH_DIR: ${{ runner.temp }}/provenance-refresh
+        run: |
+          set -euo pipefail
+
+          root="${PROVENANCE_ROOT%/}"
+          if [ -z "$root" ] || [ "$root" = "." ]; then
+            provenance_path="provenance"
+          else
+            provenance_path="$root/provenance"
+          fi
+          case "$provenance_path" in
+            /* | *..*)
+              echo "::error::Unexpected provenance path: $provenance_path"
+              exit 1
+              ;;
+          esac
+          # The archive comes from a run that executed pull request code:
+          # accept only regular files and directories under relative, plain
+          # paths.
+          if tar -tvf "$ARCHIVE" | grep -qv '^[-d]'; then
+            echo "::error::The provenance archive may contain only regular files and directories."
+            exit 1
+          fi
+          if tar -tf "$ARCHIVE" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+            echo "::error::The provenance archive contains an unsafe path."
+            exit 1
+          fi
+          mkdir -p "$REFRESH_DIR"
+          tar -xf "$ARCHIVE" -C "$REFRESH_DIR" --no-same-owner --no-same-permissions
+
+          rm -rf "$provenance_path"
+          mkdir -p "$provenance_path"
+          cp -R "$REFRESH_DIR"/. "$provenance_path"/
+          git status --short -- "$provenance_path"
+          echo "provenance-path=$provenance_path" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App token
+        id: app-token
+        if: steps.pull.outputs.changed == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Checkout shared tooling
+        if: steps.pull.outputs.changed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .signed-commit
+          persist-credentials: false
+
+      # Append mode commits on top of the checked-out head and fails if the
+      # branch moved meanwhile, so a newer head is never overwritten.
+      - name: Commit to the pull request branch
+        if: steps.pull.outputs.changed == 'true'
+        uses: ./.signed-commit/.github/actions/signed-commit
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          mode: append
+          branch: ${{ steps.pull.outputs.branch }}
+          paths: ${{ steps.stage.outputs.provenance-path }}/**
+          commit-message: ${{ inputs.commit-message }}
