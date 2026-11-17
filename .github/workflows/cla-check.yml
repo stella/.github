@@ -11,12 +11,11 @@ on:
         description: Pull request numbers separated by commas or spaces
         type: string
         required: true
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request_target') && format('pr-{0}', github.event.pull_request.number || github.ref) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  # Pull requests: the unprivileged CLA Request workflow completes, then this
+  # default-branch workflow verifies the head it ran on.
+  workflow_run: # zizmor: ignore[dangerous-triggers] API-only; the triggering run is untrusted data and nothing from it executes
+    workflows: [CLA Request]
+    types: [completed]
 
 permissions:
   contents: read
@@ -26,16 +25,17 @@ permissions:
 
 jobs:
   cla:
-    # Serializes signing, recheck and pull request runs for one PR. Job level, so
+    # Serializes signing, recheck and pull request runs for one head or PR. Job level, so
     # unrelated comments (skipped by `if`) never replace a pending check.
     concurrency:
-      group: cla-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+      group: cla-${{ github.event.workflow_run.head_sha || github.event.issue.number || github.run_id }}
       cancel-in-progress: false
-    # The main ruleset requires the `cla / cla` context on every pull request.
-    # A skipped caller job never reports it, so bot pull requests run the
-    # reusable workflow too; its allowlist waives the signature for them.
+    # The main ruleset requires the `cla / cla` context on every pull request
+    # and merge group. A merge group run reports it as this job; on a pull
+    # request head the reusable workflow posts it as `check-name`. Bot pull
+    # requests run too; the allowlist waives the signature for them.
     if: |
-      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') ||
       github.event_name == 'merge_group' ||
       github.event_name == 'workflow_dispatch' || (
         github.event_name == 'issue_comment' &&
@@ -48,5 +48,6 @@ jobs:
     uses: ./.github/workflows/cla.yml
     with:
       allowlist: dependabot[bot],renovate[bot],github-actions[bot],stella-provenance-updater[bot]
+      check-name: cla / cla
     secrets:
       CLA_APP_PRIVATE_KEY: ${{ secrets.CLA_APP_PRIVATE_KEY }}
