@@ -7,6 +7,7 @@ const workflow = readFileSync(new URL("./cla.yml", import.meta.url), "utf8");
 const scriptFor = (name) => workflow.split(`      - name: ${name}\n`)[1].split("          script: |\n")[1].split(/\n      - name:/u)[0].split("\n").map((line) => line.slice(12)).join("\n");
 const source = scriptFor("Verify contributor signatures");
 const credentialsSource = scriptFor("Select signature credentials");
+const resolveSource = scriptFor("Resolve pull requests");
 const sha = (letter) => letter.repeat(40);
 const BASE = sha("b"), HEAD = sha("a"), SECOND = sha("c"), GROUP = sha("9"), PREVIOUS = sha("8");
 const author = { id: 101, login: "contributor", type: "User" };
@@ -22,8 +23,9 @@ const entries = [
 ];
 const group = { head_sha: GROUP, base_sha: BASE, base_ref: "refs/heads/main", head_ref: "refs/heads/gh-readonly-queue/main/pr-17-abcdef" };
 
+const triggeringRun = { event: "pull_request", head_sha: HEAD, head_branch: "feature", head_repository: { full_name: "fork-owner/repository", owner: { login: "fork-owner" } } };
 async function fixture({
-  event = "pull_request_target", payload = { pull_request: { number: 17 } },
+  event = "workflow_run", payload = { workflow_run: triggeringRun }, numbers = "[17]", checkName = "",
   pulls = [pull()], signed = [author.id], allowlist = "", comments = [],
   queue = entries, superseded = false, changedHead = false, invalidShape = false,
   unlinked = false, members = [], storeFailure = false, incompleteCommits = false,
@@ -95,7 +97,7 @@ async function fixture({
   await runInNewContext(`(async () => {${source}\n})()`, {
     github: new Api(), context: { repo: { owner: "fixture", repo: "repository" }, eventName: event, payload },
     core: { setFailed: (message) => errors.push(message), error: () => {} },
-    process: { env: { CLA_STORE_TOKEN: "store-token", CLA_ALLOWLIST: allowlist } },
+    process: { env: { CLA_STORE_TOKEN: "store-token", CLA_ALLOWLIST: allowlist, CLA_CHECK_NAME: checkName, PULL_NUMBERS: numbers } },
     Buffer, setTimeout,
   });
   return { created, updates, errors, requests };
@@ -176,6 +178,56 @@ test("manual dispatch validates input and deduplicates PR numbers", async () => 
     assert.equal((await fixture({ event: "workflow_dispatch", payload: { inputs: { pull_requests: input } } })).errors.length, 1);
   }
 });
+test("workflow_run verifies every resolved pull request and none when the head moved on", async () => {
+  const both = await fixture({ numbers: "[17, 18]", pulls: [pull(), pull(18)] });
+  assert.deepEqual(both.created.map((check) => check.name), ["cla", "cla/pr-17", "cla", "cla/pr-18"]);
+  const none = await fixture({ numbers: "[]" });
+  assert.deepEqual(none.created, []);
+  assert.deepEqual(none.errors, []);
+  const missing = await fixture({ numbers: "" });
+  assert.deepEqual(missing.errors, ["CLA_INVALID_RESOLVED_PULLS"]);
+});
+test("check-name names the shared head check for the repository's required context", async () => {
+  const result = await fixture({ checkName: "cla / cla" });
+  assert.deepEqual(result.created.map((check) => check.name), ["cla / cla", "cla/pr-17"]);
+  assert.match(workflow, /CLA_CHECK_NAME: \$\{\{ inputs.check-name \}\}/u);
+});
+
+async function resolve({ run = triggeringRun, listed = [] } = {}) {
+  const outputs = {}, notices = [], queries = [];
+  await runInNewContext(`(async () => {${resolveSource}\n})()`, {
+    context: { repo: { owner: "fixture", repo: "repository" }, payload: { workflow_run: run } },
+    github: { paginate: async (route, params) => { queries.push({ route, params }); return listed; } },
+    core: { setOutput: (key, value) => { outputs[key] = value; }, notice: (message) => notices.push(message) },
+  });
+  return { numbers: outputs.numbers === undefined ? undefined : JSON.parse(outputs.numbers), notices, queries };
+}
+const listedPull = (number, { head = HEAD, headRepo = "fork-owner/repository", baseRepo = "fixture/repository" } = {}) => ({
+  number, head: { sha: head, repo: { full_name: headRepo } }, base: { repo: { full_name: baseRepo } },
+});
+test("fork pull requests resolve from head repository, branch and SHA", async () => {
+  const result = await resolve({ listed: [listedPull(17), listedPull(19, { head: SECOND }), listedPull(20, { headRepo: "other/repository" }), listedPull(21, { baseRepo: "other/repository" })] });
+  assert.deepEqual(result.numbers, [17]);
+  assert.deepEqual(result.queries[0].params.head, "fork-owner:feature");
+  assert.equal(result.queries[0].params.state, "open");
+});
+test("zero matches report nothing and several matches are all verified", async () => {
+  const none = await resolve();
+  assert.deepEqual(none.numbers, []);
+  assert.equal(none.notices.length, 1);
+  assert.deepEqual((await resolve({ listed: [listedPull(17), listedPull(18)] })).numbers, [17, 18]);
+});
+test("a triggering run that is not a pull request or lacks its head fails closed", async () => {
+  for (const run of [
+    { ...triggeringRun, event: "push" },
+    { ...triggeringRun, head_sha: "not-a-sha" },
+    { ...triggeringRun, head_branch: "" },
+    { ...triggeringRun, head_repository: null },
+  ]) {
+    await assert.rejects(resolve({ run }), /CLA_INVALID_TRIGGERING_RUN/u);
+  }
+});
+
 test("privileged verifier stays API-only and keeps the reusable contract", () => {
   assert.doesNotMatch(workflow, /actions\/checkout|\brun:|contributor-assistant\/github-action/u);
   assert.match(workflow, /# Never check out PR head code, build or install it, or interpolate PR data into/u);
@@ -184,7 +236,17 @@ test("privileged verifier stays API-only and keeps the reusable contract", () =>
   assert.match(workflow, /checks: write/u);
   const caller = readFileSync(new URL("./cla-check.yml", import.meta.url), "utf8");
   assert.match(caller, /merge_group:\n    types: \[checks_requested\]/u);
-  assert.match(caller, /group: cla-\$\{\{ github.event.pull_request.number \|\| github.event.issue.number \|\| github.run_id \}\}/u);
+  assert.match(caller, /workflow_run:.*\n    workflows: \[CLA Request\]\n    types: \[completed\]/u);
+  assert.match(caller, /group: cla-\$\{\{ github.event.workflow_run.head_sha \|\| github.event.issue.number \|\| github.run_id \}\}/u);
+  assert.match(caller, /check-name: cla \/ cla/u);
+});
+test("the unprivileged request workflow holds no secrets and reports no cla check", () => {
+  const request = readFileSync(new URL("./cla-request.yml", import.meta.url), "utf8");
+  assert.match(request, /^name: CLA Request$/mu);
+  assert.match(request, /^on:\n  pull_request:\n/mu);
+  assert.match(request, /^permissions: \{\}$/mu);
+  assert.doesNotMatch(request, /secrets\.|github\.token|uses:/u);
+  assert.doesNotMatch(request, /^  cla:|name: cla$/mu);
 });
 
 test("bot-only pull requests need no signature-store secret; human coauthors require it", async () => {
@@ -192,7 +254,8 @@ test("bot-only pull requests need no signature-store secret; human coauthors req
   for (const [user, coauthor, needsStore] of [[bot, bot, "false"], [bot, other, "true"], [author, author, "true"]]) {
     const outputs = {};
     await runInNewContext(`(async () => {${credentialsSource}\n})()`, {
-      context: { repo: { owner: "fixture", repo: "repository" }, eventName: "pull_request_target", payload: { pull_request: { number: 17 } } },
+      context: { repo: { owner: "fixture", repo: "repository" }, eventName: "workflow_run", payload: { workflow_run: triggeringRun } },
+      process: { env: { PULL_NUMBERS: "[17]" } },
       github: {
         request: async () => ({ data: pull(17, user) }),
         paginate: async () => [{ sha: HEAD }],
@@ -204,12 +267,12 @@ test("bot-only pull requests need no signature-store secret; human coauthors req
   }
 });
 
-test("closed target events skip the entire verifier and its credential preflight", () => {
+test("only pull request workflow runs and signing comments reach the verifier", () => {
   const condition = workflow.match(/^    if: (.+)$/mu)?.[1];
   assert.ok(condition);
   for (const [eventName, event, expected] of [
-    ["pull_request_target", { action: "closed" }, false],
-    ["pull_request_target", { action: "opened" }, true],
+    ["workflow_run", { workflow_run: { event: "pull_request" } }, true],
+    ["workflow_run", { workflow_run: { event: "push" } }, false],
     ["merge_group", {}, true],
     ["workflow_dispatch", {}, true],
     ["issue_comment", { issue: { pull_request: {} }, comment: { body: "recheck" } }, true],
@@ -217,6 +280,6 @@ test("closed target events skip the entire verifier and its credential preflight
   ]) {
     assert.equal(runInNewContext(condition, { github: { event_name: eventName, event } }), expected);
   }
-  const caller = readFileSync(new URL("./cla-check.yml", import.meta.url), "utf8");
-  assert.match(caller, /types: \[opened, synchronize, reopened, ready_for_review\]/u);
+  const request = readFileSync(new URL("./cla-request.yml", import.meta.url), "utf8");
+  assert.match(request, /types: \[opened, synchronize, reopened, ready_for_review\]/u);
 });
