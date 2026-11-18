@@ -32,6 +32,7 @@ test("release builds every published target with its runner and build kind", () 
   assert.match(build, /name: bindings-\$\{\{ matrix.target \}\}\n          path: "\*\.node"/u);
   assert.match(build, /name: bindings-\$\{\{ matrix.target \}\}\n          path: \$\{\{ inputs.wasm-artifact-paths \}\}/u);
   assert.doesNotMatch(build, /run: .*\$\{\{/u, "target values reach the shell through env");
+  assert.match(build, /targets: \$\{\{ matrix.target \}\}\n      - name: Ensure cargo on PATH\n[^]*?if: runner.os != 'Windows'\n        shell: bash\n        run: echo "\$HOME\/.cargo\/bin" >> "\$GITHUB_PATH"/u);
 });
 
 test("release tests every host and keeps checkouts and pins immutable", () => {

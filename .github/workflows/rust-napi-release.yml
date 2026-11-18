@@ -90,6 +90,13 @@ jobs:
         with:
           toolchain: 1.99.1
           targets: ${{ matrix.target }}
+      - name: Ensure cargo on PATH
+        # dtolnay/rust-toolchain only prepends $CARGO_HOME/bin when it installs
+        # rustup itself; runners with a preinstalled rustup can otherwise
+        # resolve cargo to a rustup-init link.
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: release-build-${{ matrix.target }}
