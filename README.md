@@ -21,6 +21,7 @@ Organization-wide GitHub configurations, reusable workflows, and templates.
 | `npm-artifact-publish.yml` | Publish one pre-packed npm artifact without exposing OIDC to its build |
 | `pypi-publish-hardened` | Prepare and verify an exact wheel matrix around top-level PyPI trusted publishing |
 | `crates-io-publish.yml` | Package without OIDC, then attest and publish exact crate bytes |
+| `rust-napi-release.yml` | Build every Rust NAPI release target and test the bindings on Linux, macOS and Windows |
 | `release-policy.yml` | Enforce immutable, artifact-only release privilege boundaries |
 | `package-consumer-compat.yml` | Check packed packages on the consumer toolchain nightly |
 | `quarantine-prune.yml` | Remove expired dependency-quarantine exceptions without storing artifacts, including for private self-hosted callers |
@@ -85,6 +86,28 @@ Every full-scope job is skipped in the pull-request scope, so a caller's
 aggregate check sees `success` from the called workflow when the single job
 passes; in the full scope any failed platform job fails the call. Any other
 scope value fails the workflow lint job.
+### Rust NAPI Release Build and Test
+
+`rust-napi-release.yml` builds the five native targets and
+`wasm32-wasip1-threads`, uploads each as `bindings-<target>`, then installs all
+bindings on Ubuntu, macOS and Windows. Linux runs the full `bun test` suite;
+macOS and Windows run only `binding-test-directory` (default `__test__`), so
+repository tooling tests never depend on a non-Linux host. Callers keep their
+own gating and packing:
+
+```yaml
+  test:
+    needs: [preflight, verify]
+    if: needs.preflight.outputs.already-released != 'true'
+    uses: stella/.github/.github/workflows/rust-napi-release.yml@<sha>
+    with:
+      property-test-command: bun run test:props
+```
+
+`wasm-artifact-paths` selects the WASM bundle files, `single-thread-wasm`
+uploads one extra file as the `single-thread-wasm` artifact, and
+`pre-test-commands` runs one command per line on every test host after the
+bindings are installed (split into words, never evaluated).
 
 ### Package Consumer Compatibility
 

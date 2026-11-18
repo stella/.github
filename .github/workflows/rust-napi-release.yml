@@ -1,0 +1,207 @@
+name: Rust NAPI release build and test
+
+on:
+  workflow_call:
+    inputs:
+      node-version-file:
+        description: "Node.js version file in the caller repository"
+        required: false
+        type: string
+        default: ".node-version"
+      binding-test-directory:
+        description: "Test directory run on macOS and Windows; Linux runs the full suite"
+        required: false
+        type: string
+        default: "__test__"
+      wasm-artifact-paths:
+        description: "Files uploaded from the wasm32-wasip1-threads build, one glob per line"
+        required: false
+        type: string
+        default: |
+          *.wasm
+          !*.debug.wasm
+          *.cjs
+          *.wasi*.d.cts
+          *.wasi-browser.js
+          wasi-worker*.mjs
+      single-thread-wasm:
+        description: "Optional single-thread WebAssembly file from the WASM build, uploaded as the single-thread-wasm artifact and placed in the workspace before tests"
+        required: false
+        type: string
+        default: ""
+      pre-test-commands:
+        description: "Optional commands run on every test host after the bindings are installed, one command per line"
+        required: false
+        type: string
+        default: ""
+      property-test-command:
+        description: "Optional extra test command run on Linux after the full suite"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-15
+            kind: native
+          - target: aarch64-apple-darwin
+            os: macos-15
+            kind: native
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            kind: native
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04
+            kind: cross
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            kind: native
+          - target: wasm32-wasip1-threads
+            os: ubuntu-24.04
+            kind: wasm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ${{ inputs.node-version-file }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - name: Ensure cargo on PATH
+        # dtolnay/rust-toolchain only prepends $CARGO_HOME/bin when it installs
+        # rustup itself; runners with a preinstalled rustup can otherwise
+        # resolve cargo to a rustup-init link.
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: release-build-${{ matrix.target }}
+      - run: bun install --frozen-lockfile
+      - name: Build native
+        if: matrix.kind == 'native'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: bun run build --target "$BUILD_TARGET"
+      - name: Build cross-compile
+        if: matrix.kind == 'cross'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: bun run build --target "$BUILD_TARGET" --use-napi-cross
+      - name: Build WASM
+        if: matrix.kind == 'wasm'
+        run: bun run build:wasm
+      - name: Upload native binding
+        if: matrix.kind != 'wasm'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bindings-${{ matrix.target }}
+          path: "*.node"
+          if-no-files-found: error
+      - name: Upload WASM bindings
+        if: matrix.kind == 'wasm'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bindings-${{ matrix.target }}
+          path: ${{ inputs.wasm-artifact-paths }}
+          if-no-files-found: error
+      - name: Upload single-thread WASM
+        if: matrix.kind == 'wasm' && inputs.single-thread-wasm != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: single-thread-wasm
+          path: ${{ inputs.single-thread-wasm }}
+          if-no-files-found: error
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ${{ inputs.node-version-file }}
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bindings-*
+          path: artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.single-thread-wasm != ''
+        with:
+          name: single-thread-wasm
+          path: .
+      - name: Install built bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -R artifacts/
+          for dir in artifacts/bindings-*; do
+            cp -- "$dir"/* .
+          done
+          ls -la -- *.node 2>/dev/null || echo "No .node files"
+          ls -la -- *.wasm 2>/dev/null || echo "No .wasm files"
+      - name: Prepare tests
+        if: inputs.pre-test-commands != ''
+        shell: bash
+        env:
+          PRE_TEST_COMMANDS: ${{ inputs.pre-test-commands }}
+        # Each line is one command line, split into words without evaluation.
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            read -ra command <<< "$line"
+            if (( ${#command[@]} == 0 )); then continue; fi
+            "${command[@]}"
+          done <<< "$PRE_TEST_COMMANDS"
+      # Repository tooling tests run on Linux; other hosts verify the built
+      # bindings against the package runtime tests.
+      - name: Full repository suite
+        if: runner.os == 'Linux'
+        run: bun test
+      - name: Binding suite
+        if: runner.os != 'Linux'
+        shell: bash
+        env:
+          BINDING_TEST_DIRECTORY: ${{ inputs.binding-test-directory }}
+        run: bun test "./$BINDING_TEST_DIRECTORY"
+      - name: Property tests
+        if: runner.os == 'Linux' && inputs.property-test-command != ''
+        env:
+          PROPERTY_TEST_CMD: ${{ inputs.property-test-command }}
+        run: $PROPERTY_TEST_CMD
