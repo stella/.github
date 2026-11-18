@@ -3,6 +3,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 
 const workflow = readFileSync(new URL("./crates-io-publish.yml", import.meta.url), "utf8");
+const rustToolchain = workflow.match(/^      RUSTUP_TOOLCHAIN: (\d+\.\d+\.\d+)$/m)?.[1];
+assert.ok(rustToolchain, "publishing workflow declares an exact Rust version");
 const publisher = readFileSync(new URL("../tools/publish-crate.sh", import.meta.url), "utf8");
 
 test("crate packaging is isolated from publishing credentials", () => {
@@ -59,7 +61,7 @@ test("every shared Rust setup selects the exact stable toolchain", () => {
     const setups = source.matchAll(/uses: (?:dtolnay\/rust-toolchain|actions-rust-lang\/setup-rust-toolchain)@[^\n]+\n([\s\S]*?)(?=\n\s*-|$)/g);
     for (const setup of setups) {
       count++;
-      assert.match(setup[1], /with:\n\s+toolchain: 1\.99\.0(?:\n|$)/, file);
+      assert.equal(setup[1].match(/with:\n\s+toolchain: ([^\n]+)/)?.[1], rustToolchain, file);
     }
   }
   assert.ok(count > 0);
@@ -84,9 +86,9 @@ test("shared Rust execution contexts force the pin over caller toolchain files",
       const indent = jobs ? "    " : "      ";
       const env = body.match(new RegExp(`^${indent}env:\n((?:${indent}  [^\n]*\n)+)`, "m"));
       assert.ok(env, `${file}: Rust context must declare env`);
-      assert.match(env[1], /^\s+RUSTUP_TOOLCHAIN: 1\.99\.0(?:\n|$)/m, file);
+      assert.equal(env[1].match(/^\s+RUSTUP_TOOLCHAIN: ([^\n]+)/m)?.[1], rustToolchain, file);
       for (const override of body.matchAll(/RUSTUP_TOOLCHAIN:\s*([^\n]+)/g))
-        assert.equal(override[1], "1.99.0", `${file}: Rust pin override`);
+        assert.equal(override[1], rustToolchain, `${file}: Rust pin override`);
     }
   }
   assert.ok(count > 0);

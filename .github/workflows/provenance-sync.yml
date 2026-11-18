@@ -1,11 +1,11 @@
 name: Provenance Sync
 
-# Refreshes checked-in provenance artifacts on a same-repository pull request
-# branch. Callers trigger it from `pull_request_target`, so Dependabot pull
-# requests get the App credentials too. The pull request's code only runs in
-# `generate`, which has a read-only token and no secrets; `commit` never
-# executes pull request code and pushes the refresh as the GitHub App, so the
-# new head gets a full set of checks.
+# Unprivileged half of the provenance refresh. Callers trigger it from
+# `pull_request`; it runs the pull request's code with a read-only token and
+# no secrets, and uploads the refreshed provenance as the `provenance`
+# artifact when it drifted. The privileged half, provenance-commit.yml, runs
+# from the caller's `workflow_run` on the default branch, treats that artifact
+# as untrusted data and commits it as the GitHub App.
 
 on:
   workflow_call:
@@ -40,18 +40,6 @@ on:
         required: false
         type: string
         default: "bun install --frozen-lockfile"
-      commit-message:
-        description: "Commit message for the refresh commit"
-        required: false
-        type: string
-        default: "chore: refresh provenance artifacts"
-    secrets:
-      app_id:
-        description: "GitHub App ID that owns the refresh commit"
-        required: true
-      app_private_key:
-        description: "GitHub App private key that owns the refresh commit"
-        required: true
 
 permissions: {}
 
@@ -59,16 +47,12 @@ jobs:
   generate:
     name: Generate provenance
     if: >-
-      github.event_name == 'pull_request_target'
-      && github.event.pull_request.state == 'open'
+      github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-    outputs:
-      changed: ${{ steps.diff.outputs.changed }}
-      provenance-path: ${{ steps.diff.outputs.provenance-path }}
     steps:
       - name: Checkout pull request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,7 +61,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
 
@@ -212,100 +196,10 @@ jobs:
 
       - name: Upload refreshed provenance
         if: steps.diff.outputs.changed == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: provenance
           path: ${{ runner.temp }}/provenance.tar
           if-no-files-found: error
           retention-days: 1
 
-  commit:
-    name: Commit provenance
-    needs: generate
-    if: needs.generate.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      # Checked out only as the commit base; nothing from it runs here.
-      - name: Checkout pull request head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-
-      - name: Download refreshed provenance
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: provenance
-          path: ${{ runner.temp }}/provenance-archive
-
-      - name: Stage refreshed provenance
-        shell: bash
-        env:
-          PROVENANCE_PATH: ${{ needs.generate.outputs.provenance-path }}
-          ARCHIVE: ${{ runner.temp }}/provenance-archive/provenance.tar
-          REFRESH_DIR: ${{ runner.temp }}/provenance-refresh
-        run: |
-          set -euo pipefail
-
-          case "$PROVENANCE_PATH" in
-            provenance | */provenance) ;;
-            *)
-              echo "::error::Unexpected provenance path: $PROVENANCE_PATH"
-              exit 1
-              ;;
-          esac
-          case "$PROVENANCE_PATH" in
-            /* | *..*)
-              echo "::error::Unexpected provenance path: $PROVENANCE_PATH"
-              exit 1
-              ;;
-          esac
-          # The archive comes from a job that ran pull request code: accept
-          # only regular files and directories under relative, plain paths.
-          if tar -tvf "$ARCHIVE" | grep -qv '^[-d]'; then
-            echo "::error::The provenance archive may contain only regular files and directories."
-            exit 1
-          fi
-          if tar -tf "$ARCHIVE" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
-            echo "::error::The provenance archive contains an unsafe path."
-            exit 1
-          fi
-          mkdir -p "$REFRESH_DIR"
-          tar -xf "$ARCHIVE" -C "$REFRESH_DIR" --no-same-owner --no-same-permissions
-
-          rm -rf "$PROVENANCE_PATH"
-          mkdir -p "$PROVENANCE_PATH"
-          cp -R "$REFRESH_DIR"/. "$PROVENANCE_PATH"/
-          git status --short -- "$PROVENANCE_PATH"
-
-      - name: Mint App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.app_id }}
-          private-key: ${{ secrets.app_private_key }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-
-      - name: Checkout shared tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .signed-commit
-          persist-credentials: false
-
-      # A commit owned by the App (not GITHUB_TOKEN) triggers the pull
-      # request's workflows for the new head.
-      - name: Commit to the pull request branch
-        uses: ./.signed-commit/.github/actions/signed-commit
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          mode: append
-          branch: ${{ github.event.pull_request.head.ref }}
-          paths: ${{ needs.generate.outputs.provenance-path }}/**
-          commit-message: ${{ inputs.commit-message }}

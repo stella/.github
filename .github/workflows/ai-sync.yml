@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
@@ -19,11 +21,11 @@ jobs:
     name: Check shared workflow contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.1"
+          bun-version: "1.4.4"
       - name: Test shared actions and workflows
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -36,7 +38,25 @@ jobs:
     name: Check generated AI instructions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
       - run: bash scripts/sync-ai-skills.sh --check
+
+  ci-result:
+    name: ci-result
+    if: always()
+    needs: [workflow-contracts, sync-ai]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check validation results
+        env:
+          WORKFLOW_CONTRACTS_RESULT: ${{ needs.workflow-contracts.result }}
+          SYNC_AI_RESULT: ${{ needs.sync-ai.result }}
+        run: |
+          for result in "$WORKFLOW_CONTRACTS_RESULT" "$SYNC_AI_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "Validation job concluded with result: $result"
+              exit 1
+            fi
+          done

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
@@ -10,52 +10,19 @@ const job = workflow.split("\n  typecheck:\n")[1]?.split("\n  runtime-compat:\n"
 assert.ok(job);
 const scriptFor = (name) => job.split(`      - name: ${name}\n`)[1].split("        run: |\n")[1].split(/\n      - /u)[0].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
 const probe = scriptFor("Reject a seeded type error");
-const selection = scriptFor("Select compiler parity");
 
-test("parity is conditional while typecheck and rejection remain unconditional", () => {
-  assert.match(job, /- name: Check compiler parity\n        if: steps.parity.outputs.run == 'true'\n        run: bun run check:typecheck-parity/u);
-  assert.match(job, /fetch-depth: 0/u);
-  assert.match(job, /github.event.pull_request.base.sha \|\| github.event.merge_group.base_sha \|\| github.event.before/u);
-  for (const name of ["version-check", "lint", "runtime-compat", "rust-checks", "provenance", "build", "test"]) {
+test("typecheck has no compiler parity mode and gates no other job", () => {
+  assert.doesNotMatch(workflow, /parity|typecheck-only/iu);
+  assert.doesNotMatch(job, /fetch-depth|BASE_SHA|git show/u);
+  for (const name of ["version-check", "lint", "runtime-compat", "detect-rust", "detect"]) {
     const section = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z][\w-]*:\n/u)[0];
-    assert.match(section, /if: inputs.trusted == 'true' && !inputs.typecheck-only/u);
+    assert.match(section, /if: inputs.trusted == 'true'\n/u);
   }
 });
 
-const manifest = { packageManager: "bun@1.4.3", devDependencies: { typescript: "7.0.2", "@stll/oxlint-config": "0.10.0" } };
-for (const [name, head, base, mode, sha, changed, success] of [
-  ["same versions", manifest, manifest, "changed", "a".repeat(40), false, true],
-  ["ordinary package edit", { ...manifest, version: "2.0.0" }, manifest, "changed", "a".repeat(40), false, true],
-  ["Bun bump", { ...manifest, packageManager: "bun@1.4.4" }, manifest, "changed", "a".repeat(40), true, true],
-  ["TypeScript bump", { ...manifest, devDependencies: { typescript: "7.0.3" } }, manifest, "changed", "a".repeat(40), true, true],
-  ["nightly", manifest, manifest, "always", "", true, true],
-  ["missing base", manifest, manifest, "changed", "", true, true],
-  ["initial push", manifest, manifest, "changed", "0".repeat(40), true, true],
-  ["unreadable base", manifest, null, "changed", "a".repeat(40), true, true],
-  ["invalid mode", manifest, manifest, "never", "a".repeat(40), undefined, false],
-]) {
-  test(`parity version selection: ${name}`, () => {
-    const root = mkdtempSync(join(tmpdir(), "napi-parity-selection-"));
-    try {
-      mkdirSync(join(root, "bin"));
-      writeFileSync(join(root, "package.json"), JSON.stringify(head));
-      writeFileSync(join(root, "base.json"), JSON.stringify(base));
-      writeFileSync(join(root, "bin/git"), `#!/bin/bash\n${base === null ? "exit 1" : 'cat "$BASE_MANIFEST"'}\n`, { mode: 0o755 });
-      const output = join(root, "output");
-      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", selection], {
-        cwd: root,
-        env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, BASE_MANIFEST: join(root, "base.json"), PARITY_MODE: mode, BASE_SHA: sha, GITHUB_OUTPUT: output },
-        encoding: "utf8",
-      });
-      assert.equal(result.status === 0, success, result.stderr);
-      if (success) assert.equal(readFileSync(output, "utf8"), `run=${changed}\n`);
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-}
-
 test("typechecking is opt-in, trust-gated, read-only, and independent of Rust change selection", () => {
   assert.match(workflow, /      typecheck:\n[^]*?        type: boolean\n        default: false/u);
-  assert.match(job, /name: Typecheck and parity\n    if: inputs.trusted == 'true' && inputs.typecheck/u);
+  assert.match(job, /name: Typecheck\n    if: inputs.trusted == 'true' && inputs.typecheck/u);
   assert.match(job, /permissions:\n      contents: read/u);
   assert.doesNotMatch(job, /needs:|inputs\.(?:rust|build|provenance)-changed|continue-on-error:/u);
   assert.match(job, /persist-credentials: false/u);
@@ -63,7 +30,7 @@ test("typechecking is opt-in, trust-gated, read-only, and independent of Rust ch
   for (const action of job.matchAll(/uses: ([^\n]+)/gu)) {
     assert.match(action[1], /@[0-9a-f]{40}(?: |$)/u);
   }
-  const commands = ["${{ inputs.install-command }}", "bun run check:toolchain", "bun run typecheck", "Reject a seeded type error", "Select compiler parity", "bun run check:typecheck-parity"];
+  const commands = ["bun install --frozen-lockfile", "bun run check:toolchain", "bun run typecheck", "Reject a seeded type error"];
   for (let index = 1; index < commands.length; index++) {
     assert.ok(job.indexOf(commands[index - 1]) < job.indexOf(commands[index]));
   }
@@ -132,14 +99,14 @@ test("static required check names survive skipping before runner allocation", ()
   assert.deepEqual(declared.toSorted(), required.toSorted());
   for (const { section } of [...buildJobs, ...testJobs]) {
     assert.doesNotMatch(section, /matrix|strategy:|always\(|!cancelled\(/u);
-    assert.match(section, /if: inputs.trusted == 'true' && !inputs.typecheck-only && needs.detect.outputs.build-changed == 'true'\n/u);
+    assert.match(section, /if: inputs.trusted == 'true' && needs.detect.outputs.build-changed == 'true'\n/u);
     assert.doesNotMatch(section, /inputs.build-changed|Skip /u);
   }
 });
 
 test("one permission-free selection job gates all build and test jobs", () => {
   assert.match(workflow, /      build-changed:\n[^]*?        type: string\n        default: "true"/u);
-  assert.match(detect, /if: inputs.trusted == 'true' && !inputs.typecheck-only\n/u);
+  assert.match(detect, /if: inputs.trusted == 'true'\n/u);
   assert.match(detect, /permissions: \{\}/u);
   assert.match(detect, /build-changed: \$\{\{ steps.select.outputs.build-changed \}\}/u);
   assert.match(detect, /BUILD_CHANGED: \$\{\{ inputs.build-changed \}\}/u);
@@ -158,7 +125,7 @@ test("build jobs share steps and keep target, runner and build kind consistent",
     assert.equal(envTarget, target, "artifact target must match the required check");
     const kind = section.match(/BUILD_KIND: ([^\n]+)/u)[1];
     assert.equal(kind, target.startsWith("wasm") ? "wasm" : target === "aarch64-unknown-linux-gnu" ? "cross" : "native");
-    assert.match(section, /RUSTUP_TOOLCHAIN: 1\.99\.0/u);
+    assert.equal(section.match(/RUSTUP_TOOLCHAIN: ([^\n]+)/u)[1], build.match(/toolchain: ([^\n]+)/u)[1]);
     assert.equal(section.match(/runs-on: ([^\n]+)/u)[1], target.includes("apple") ? "macos-15" : "ubuntu-latest");
     if (id !== "build") assert.match(section, /steps: \*build-steps/u);
   }
@@ -168,7 +135,17 @@ test("build jobs share steps and keep target, runner and build kind consistent",
   assert.match(build, /if: env.BUILD_KIND == 'cross'\n[^]*?--use-napi-cross/u);
   assert.match(build, /if: env.BUILD_KIND == 'wasm'\n        run: bun run build:wasm/u);
   assert.match(build, /name: bindings-\$\{\{ env.BUILD_TARGET \}\}/u);
-  assert.match(build, /path: \|\n            \*\.node\n            \*\.wasm\n            !\*\.debug.wasm\n            \*\.cjs\n            \*\.wasi-browser.js\n            wasi-worker\*\.mjs\n          if-no-files-found: error/u);
+  const paths = build.match(/          path: \|\n((?:            [^\n]+\n)+)/u)[1].trim().split(/\s+/u);
+  const selected = (file) => paths.some((pattern) => !pattern.startsWith("!") && matchesGlob(file, pattern)) && !paths.some((pattern) => pattern.startsWith("!") && matchesGlob(file, pattern.slice(1)));
+  for (const binary of ["binding", "custom-native-name"]) {
+    // NAPI's artifact collector consumes the declaration together with each
+    // WASI loader; a successful runtime-only smoke cannot prove this bundle.
+    for (const file of [`${binary}.wasm32-wasi.wasm`, `${binary}.wasi.cjs`, `${binary}.wasi.d.cts`, `${binary}.wasi-browser.js`, "wasi-worker.mjs", "wasi-worker-browser.mjs"]) {
+      assert.ok(selected(file), `artifact bundle omits ${file}`);
+    }
+    assert.equal(selected(`${binary}.debug.wasm`), false);
+  }
+  assert.match(build, /if-no-files-found: error/u);
 });
 
 test("test jobs share artifact handling and run extra property tests only on Linux", () => {
@@ -182,4 +159,77 @@ test("test jobs share artifact handling and run extra property tests only on Lin
   assert.match(artifactTest, /- run: bun test/u);
   assert.match(artifactTest, /if: >-\n          runner.os == 'Linux'\n          && inputs.property-test-command != ''/u);
   assert.match(artifactTest, /run: \$PROPERTY_TEST_CMD\n        env:\n          PROPERTY_TEST_CMD: \$\{\{ inputs.property-test-command \}\}/u);
+});
+
+test("Rust checks lint and test every workspace crate, as release verification does", () => {
+  const section = workflow.split("\n  rust-checks:\n")[1].split(/\n  [a-z][\w-]*:\n/u)[0];
+  const cargoRuns = section.match(/run: cargo (?:clippy|test)\b.*/gu) ?? [];
+  assert.equal(cargoRuns.length, 2);
+  for (const run of cargoRuns) {
+    assert.match(run, / --locked /u);
+    assert.match(run, / --workspace /u);
+    assert.match(run, / --all-targets --all-features/u);
+  }
+});
+
+test("dependency installation preserves and enforces lockfile integrity", () => {
+  assert.match(workflow, /      install-ignore-scripts:\n[^]*?        type: boolean\n        default: false/u);
+  assert.doesNotMatch(workflow, /install-command|eval /u);
+  const installs = [...workflow.matchAll(/      - name: Install dependencies\n([^]*?)(?=\n      - )/gu)].map((match) => match[1]);
+  assert.equal(installs.length, 6);
+  for (const install of installs) {
+    assert.match(install, /bun install --frozen-lockfile --ignore-scripts/u);
+    assert.match(install, /bun install --frozen-lockfile\n/u);
+    assert.doesNotMatch(install, /INSTALL_COMMAND|eval/u);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "napi-install-"));
+  try {
+    mkdirSync(join(root, "bin"));
+    const calls = join(root, "calls");
+    writeFileSync(join(root, "bin/bun"), `#!/bin/bash\nprintf '%s\\n' "$*" >> "$CALLS"\n`, { mode: 0o755 });
+    const install = installs[0].split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", install], {
+      env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, CALLS: calls, INSTALL_COMMAND: "bun install --no-'verify'", INSTALL_IGNORE_SCRIPTS: "false" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(calls, "utf8"), "install --frozen-lockfile\n");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Rust change selection includes lockfiles and manifests", () => {
+  assert.match(workflow, /rust-changed:\n        description: "[^"]*caller requests Rust checks in addition to the workflow’s manifest, lockfile, toolchain, crate, and Rust source detection\."\n        required: false\n        type: string\n        default: "true"/u);
+  const rustChecks = sectionFor("rust-checks");
+  assert.match(rustChecks, /inputs\.rust-changed == 'true' \|\| needs\.detect-rust\.outputs\.rust-changed == 'true'/u);
+  assert.match(rustChecks, /needs: \[detect-rust\]/u);
+
+  const rustDetect = sectionFor("detect-rust");
+  assert.match(rustDetect, /fetch-depth: 0/u);
+  assert.match(rustDetect, /git merge-base HEAD "\$BASE_SHA"/u);
+  for (const path of ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "**/Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "crates/**", "src/**/*.rs"]) {
+    assert.ok(rustDetect.includes(`'${path}'`), `missing Rust change path ${path}`);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "napi-rust-selection-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: root });
+    spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+    spawnSync("git", ["config", "user.name", "Test"], { cwd: root });
+    writeFileSync(join(root, "Cargo.lock"), "version = 3\n");
+    spawnSync("git", ["add", "Cargo.lock"], { cwd: root });
+    spawnSync("git", ["commit", "-qm", "base"], { cwd: root });
+    const base = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(root, "Cargo.lock"), "version = 4\n");
+    spawnSync("git", ["commit", "-qam", "lockfile"], { cwd: root });
+    const output = join(root, "output");
+    const script = rustDetect.split("      - name: Select Rust checks\n")[1].split("        run: |\n")[1].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+      cwd: root,
+      env: { ...process.env, BASE_SHA: base, GITHUB_OUTPUT: output, RUST_CHANGED: "false" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output, "utf8"), "rust-changed=true\n");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

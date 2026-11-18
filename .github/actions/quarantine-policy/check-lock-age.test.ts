@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +17,7 @@ import {
 import { pathEntryExists } from "./check";
 
 const NOW = new Date("2026-08-29T12:00:00.000Z");
+const CHECK_ENTRY = join(import.meta.dir, "check-lock-age.ts");
 const lockfile = (...resolutions: string[]) => `{
   "lockfileVersion": 1,
   "packages": {
@@ -25,7 +33,135 @@ ${excludes}
 ]
 `;
 
+const runNestedRootCheck = (nestedExcludes = "") => {
+  const directory = mkdtempSync(join(tmpdir(), "quarantine-lock-age-roots-"));
+  const nestedRoot = join(directory, "plugins/vscode");
+  const baseNestedRoot = join(directory, ".quarantine-base/plugins/vscode");
+  mkdirSync(nestedRoot, { recursive: true });
+  mkdirSync(baseNestedRoot, { recursive: true });
+  writeFileSync(join(directory, "bun.lock"), lockfile("old-root@2.0.0"));
+  writeFileSync(join(directory, "bunfig.toml"), bunfig(""));
+  writeFileSync(join(nestedRoot, "bun.lock"), lockfile("young-nested@2.0.0"));
+  writeFileSync(join(nestedRoot, "bunfig.toml"), bunfig(nestedExcludes));
+  writeFileSync(join(directory, ".quarantine-base/bun.lock"), lockfile());
+  writeFileSync(join(directory, ".quarantine-base/bunfig.toml"), bunfig(""));
+  writeFileSync(join(baseNestedRoot, "bun.lock"), lockfile());
+  writeFileSync(join(baseNestedRoot, "bunfig.toml"), bunfig(""));
+  spawnSync("git", ["init", "-q"], { cwd: directory });
+  spawnSync("git", ["add", "bun.lock", "plugins/vscode/bun.lock"], {
+    cwd: directory,
+  });
+  const preload = join(directory, "registry-fixture.ts");
+  writeFileSync(
+    preload,
+    `globalThis.fetch = async (input) => {
+  const name = decodeURIComponent(new URL(String(input)).pathname.slice(1));
+  const published = name === "old-root"
+    ? "2020-01-01T00:00:00.000Z"
+    : new Date(Date.now() - 86_400_000).toISOString();
+  return Response.json({ time: { "2.0.0": published } });
+};\n`,
+  );
+  const result = spawnSync(
+    "bun",
+    [
+      "--preload",
+      preload,
+      CHECK_ENTRY,
+      ".quarantine-base/bun.lock",
+      ".quarantine-base/bunfig.toml",
+      ".quarantine-base/.npmrc",
+    ],
+    {
+      cwd: directory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BUN_ROOTS: ". plugins/vscode",
+        GITHUB_EVENT_NAME: "pull_request",
+      },
+    },
+  );
+  rmSync(directory, { force: true, recursive: true });
+  return result;
+};
+
+describe("registry metadata retries", () => {
+  for (const registry of ["npm", "cargo"] as const) {
+    for (const scenario of ["recover", "exhaust", "terminal-http"] as const) {
+      test(`${registry} ${scenario} preserves the bounded registry retry policy`, () => {
+        const script = `
+        import { loadRegistryMetadata, loadCargoRegistryText } from ${JSON.stringify(CHECK_ENTRY)};
+        const scenario = ${JSON.stringify(scenario)};
+        const registry = ${JSON.stringify(registry)};
+        let calls = 0;
+        globalThis.fetch = async () => {
+          calls++;
+          if (scenario === "terminal-http") return new Response(null, { status: 404 });
+          if (scenario === "recover" && calls > 1) return Response.json({ time: { "1.0.0": "2020-01-01T00:00:00.000Z" } });
+          return new Response(new ReadableStream({
+            start(controller) {
+              controller.error(new DOMException("metadata body timed out", "TimeoutError"));
+            },
+          }));
+        };
+        try {
+          const metadata = registry === "npm"
+            ? await loadRegistryMetadata("retry-fixture")
+            : JSON.parse(await loadCargoRegistryText("https://index.crates.io/re/tr/retry-fixture"));
+          console.log(JSON.stringify({ calls, metadata }));
+        } catch (error) {
+          console.log(JSON.stringify({ calls, error: error.message }));
+        }
+      `;
+        const result = spawnSync("bun", ["--eval", script], {
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        expect(result.status).toBe(0);
+        const value = JSON.parse(result.stdout);
+        if (scenario === "recover") {
+          expect(value).toEqual({
+            calls: 2,
+            metadata: { time: { "1.0.0": "2020-01-01T00:00:00.000Z" } },
+          });
+        } else {
+          expect(value).toEqual({
+            calls: scenario === "exhaust" || registry === "cargo" ? 3 : 1,
+            error:
+              scenario === "exhaust"
+                ? "metadata body timed out"
+                : registry === "npm"
+                  ? "npm registry returned HTTP 404"
+                  : "HTTP 404",
+          });
+        }
+      });
+    }
+  }
+});
+
 describe("locked package release age", () => {
+  test("screens newly locked versions in every declared Bun root", () => {
+    const result = runNestedRootCheck();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "plugins/vscode/bun.lock: young-nested@2.0.0",
+    );
+    expect(result.stderr).not.toContain("old-root@2.0.0");
+  });
+
+  test("accepts an active nested-root release-age exception", () => {
+    const result = runNestedRootCheck(
+      '  "young-nested@2.0.0", # quarantine-expires: 2026-10-23T00:00:00.000Z',
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(
+      "validated 1 newly locked registry version(s)",
+    );
+  });
+
   test("detects a base npmrc symlink without following its target", () => {
     const directory = mkdtempSync(join(tmpdir(), "quarantine-lock-age-"));
     try {
@@ -76,12 +212,14 @@ describe("locked package release age", () => {
     ]);
     const result = await checkNewLockedRegistryReleaseAges({
       baseLockfile: lockfile("fresh@1.0.0"),
-      bunfig: bunfig(`  "allowed", # quarantine-expires: 2026-08-30T00:00:00.000Z
+      bunfig:
+        bunfig(`  "allowed", # quarantine-expires: 2026-08-30T00:00:00.000Z
   "exact@2.0.0", # quarantine-expires: 2026-08-30T00:00:00.000Z
   "@stll/internal", # quarantine-excluded-since: 2026-08-20T00:00:00.000Z`),
       loadMetadata: async (name) => {
         const value = metadata.get(name);
-        if (value === undefined) throw new Error(`unexpected lookup for ${name}`);
+        if (value === undefined)
+          throw new Error(`unexpected lookup for ${name}`);
         return value;
       },
       lockfile: lockfile(
@@ -145,7 +283,8 @@ describe("locked package release age", () => {
   test("rechecks an unchanged version when its base exception is removed", async () => {
     const unchanged = lockfile("fresh@1.0.0", "still-allowed@1.0.0");
     const result = await checkNewLockedRegistryReleaseAges({
-      baseBunfig: bunfig(`  "fresh", # quarantine-expires: 2026-08-28T00:00:00.000Z
+      baseBunfig:
+        bunfig(`  "fresh", # quarantine-expires: 2026-08-28T00:00:00.000Z
   "still-allowed", # quarantine-expires: 2026-08-30T00:00:00.000Z`),
       baseLockfile: unchanged,
       bunfig: bunfig(
@@ -175,7 +314,11 @@ describe("locked package release age", () => {
         if (name === "malformed") return { time: { "1.0.0": "0" } };
         throw new Error("registry unavailable");
       },
-      lockfile: lockfile("malformed@1.0.0", "missing@1.0.0", "unavailable@1.0.0"),
+      lockfile: lockfile(
+        "malformed@1.0.0",
+        "missing@1.0.0",
+        "unavailable@1.0.0",
+      ),
       now: NOW,
     });
     expect(result).toEqual({
@@ -193,10 +336,12 @@ describe("locked package release age", () => {
       bunfig: bunfig(""),
       lockfile: lockfile("boundary@1.0.0", "boundary@2.0.0"),
       now: NOW,
-      loadMetadata: async () => ({ time: {
-        "1.0.0": "2026-08-24T12:00:00.000Z",
-        "2.0.0": "2026-08-24T12:00:00.001Z",
-      } }),
+      loadMetadata: async () => ({
+        time: {
+          "1.0.0": "2026-08-24T12:00:00.000Z",
+          "2.0.0": "2026-08-24T12:00:00.001Z",
+        },
+      }),
     });
     expect(result.checked).toBe(2);
     expect(result.errors).toHaveLength(1);
@@ -204,7 +349,9 @@ describe("locked package release age", () => {
   });
 
   test("inherited expired exclusions do not trigger registry lookups on unrelated PRs", async () => {
-    const config = bunfig('  "allowed", # quarantine-expires: 2026-08-20T00:00:00.000Z');
+    const config = bunfig(
+      '  "allowed", # quarantine-expires: 2026-08-20T00:00:00.000Z',
+    );
     for (const eventName of ["pull_request", "merge_group"]) {
       const result = await checkNewLockedRegistryReleaseAges({
         baseBunfig: config,
@@ -213,22 +360,35 @@ describe("locked package release age", () => {
         lockfile: lockfile("allowed@1.0.0", "stable@1.0.0"),
         eventName,
         now: NOW,
-        loadMetadata: async () => { throw new Error("unexpected lookup"); },
+        loadMetadata: async () => {
+          throw new Error("unexpected lookup");
+        },
       });
       expect(result).toEqual({ checked: 0, errors: [] });
     }
   });
 
   test("config changes and maintenance events recheck existing non-excluded versions", async () => {
-    for (const eventName of ["pull_request", "merge_group", "push", "schedule"]) {
+    for (const eventName of [
+      "pull_request",
+      "merge_group",
+      "push",
+      "schedule",
+    ]) {
       const result = await checkNewLockedRegistryReleaseAges({
         baseBunfig: bunfig(""),
-        bunfig: bunfig("") + (eventName === "pull_request" || eventName === "merge_group" ? "# changed\n" : ""),
+        bunfig:
+          bunfig("") +
+          (eventName === "pull_request" || eventName === "merge_group"
+            ? "# changed\n"
+            : ""),
         baseLockfile: lockfile("fresh@1.0.0"),
         lockfile: lockfile("fresh@1.0.0"),
         eventName,
         now: NOW,
-        loadMetadata: async () => ({ time: { "1.0.0": "2026-08-28T12:00:00.000Z" } }),
+        loadMetadata: async () => ({
+          time: { "1.0.0": "2026-08-28T12:00:00.000Z" },
+        }),
       });
       expect(result.checked).toBe(1);
       expect(result.errors.join("\n")).toContain("younger than");

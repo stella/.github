@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
+import { cratesPublisherRustToolchain, PYPI_PUBLISH_USE, readRepositoryFileWithin, validateReleaseWorkflow } from "./check";
 
 const ref = "1".repeat(40);
 const base = `name: Release
@@ -38,7 +38,7 @@ jobs:
           distribution-name: example
           expected-version: 1.2.3
           wheel-contract: '{"python-wheel-linux":["manylinux_2_17_x86_64"]}'
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+      - uses: ${PYPI_PUBLISH_USE}
         with:
           packages-dir: dist
           skip-existing: true
@@ -60,13 +60,48 @@ jobs:
 `;
 
 const approvedBun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6";
-const approvedNode = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
-const approvedPython = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97";
+const approvedNode = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1";
+const approvedPython = "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0";
 const bunFileBase = base.replace(`oven-sh/setup-bun@${"4".repeat(40)}`, approvedBun);
 
 describe("release policy", () => {
   test("accepts artifact-only publishers and unprivileged builds", () => {
     expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
+  });
+
+  test("requires both release app mappings from finalizer callers", () => {
+    const withoutReleaseAppId = base.replace(
+      "      RELEASE_APP_ID: \${{ secrets.RELEASE_APP_ID }}\n",
+      "",
+    );
+    const withoutReleaseAppPrivateKey = base.replace(
+      "      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n",
+      "",
+    );
+    const withoutReleaseApp = withoutReleaseAppId.replace(
+      "      RELEASE_APP_PRIVATE_KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}\n",
+      "",
+    );
+
+    expect(() => validateReleaseWorkflow(withoutReleaseApp, ref)).toThrow(
+      "jobs.finalize.secrets must map RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY",
+    );
+    expect(() => validateReleaseWorkflow(withoutReleaseAppId, ref)).toThrow(
+      "jobs.finalize.secrets must map both RELEASE_APP credential fields or neither",
+    );
+    expect(() => validateReleaseWorkflow(withoutReleaseAppPrivateKey, ref)).toThrow(
+      "jobs.finalize.secrets must map both RELEASE_APP credential fields or neither",
+    );
+    expect(() => validateReleaseWorkflow(base, ref)).not.toThrow();
+  });
+
+  test("allows an independent npm publisher without release app mappings", () => {
+    const workflow = base.replace(
+      /  finalize:[\s\S]*$/,
+      `  release:\n    if: github.ref == 'refs/heads/main' && (true)\n    uses: stella/.github/.github/workflows/npm-independent-release.yml@${ref}\n    with:\n      package-files: package.json\n    permissions:\n      actions: read\n      contents: write\n      id-token: write\n`,
+    );
+
+    expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
   });
 
   const fileSelectors = [
@@ -557,7 +592,7 @@ jobs:
       attestations: write
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: release-artifacts
           path: release-artifacts
@@ -576,7 +611,8 @@ jobs:
       id-token: write
 `;
     expect(() => validateReleaseWorkflow(workflow, ref)).not.toThrow();
-    for (const toolchain of ["1.99.0", "stable", "nightly", "1.98.0", "1.99"]) {
+    const expected = cratesPublisherRustToolchain();
+    for (const toolchain of [expected, "stable", "nightly", "0.0.0", "1.99"]) {
       const validate = () =>
         validateReleaseWorkflow(
           workflow.replace(
@@ -585,8 +621,8 @@ jobs:
           ),
           ref,
         );
-      if (toolchain === "1.99.0") expect(validate).not.toThrow();
-      else expect(validate).toThrow("rust-toolchain must be 1.99.0");
+      if (toolchain === expected) expect(validate).not.toThrow();
+      else expect(validate).toThrow(`rust-toolchain must be ${expected}`);
     }
 
     expect(() =>
@@ -619,8 +655,8 @@ jobs:
     expect(() =>
       validateReleaseWorkflow(
         workflow.replace(
-          "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-          "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6\n        with:\n          subject-path: release-artifacts/*.tgz\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+          "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6\n        with:\n          subject-path: release-artifacts/*.tgz\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
         ),
         ref,
       ),
@@ -660,15 +696,15 @@ jobs:
     ["mixed-case floating Bun runtime", base.replace("oven-sh/setup-bun@", "OVEN-SH/SETUP-BUN@").replace("bun-version: 1.4.0", "bun-version: latest")],
     ["missing Bun runtime", base.replace("        with:\n          bun-version: 1.4.0\n", "")],
     ["dual Bun version sources", bunFileBase.replace("bun-version: 1.4.0", "bun-version: 1.4.0\n          bun-version-file: package.json")],
-    ["publisher command", base.replace(`      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33`, "      - run: npm install")],
+    ["publisher command", base.replace(`      - uses: ${PYPI_PUBLISH_USE}`, "      - run: npm install")],
     ["publisher ref drift", base.replaceAll(ref, "3".repeat(40))],
     ["publisher without main guard", base.replace("    if: github.ref == 'refs/heads/main' && (true)", "    if: true")],
     ["publisher guard bypass", base.replace("github.ref == 'refs/heads/main' && (true)", "github.ref == 'refs/heads/main' && (true) || true")],
     ["publisher secret inheritance", base.replace("    steps:\n      - uses: stella/.github/.github/actions/pypi-publish-hardened", "    secrets: inherit\n    steps:\n      - uses: stella/.github/.github/actions/pypi-publish-hardened")],
     ["unexpected PyPI input", base.replace("      wheel-contract:", "      attacker-input: value\n      wheel-contract:")],
     ["empty wheel contract", base.replace("'{\"python-wheel-linux\":[\"manylinux_2_17_x86_64\"]}'", "'{}'")],
-    ["publisher order drift", base.replace("      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33", `      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}`)],
-    ["publisher conditional step", base.replace("      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33", "      - if: always()\n        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33")],
+    ["publisher order drift", base.replace(`      - uses: ${PYPI_PUBLISH_USE}`, `      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}`)],
+    ["publisher conditional step", base.replace(`      - uses: ${PYPI_PUBLISH_USE}`, `      - if: always()\n        uses: ${PYPI_PUBLISH_USE}`)],
     ["publisher wrong directory", base.replace("          packages-dir: dist", "          packages-dir: wheel-artifacts")],
     ["publisher unsafe recovery", base.replace("          skip-existing: true", "          skip-existing: false")],
     ["publisher verification identity drift", base.replace(`      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}\n        with:\n          project-name: example`, `      - uses: stella/.github/.github/actions/pypi-publish-hardened/verify@${ref}\n        with:\n          project-name: attacker`)],

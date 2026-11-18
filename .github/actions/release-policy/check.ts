@@ -11,9 +11,9 @@ const RUNTIME_SOURCE_CHECKOUT_INPUTS = new Set(["fetch-depth", "persist-credenti
 const NODE_SETUP_INPUTS = new Set(["node-version", "node-version-file", "registry-url"]);
 const PYTHON_FILE_SETUP_INPUTS = new Set(["python-version", "python-version-file"]);
 export const FILE_SELECTOR_ACTIONS = new Set([
-  "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+  "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
   "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
-  "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+  "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
 ]);
 const BUN_SETUP_INPUTS = new Set(["bun-version", "bun-version-file"]);
 const RUNTIME_JOB_ENV = new Set(["CARGO_INCREMENTAL"]);
@@ -44,10 +44,10 @@ const releaseSecretSource = (name: string, expression: unknown) =>
       expression === `\${{ secrets.${source[name]} }}`,
   );
 const DOWNLOAD_ARTIFACT_USE =
-  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+  "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
 const ATTEST_USE = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
-const PYPI_PUBLISH_USE =
-  "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33";
+export const PYPI_PUBLISH_USE =
+  "pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086";
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -634,9 +634,16 @@ const validateOptionalBoolean = (value: unknown, label: string) => {
   }
 };
 
-const validateSecretPairs = (secrets: JsonObject, label: string) => {
+const validateSecretPairs = (
+  secrets: JsonObject,
+  label: string,
+  requirement: "optional" | "required" = "optional",
+) => {
   const hasId = "RELEASE_APP_ID" in secrets;
   const hasKey = "RELEASE_APP_PRIVATE_KEY" in secrets;
+  if (requirement === "required" && !hasId && !hasKey) {
+    fail(`${label} must map RELEASE_APP_ID and RELEASE_APP_PRIVATE_KEY`);
+  }
   if (hasId !== hasKey) {
     fail(`${label} must map both RELEASE_APP credential fields or neither`);
   }
@@ -738,7 +745,19 @@ const validateFinalizer = (job: JsonObject, ref: string, label: string) => {
       fail(`${label}.secrets contains an unsupported mapping for ${name}`);
     }
   }
-  validateSecretPairs(secrets, `${label}.secrets`);
+  validateSecretPairs(secrets, `${label}.secrets`, "required");
+};
+
+export const cratesPublisherRustToolchain = () => {
+  const source = YAML.parse(readFileSync(new URL("../../workflows/crates-io-publish.yml", import.meta.url), "utf8"));
+  const workflow = object(source, "shared crates publisher");
+  const trigger = object(workflow.on, "shared crates publisher.on");
+  const call = object(trigger.workflow_call, "shared crates publisher.workflow_call");
+  const inputs = object(call.inputs, "shared crates publisher.inputs");
+  const input = object(inputs["rust-toolchain"], "shared crates publisher.rust-toolchain");
+  const version = staticString(input.default, "shared crates publisher.rust-toolchain.default");
+  if (!EXACT_RUNTIME_VERSION.test(version)) fail("shared crates publisher must pin an exact Rust version");
+  return version;
 };
 
 const validateCratesPublisher = (job: JsonObject, ref: string, label: string) => {
@@ -771,8 +790,9 @@ const validateCratesPublisher = (job: JsonObject, ref: string, label: string) =>
   }
   if ("rust-toolchain" in inputs) {
     const toolchain = staticString(inputs["rust-toolchain"], `${label}.with.rust-toolchain`);
-    if (toolchain !== "1.99.0") {
-      fail(`${label}.with.rust-toolchain must be 1.99.0`);
+    const expected = cratesPublisherRustToolchain();
+    if (toolchain !== expected) {
+      fail(`${label}.with.rust-toolchain must be ${expected}`);
     }
   }
   if ("environment" in inputs && inputs.environment !== "crates-io") {

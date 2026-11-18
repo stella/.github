@@ -1,0 +1,87 @@
+name: npm release reconcile
+
+# Publishes GitHub releases that npm-version-finalize.yml left as drafts
+# because npm had accepted every package but did not list them all before the
+# finalizer's wait ended. Call it on a schedule and by workflow_dispatch.
+on:
+  workflow_call:
+    inputs:
+      package-files:
+        description: Newline-separated package.json files that are published; pass the list given to npm-version-finalize.yml.
+        required: true
+        type: string
+      max-pending-hours:
+        description: >-
+          Hours a draft may wait for npm before the run fails. Age counts from
+          the release's created_at, which GitHub reports as the tagged commit's date.
+        required: false
+        type: number
+        default: 24
+    secrets:
+      RELEASE_APP_ID:
+        description: GitHub App ID for reading and publishing draft releases.
+        required: true
+      RELEASE_APP_PRIVATE_KEY:
+        description: GitHub App private key for reading and publishing draft releases.
+        required: true
+
+permissions: {}
+
+jobs:
+  reconcile:
+    name: Publish completed drafts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: npm-release-reconcile-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read # Check out the pinned release tooling.
+    steps:
+      - name: Resolve repository name
+        id: repository
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=${REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint release token
+        id: release-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repository.outputs.name }}
+          # Draft releases are visible only with write access, and publishing
+          # one is a contents write.
+          permission-contents: write
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.4"
+
+      # Pin the helper to this exact reusable-workflow commit, as the finalizer does.
+      - name: Checkout release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .release-tooling
+          persist-credentials: false
+          sparse-checkout: .github/actions/npm-visibility
+
+      - name: Publish drafts that npm fully lists
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          PACKAGE_FILES: ${{ inputs.package-files }}
+          MAX_PENDING_HOURS: ${{ inputs.max-pending-hours }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import process from "node:process";
+          const { runReconcile } = await import(
+            "./.release-tooling/.github/actions/npm-visibility/reconcile.mjs"
+          );
+          process.exitCode = runReconcile();
+          NODE

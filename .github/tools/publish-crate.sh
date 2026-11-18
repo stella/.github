@@ -4,6 +4,8 @@ set -euo pipefail
 : "${CRATE_DIRECTORY:?}"
 : "${EXPECTED_CRATE_NAME:?}"
 
+tooling_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly tooling_directory
 readonly manifest="${CRATE_DIRECTORY}/release.json"
 readonly upload="${CRATE_DIRECTORY}/upload.bin"
 test -f "${manifest}"
@@ -25,6 +27,16 @@ upload_sha="$(jq -er '.uploadSha256' "${manifest}")"
 [[ "${upload_sha}" =~ ^[0-9a-f]{64}$ ]]
 echo "${crate_sha}  ${CRATE_DIRECTORY}/${crate_file}" | sha256sum --check --strict
 echo "${upload_sha}  ${upload}" | sha256sum --check --strict
+
+# Step outputs always describe the archive that crates.io serves for this version.
+report_published() {
+  local sha="$1"
+  local reused_archive="$2"
+  {
+    echo "published-sha256=${sha}"
+    echo "reused-archive=${reused_archive}"
+  } >> "${GITHUB_OUTPUT:-/dev/null}"
+}
 
 # crates.io rejects requests whose User-Agent does not identify the client and a contact.
 readonly user_agent="stella-release/1.0 (github.com/stella)"
@@ -57,12 +69,36 @@ version_status="$(curl --proto '=https' --tlsv1.2 --retry 3 -sS \
   "https://crates.io/api/v1/crates/${name}/${version}")"
 case "${version_status}" in
   200)
-    if ! exact_archive_is_visible preflight; then
-      printf '::error::Existing crates.io archive does not match the prepared crate.\n'
+    if exact_archive_is_visible preflight; then
+      printf '::notice::%s %s already published with the exact prepared bytes.\n' "${name}" "${version}"
+      report_published "${crate_sha}" ""
+      exit 0
+    fi
+    # A re-run from a later commit repackages the same version; skip it only when every source file matches.
+    published_archive="${RUNNER_TEMP}/preflight.crate"
+    if [[ ! -s "${published_archive}" ]]; then
+      printf '::error::%s %s exists on crates.io but its archive could not be downloaded.\n' "${name}" "${version}"
       exit 1
     fi
-    printf '::notice::%s %s already published with the exact prepared bytes.\n' "${name}" "${version}"
-    exit 0
+    differences_status=0
+    differences="$(node "${tooling_directory}/crate-source-diff.mjs" \
+      "${published_archive}" "${CRATE_DIRECTORY}/${crate_file}")" || differences_status=$?
+    if [[ "${differences_status}" == 0 ]]; then
+      printf '::notice::%s %s already published from identical source; skipping upload.\n' "${name}" "${version}"
+      # The registry keeps the earlier bytes: hand them on so they, not the prepared archive, are reported and attested.
+      reused_directory="${PUBLISHED_ARCHIVE_DIRECTORY:-${RUNNER_TEMP}/published-crate}"
+      mkdir -p "${reused_directory}"
+      cp "${published_archive}" "${reused_directory}/${crate_file}"
+      report_published "$(sha256sum "${published_archive}" | cut -d ' ' -f1)" "${reused_directory}/${crate_file}"
+      exit 0
+    fi
+    if [[ "${differences_status}" == 1 ]]; then
+      printf '::error::%s %s is already published from different source; release a new version. Differing files:\n%s\n' \
+        "${name}" "${version}" "${differences}"
+    else
+      printf '::error::Could not compare the published %s %s archive with the prepared crate.\n' "${name}" "${version}"
+    fi
+    exit 1
     ;;
   404) ;;
   *)
@@ -110,6 +146,7 @@ else
   for attempt in {1..12}; do
     if exact_archive_is_visible ambiguous; then
       printf '::notice::The ambiguous upload committed %s %s.\n' "${name}" "${version}"
+      report_published "${crate_sha}" ""
       exit 0
     fi
     sleep 5
@@ -120,6 +157,7 @@ fi
 
 for attempt in {1..12}; do
   if exact_archive_is_visible published; then
+    report_published "${crate_sha}" ""
     exit 0
   fi
   if [[ "${attempt}" == 12 ]]; then
