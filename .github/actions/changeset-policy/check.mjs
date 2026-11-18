@@ -107,9 +107,29 @@ export const validateChangesetVersionCommand = (file, command) => {
   }
 };
 
-export const validateChangesetVersionPolicy = (file = "package.json") => {
+export const validateRootPackageWorkspaces = (file, manifest) => {
+  const workspaces = Array.isArray(manifest?.workspaces)
+    ? manifest.workspaces
+    : manifest?.workspaces?.packages;
+  if (
+    manifest?.private === true ||
+    !Array.isArray(workspaces) ||
+    workspaces.length === 0
+  ) {
+    return;
+  }
+
+  fail(
+    `${file} declares a non-empty 'workspaces' field for a publishable root package. ` +
+      "Changesets cannot version a root package inside a workspace monorepo. " +
+      "Move the extra package out of 'workspaces', or publish from a workspace package instead.",
+  );
+};
+
+export const validateRootPackagePolicy = (file = "package.json") => {
   if (!existsSync(file)) return;
   const manifest = JSON.parse(readFileSync(file, "utf8"));
+  validateRootPackageWorkspaces(file, manifest);
   const command = manifest?.scripts?.["changeset:version"];
   if (command === undefined) return;
   validateChangesetVersionCommand(file, command);
@@ -158,7 +178,7 @@ export const main = (environment) => {
     validateChangeset(file, readFileSync(file, "utf8"), packageNames);
   }
 
-  validateChangesetVersionPolicy();
+  validateRootPackagePolicy();
 
   const runtimeChanged =
     diff("ACMRD", lines(required(environment, "RELEASE_PATHS"))).length > 0;
