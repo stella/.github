@@ -66,6 +66,26 @@ workflow detects changes to Cargo manifests and lockfiles, Rust toolchain
 files, `crates/**`, and `src/**/*.rs` from the merge base. The `rust-changed`
 input can add a Rust run but cannot suppress one detected by the workflow.
 
+### Rust NAPI Pull Request Scope
+
+`rust-napi-ci.yml` takes `scope: full` (the default) or `scope: pr`. The full
+scope runs every platform build and test job. The pull-request scope runs one
+`PR checks (ubuntu-latest)` job with the same commands: workflow lint, version
+sync, lint, the optional typecheck, Rust checks when Rust inputs changed,
+provenance, the WASM and Linux x64 builds, the artifact and property tests, and
+both runtime smokes. It uploads `bindings-wasm32-wasip1-threads` like the full
+scope. Run the full matrix in the merge queue:
+
+```yaml
+    with:
+      scope: ${{ github.event_name == 'pull_request' && 'pr' || 'full' }}
+```
+
+Every full-scope job is skipped in the pull-request scope, so a caller's
+aggregate check sees `success` from the called workflow when the single job
+passes; in the full scope any failed platform job fails the call. Any other
+scope value fails the workflow lint job.
+
 ### Package Consumer Compatibility
 
 Call `package-consumer-compat.yml` from a scheduled or manually dispatched

@@ -16,13 +16,13 @@ test("typecheck has no compiler parity mode and gates no other job", () => {
   assert.doesNotMatch(job, /fetch-depth|BASE_SHA|git show/u);
   for (const name of ["version-check", "lint", "runtime-compat", "detect-rust", "detect"]) {
     const section = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z][\w-]*:\n/u)[0];
-    assert.match(section, /if: inputs.trusted == 'true'\n/u);
+    assert.match(section, /if: inputs.scope != 'pr' && inputs.trusted == 'true'\n/u);
   }
 });
 
 test("typechecking is opt-in, trust-gated, read-only, and independent of Rust change selection", () => {
   assert.match(workflow, /      typecheck:\n[^]*?        type: boolean\n        default: false/u);
-  assert.match(job, /name: Typecheck\n    if: inputs.trusted == 'true' && inputs.typecheck/u);
+  assert.match(job, /name: Typecheck\n    if: inputs.scope != 'pr' && inputs.trusted == 'true' && inputs.typecheck/u);
   assert.match(job, /permissions:\n      contents: read/u);
   assert.doesNotMatch(job, /needs:|inputs\.(?:rust|build|provenance)-changed|continue-on-error:/u);
   assert.match(job, /persist-credentials: false/u);
@@ -106,7 +106,7 @@ test("static required check names survive skipping before runner allocation", ()
 
 test("one permission-free selection job gates all build and test jobs", () => {
   assert.match(workflow, /      build-changed:\n[^]*?        type: string\n        default: "true"/u);
-  assert.match(detect, /if: inputs.trusted == 'true'\n/u);
+  assert.match(detect, /if: inputs.scope != 'pr' && inputs.trusted == 'true'\n/u);
   assert.match(detect, /permissions: \{\}/u);
   assert.match(detect, /build-changed: \$\{\{ steps.select.outputs.build-changed \}\}/u);
   assert.match(detect, /BUILD_CHANGED: \$\{\{ inputs.build-changed \}\}/u);
@@ -176,7 +176,7 @@ test("dependency installation preserves and enforces lockfile integrity", () => 
   assert.match(workflow, /      install-ignore-scripts:\n[^]*?        type: boolean\n        default: false/u);
   assert.doesNotMatch(workflow, /install-command|eval /u);
   const installs = [...workflow.matchAll(/      - name: Install dependencies\n([^]*?)(?=\n      - )/gu)].map((match) => match[1]);
-  assert.equal(installs.length, 6);
+  assert.equal(installs.length, 7);
   for (const install of installs) {
     assert.match(install, /bun install --frozen-lockfile --ignore-scripts/u);
     assert.match(install, /bun install --frozen-lockfile\n/u);
@@ -231,5 +231,97 @@ test("Rust change selection includes lockfiles and manifests", () => {
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(output, "utf8"), "rust-changed=true\n");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+const jobIds = [...workflow.split("\njobs:\n")[1].matchAll(/^  ([\w-]+):\n/gmu)].map((match) => match[1]);
+const pr = sectionFor("pr");
+const ifFor = (section) => section.match(/^    if: (?:>-\n((?: {6}[^\n]+\n)+)|([^\n]+))/mu)?.slice(1).find(Boolean)?.replace(/\s+/gu, " ").trim() ?? "";
+const needsFor = (section) => section.match(/^    needs: \[([^\]]+)\]/mu)?.[1].split(", ") ?? [];
+const runCommands = (section) => [...section.matchAll(/^ +(?:- )?run: (?:\|\n((?: {10}[^\n]*\n)+)|>-?\n((?: {10}[^\n]*\n)+)|([^\n]+))/gmu)]
+  .map(([, block, folded, inline]) => inline ?? (block ?? folded).split("\n").map((line) => line.trim()).filter(Boolean).join(folded ? " " : "\n"));
+
+test("scope defaults to the full platform matrix", () => {
+  assert.match(workflow, /    inputs:\n      scope:\n[^]*?        type: string\n        default: "full"\n/u);
+  const validate = sectionFor("workflow-lint").split("        run: |\n")[1].split(/\n      - /u)[0].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+  for (const [scope, valid] of [["full", true], ["pr", false], ["PR", false], ["", false], ["full\n", false]]) {
+    const result = spawnSync("bash", ["-e", "-c", validate], { env: { ...process.env, SCOPE: scope }, encoding: "utf8" });
+    assert.equal(result.status === 0, valid, `${JSON.stringify(scope)}: ${result.stdout}`);
+  }
+  assert.match(sectionFor("workflow-lint"), /if: inputs.scope != 'pr'\n/u);
+});
+
+test("the pull-request scope runs exactly one Ubuntu job and skips every other job", () => {
+  assert.match(pr, /name: PR checks \(ubuntu-latest\)\n    if: inputs.scope == 'pr' && inputs.trusted == 'true'\n    runs-on: ubuntu-latest\n/u);
+  assert.doesNotMatch(pr, /needs:|matrix|strategy:|continue-on-error/u);
+  const gated = new Map();
+  const isGated = (id) => {
+    if (gated.has(id)) return gated.get(id);
+    const section = sectionFor(id);
+    const condition = ifFor(section);
+    assert.doesNotMatch(condition, /always\(|cancelled\(|failure\(|success\(/u, id);
+    const result = condition.startsWith("inputs.scope != 'pr'") || needsFor(section).some(isGated);
+    gated.set(id, result);
+    return result;
+  };
+  for (const id of jobIds.filter((id) => id !== "pr")) assert.ok(isGated(id), `${id} runs in the pull-request scope`);
+  assert.equal(workflow.match(/inputs.scope == 'pr'/gu).length, 1);
+});
+
+test("the pull-request job mirrors every full-scope check command", () => {
+  const mirrored = ["version-check", "lint", "typecheck", "rust-checks", "test", "runtime-compat"]
+    .flatMap((id) => runCommands(sectionFor(id)))
+    .filter((command) => !command.startsWith("ls -R artifacts/") && command !== "bun run build");
+  const prCommands = runCommands(pr);
+  for (const command of mirrored) assert.ok(prCommands.includes(command), `pull-request job lacks: ${command}`);
+  for (const use of ["rhysd/actionlint@", "stella/.github/actions/package-publisher-check@", "stella/.github/actions/provenance-check@", "actions/cache@"]) {
+    const full = workflow.split("\n  pr:\n")[0].match(new RegExp(`uses: (${use.replace(/[./]/gu, "\\$&")}\\S+)`, "u"))[1];
+    assert.ok(pr.includes(`uses: ${full}`), `pull-request job pins ${use} differently`);
+  }
+  assert.match(pr, /run: bun run build:wasm/u);
+  assert.match(pr, /run: bun run build --target x86_64-unknown-linux-gnu/u);
+  assert.ok(pr.indexOf("bun run build:wasm") < pr.indexOf("bun run build --target"));
+  const uploadPaths = (section) => section.match(/          path: \|\n((?:            [^\n]+\n)+)/u)[1];
+  assert.equal(uploadPaths(pr), uploadPaths(build).replace("            *.node\n", ""));
+  assert.match(pr, /name: bindings-wasm32-wasip1-threads\n/u);
+  const rustSteps = pr.split("shared-key: pr-checks\n")[1].split("\n      - if: inputs.provenance-changed")[0].split(/\n      - /u);
+  assert.ok(rustSteps.length >= 9);
+  for (const step of rustSteps) assert.match(step, /if: steps.select.outputs.rust-changed == 'true'/u);
+  for (const command of ["bun run build:wasm", "bun test", "$PROPERTY_TEST_CMD"]) {
+    const step = pr.split(`run: ${command}\n`)[0].split(/\n      - /u).at(-1);
+    assert.match(step, /steps.select.outputs.build-changed == 'true'/u, command);
+  }
+});
+
+test("pull-request check selection matches the full-scope Rust and build detection", () => {
+  const script = pr.split("      - name: Select checks\n")[1].split("        run: |\n")[1].split(/\n      - /u)[0].split("\n").map((line) => line.replace(/^ {10}/u, "")).join("\n");
+  const root = mkdtempSync(join(tmpdir(), "napi-pr-select-"));
+  try {
+    const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8" }).stdout.trim();
+    git("init", "-q");
+    git("-c", "user.email=ci@example.invalid", "-c", "user.name=ci", "commit", "-q", "--allow-empty", "--no-gpg-sign", "-m", "base");
+    const base = git("rev-parse", "HEAD");
+    writeFileSync(join(root, "README.md"), "docs\n");
+    git("add", "README.md");
+    git("-c", "user.email=ci@example.invalid", "-c", "user.name=ci", "commit", "-q", "--no-gpg-sign", "-m", "docs");
+    const docs = git("rev-parse", "HEAD");
+    mkdirSync(join(root, "crates", "core"), { recursive: true });
+    writeFileSync(join(root, "crates", "core", "lib.rs"), "\n");
+    git("add", "crates/core/lib.rs");
+    git("-c", "user.email=ci@example.invalid", "-c", "user.name=ci", "commit", "-q", "--no-gpg-sign", "-m", "rust");
+    const rust = git("rev-parse", "HEAD");
+    const select = (env, head = "HEAD") => {
+      git("checkout", "-q", head);
+      const output = join(root, "output");
+      rmSync(output, { force: true });
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], { cwd: root, env: { ...process.env, GITHUB_OUTPUT: output, ...env }, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+      return readFileSync(output, "utf8");
+    };
+    assert.equal(select({ BASE_SHA: base, RUST_CHANGED: "false", BUILD_CHANGED: "false" }, docs), "rust-changed=false\nbuild-changed=false\n");
+    assert.equal(select({ BASE_SHA: base, RUST_CHANGED: "false", BUILD_CHANGED: "true" }, rust), "rust-changed=true\nbuild-changed=true\n");
+    assert.equal(select({ BASE_SHA: base, RUST_CHANGED: "true", BUILD_CHANGED: "TRUE" }, docs), "rust-changed=true\nbuild-changed=false\n");
+    assert.equal(select({ BASE_SHA: "0".repeat(40), RUST_CHANGED: "false", BUILD_CHANGED: "" }, docs), "rust-changed=true\nbuild-changed=false\n");
+    assert.equal(select({ BASE_SHA: "", RUST_CHANGED: "", BUILD_CHANGED: "$(exit 1)" }, docs), "rust-changed=true\nbuild-changed=false\n");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
