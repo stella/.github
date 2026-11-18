@@ -162,7 +162,7 @@ jobs:
     if: inputs.scope != 'pr' && inputs.trusted == 'true'
     runs-on: ${{ matrix.os }}
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
     permissions:
       contents: read
       packages: read
@@ -185,7 +185,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.1
+          toolchain: 1.100.0
           targets: wasm32-wasip1-threads
       - name: Ensure cargo on PATH
         # dtolnay/rust-toolchain only prepends $CARGO_HOME/bin to PATH when it
@@ -252,13 +252,13 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       STELLA_SOURCE_LINT_REV: a1bd81740ecb4b66999f56d1716e1190c4e7272f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.1
+          toolchain: 1.100.0
           components: clippy, rustfmt
       - name: Ensure cargo on PATH
         # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
@@ -354,7 +354,7 @@ jobs:
     needs: [detect]
     runs-on: macos-15
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       BUILD_TARGET: x86_64-apple-darwin
       BUILD_KIND: native
     permissions:
@@ -366,7 +366,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.1
+          toolchain: 1.100.0
           targets: ${{ env.BUILD_TARGET }}
       - name: Ensure cargo on PATH
         # See note in `runtime-compat`: workaround for dtolnay/rust-toolchain
@@ -420,7 +420,7 @@ jobs:
     needs: [detect]
     runs-on: macos-15
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       BUILD_TARGET: aarch64-apple-darwin
       BUILD_KIND: native
     permissions:
@@ -433,7 +433,7 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       BUILD_TARGET: x86_64-unknown-linux-gnu
       BUILD_KIND: native
     permissions:
@@ -446,7 +446,7 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       BUILD_TARGET: aarch64-unknown-linux-gnu
       BUILD_KIND: cross
     permissions:
@@ -459,7 +459,7 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       BUILD_TARGET: wasm32-wasip1-threads
       BUILD_KIND: wasm
     permissions:
@@ -529,7 +529,7 @@ jobs:
     if: inputs.scope == 'pr' && inputs.trusted == 'true'
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: 1.99.1
+      RUSTUP_TOOLCHAIN: 1.100.0
       STELLA_SOURCE_LINT_REV: a1bd81740ecb4b66999f56d1716e1190c4e7272f
     permissions:
       contents: read
@@ -604,7 +604,7 @@ jobs:
           grep -F "$(basename "$probe")" "$log" | grep -E 'TS2322([^0-9]|$)'
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: 1.99.1
+          toolchain: 1.100.0
           components: clippy, rustfmt
           targets: wasm32-wasip1-threads
       - name: Ensure cargo on PATH
