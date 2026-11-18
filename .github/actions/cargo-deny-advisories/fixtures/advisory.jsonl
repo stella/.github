@@ -1,1 +1,2 @@
-{"type":"diagnostic","fields":{"severity":"error","code":"vulnerability","advisory":{"id":"RUSTSEC-2026-0001","title":"Example vulnerability"},"graphs":[{"Krate":{"name":"affected","version":"2.0.0"},"parents":[]}]}}
+loaded advisory database
+{"type": "diagnostic", "fields": {"severity": "error", "code": "unmaintained", "message": "unsafe-libyaml is unmaintained", "advisory": {"id": "RUSTSEC-2024-0449", "title": "unsafe-libyaml is unmaintained"}, "graphs": [{"Krate": {"name": "unsafe-libyaml", "version": "0.2.11"}, "parents": []}]}}
