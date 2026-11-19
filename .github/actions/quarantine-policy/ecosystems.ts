@@ -363,6 +363,65 @@ export const readCargoPackages = (lockfile: string) => {
   }));
 };
 
+const CARGO_DURATION_UNITS: Record<string, number> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 60 * 60,
+  days: 24 * 60 * 60,
+  weeks: 7 * 24 * 60 * 60,
+};
+
+/** Seconds in a Cargo publish-age duration such as `"5 days"`. */
+const cargoDurationSeconds = (value: unknown): number | undefined => {
+  if (typeof value !== "string") return undefined;
+  const match = /^(?<count>\d+) (?<unit>[a-z]+)$/u.exec(value);
+  const unit = CARGO_DURATION_UNITS[match?.groups?.unit ?? ""];
+  return unit === undefined ? undefined : Number(match?.groups?.count) * unit;
+};
+
+/**
+ * Cargo 1.100+ holds crates.io versions younger than the publish-age window
+ * back while resolving. The window must equal the policy window, a registry
+ * override must not shorten it, and the resolver must not be told to allow
+ * younger versions; the lock check stays as the backstop for older Cargo and
+ * one-off environment overrides.
+ */
+const checkCargoConfig = (config: string): string[] => {
+  const errors: string[] = [];
+  const parsed = Bun.TOML.parse(config) as {
+    registry?: Record<string, unknown>;
+    registries?: Record<string, unknown>;
+    resolver?: Record<string, unknown>;
+  };
+  const window = `${REQUIRED_RELEASE_AGE_SECONDS / (24 * 60 * 60)} days`;
+  if (
+    cargoDurationSeconds(parsed.registry?.["global-min-publish-age"]) !==
+    REQUIRED_RELEASE_AGE_SECONDS
+  )
+    errors.push(
+      `.cargo/config.toml must set [registry] global-min-publish-age = "${window}"`,
+    );
+  for (const [name, registry] of Object.entries(parsed.registries ?? {})) {
+    const age =
+      typeof registry === "object" && registry !== null
+        ? (registry as Record<string, unknown>)["min-publish-age"]
+        : undefined;
+    if (
+      age !== undefined &&
+      cargoDurationSeconds(age) !== REQUIRED_RELEASE_AGE_SECONDS
+    )
+      errors.push(
+        `.cargo/config.toml [registries.${name}] min-publish-age must be unset or "${window}"`,
+      );
+  }
+  const incompatible = parsed.resolver?.["incompatible-publish-age"];
+  if (incompatible !== undefined && incompatible !== "deny")
+    errors.push(
+      '.cargo/config.toml [resolver] incompatible-publish-age must be unset or "deny"',
+    );
+  return errors;
+};
+
 export const checkCargoPolicy = ({
   quarantine,
   config,
@@ -430,13 +489,7 @@ export const checkCargoPolicy = ({
         `.cargo/quarantine.toml contains stale exclude: ${entry.name}`,
       );
   }
-  const parsedConfig = Bun.TOML.parse(config) as {
-    registry?: Record<string, unknown>;
-  };
-  if (parsedConfig.registry?.["global-min-publish-age"] !== "5 days")
-    errors.push(
-      '.cargo/config.toml must set [registry] global-min-publish-age = "5 days"',
-    );
+  errors.push(...checkCargoConfig(config));
   return { errors, warnings };
 };
 

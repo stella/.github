@@ -471,6 +471,42 @@ describe("Cargo quarantine", () => {
       readCargoPackages(cargoLock()).find((p) => p.name === "local")?.source,
     ).toBeUndefined();
   });
+  test("requires Cargo's native publish-age window to match the policy", () => {
+    const errors = (config: string) =>
+      checkCargoPolicy({
+        quarantine: quarantine(),
+        config,
+        lockfiles: new Map([["Cargo.lock", cargoLock()]]),
+        now: NOW,
+      }).errors.join("\n");
+    for (const config of [
+      '[registry]\nglobal-min-publish-age = "5 days"',
+      '[registry]\nglobal-min-publish-age = "120 hours"',
+      '[registry]\nglobal-min-publish-age = "5 days"\n[registries.crates-io]\nprotocol = "sparse"\nmin-publish-age = "5 days"\n[resolver]\nincompatible-publish-age = "deny"',
+    ])
+      expect(errors(config)).toBe("");
+    for (const config of [
+      "",
+      '[registry]\nglobal-min-publish-age = "1 day"',
+      '[registry]\nglobal-min-publish-age = "0"',
+      "[registry]\nglobal-min-publish-age = 432000",
+    ])
+      expect(errors(config)).toContain(
+        'must set [registry] global-min-publish-age = "5 days"',
+      );
+    expect(
+      errors(
+        '[registry]\nglobal-min-publish-age = "5 days"\n[registries.crates-io]\nmin-publish-age = "0"',
+      ),
+    ).toContain(
+      '[registries.crates-io] min-publish-age must be unset or "5 days"',
+    );
+    expect(
+      errors(
+        '[registry]\nglobal-min-publish-age = "5 days"\n[resolver]\nincompatible-publish-age = "allow"',
+      ),
+    ).toContain('incompatible-publish-age must be unset or "deny"');
+  });
   test("classifies pinned first-party git sources", () => {
     const commit = "50798ef8f962f41e2cba1539e85b8f41605a7e71";
     expect(
