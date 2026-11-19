@@ -43,6 +43,15 @@ Every repository with a tracked `Cargo.lock` needs `.cargo/config.toml`:
 global-min-publish-age = "5 days"
 ```
 
+Cargo 1.100 and newer read this key: `cargo update` and every other dependency
+resolution skip crates.io versions published less than five days ago, unless
+`Cargo.lock` already pins them. The value may count seconds, minutes, hours,
+days, or weeks, but it must equal the five-day window. A `[registries.<name>] min-publish-age`
+override, if set, must equal it too, and `[resolver] incompatible-publish-age`
+may only be `"deny"`, Cargo's default. The lockfile release-age check still
+screens every newly locked crates.io version, so a lock produced by an older
+Cargo or under an environment override is caught as well.
+
 It also needs `.cargo/quarantine.toml`, even when there are no exceptions:
 
 ```toml
@@ -63,6 +72,9 @@ commit; these immutable sources do not need an exception or release-age check.
 For a security hotfix, add the exact `"name@version"` with
 `quarantine-expires:` set to its publication time plus five days. An expiry more
 than five days after the check clock is rejected, preventing a standing bypass.
+For a crate, lock the version with a one-off override of Cargo's resolver:
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <name> --precise <version>`.
+Any other young version that resolve pulls in needs its own exception.
 The daily prune workflow removes the entry after that instant. First-party
 `@stll/` packages and `stella-` or `stella_` crates instead use a bare name with
 `quarantine-excluded-since:`.
