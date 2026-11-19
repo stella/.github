@@ -326,7 +326,7 @@ describe("repository baseline", () => {
   });
 });
 
-const toolchain: Toolchain = { bun: "1.4.3", node: "26.10.0", rust: "1.99.0" };
+const toolchain: Toolchain = { bun: "1.4.3", node: "26.10.0", rust: "1.100.0" };
 const migration = (expires: string): ToolchainException[] => [{ repo: "fixture/project", tool: "bun", pin: "1.4.2", reason: "Scheduled migration", expires }];
 const observed = (tool: "bun" | "node" | "rust", pin: string): ToolchainObservation => ({
   repo: "fixture/project",
@@ -383,9 +383,9 @@ describe("toolchain standard", () => {
   });
   test("rust pins are read as TOML, so comments and spacing do not matter", () => {
     const observation = parseToolObservations("fixture/project", {
-      bun: null, node: null, rust: "[toolchain] # pinned for the workspace\nchannel = \"1.99.0\" # stable\n",
+      bun: null, node: null, rust: "[toolchain] # pinned for the workspace\nchannel = \"1.100.0\" # stable\n",
     });
-    expect(observation.tools.rust).toEqual({ status: "pinned", pin: "1.99.0" });
+    expect(observation.tools.rust).toEqual({ status: "pinned", pin: "1.100.0" });
   });
   test("malformed manifests are described without echoing their contents", () => {
     const secret = "private-dependency-name";
