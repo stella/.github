@@ -326,7 +326,7 @@ describe("repository baseline", () => {
   });
 });
 
-const toolchain: Toolchain = { bun: "1.4.3", node: "26.10.0", rust: "1.100.0" };
+const toolchain: Toolchain = { bun: "1.4.4", node: "26.12.1", rust: "1.100.0" };
 const migration = (expires: string): ToolchainException[] => [{ repo: "fixture/project", tool: "bun", pin: "1.4.2", reason: "Scheduled migration", expires }];
 const observed = (tool: "bun" | "node" | "rust", pin: string): ToolchainObservation => ({
   repo: "fixture/project",
@@ -338,10 +338,10 @@ const observed = (tool: "bun" | "node" | "rust", pin: string): ToolchainObservat
 
 describe("toolchain standard", () => {
   test("matching full versions pass", () => {
-    expect(auditToolchain(toolchain, [], [observed("bun", "1.4.3")], "2026-10-18").failures).toEqual([]);
+    expect(auditToolchain(toolchain, [], [observed("bun", "1.4.4")], "2026-10-18").failures).toEqual([]);
   });
   test("a patch mismatch fails and reports both exact versions", () => {
-    expect(auditToolchain(toolchain, [], [observed("bun", "1.4.2")], "2026-10-18").failures).toEqual(["fixture/project: bun pinned 1.4.2, standard 1.4.3"]);
+    expect(auditToolchain(toolchain, [], [observed("bun", "1.4.2")], "2026-10-18").failures).toEqual(["fixture/project: bun pinned 1.4.2, standard 1.4.4"]);
   });
   test("missing files are typed not-pinned summaries, not failures", () => {
     const observation = parseToolObservations("fixture/project", { bun: null, node: null, rust: null });
@@ -354,7 +354,7 @@ describe("toolchain standard", () => {
     expect(auditToolchain(toolchain, migration("2026-10-19"), [observed("bun", "1.4.2")], "2026-10-18").failures).toEqual([]);
   });
   test("an exception only covers its exact pin", () => {
-    expect(auditToolchain(toolchain, migration("2026-10-19"), [observed("bun", "1.4.1")], "2026-10-18").failures).toEqual(["fixture/project: bun pinned 1.4.1, standard 1.4.3"]);
+    expect(auditToolchain(toolchain, migration("2026-10-19"), [observed("bun", "1.4.1")], "2026-10-18").failures).toEqual(["fixture/project: bun pinned 1.4.1, standard 1.4.4"]);
   });
   test("an expired exception fails with its reason", () => {
     expect(auditToolchain(toolchain, migration("2026-10-17"), [observed("bun", "1.4.2")], "2026-10-18").failures[0]).toContain("exception expired 2026-10-17: Scheduled migration");
