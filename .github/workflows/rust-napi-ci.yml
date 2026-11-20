@@ -320,7 +320,7 @@ jobs:
           else
             bun install --frozen-lockfile
           fi
-      - uses: stella/.github/actions/provenance-check@156afa9596e6a469c10e329f459168d34a00e0fd
+      - uses: stella/.github/actions/provenance-check@2664e46f02aea7164ba71bcdd485a686166993a4
         with:
           provenance-version: ${{ inputs.provenance-version }}
 
@@ -654,7 +654,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -Dwarnings
       - if: inputs.provenance-changed == 'true'
-        uses: stella/.github/actions/provenance-check@156afa9596e6a469c10e329f459168d34a00e0fd
+        uses: stella/.github/actions/provenance-check@2664e46f02aea7164ba71bcdd485a686166993a4
         with:
           provenance-version: ${{ inputs.provenance-version }}
       # Build WASM first so the native build's loader wins, as it does when
