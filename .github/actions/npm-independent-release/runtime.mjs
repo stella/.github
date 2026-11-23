@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 
 import { readNpmState as npmState } from "../npm-visibility/registry.mjs";
@@ -275,13 +275,22 @@ const registryAsset = async ({ entry, temporaryDirectory }) => {
   return path;
 };
 
-const notesFor = (entry) => {
+const notesFor =({ entry, head, repository }) => {
   const section = changelogSection(
     readFileSync(entry.pkg.changelog, "utf8"),
     entry.pkg.version,
     entry.pkg.changelog,
   );
-  return releaseNotes({ pkg: entry.pkg, section, status: entry.status });
+  const changelogPath = relative(process.cwd(), resolve(entry.pkg.changelog))
+    .split(sep)
+    .map(encodeURIComponent)
+    .join("/");
+  return releaseNotes({
+    changelogUrl: `https://github.com/${repository}/blob/${head}/${changelogPath}`,
+    pkg: entry.pkg,
+    section,
+    status: entry.status,
+  });
 };
 
 export const buildCreateReleaseArgs = ({
@@ -593,7 +602,7 @@ export const stageReleaseEntries = async ({
         entry.status === "repair-release"
           ? await recoverRegistryAsset({ entry, temporaryDirectory })
           : entry.path,
-      notes: createNotes(entry),
+      notes: createNotes({ entry, head, repository }),
     });
   }
 
