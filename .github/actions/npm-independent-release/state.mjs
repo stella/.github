@@ -350,7 +350,20 @@ export const createPlan = ({ artifactsByName, head, remoteStates }) => {
   };
 };
 
-export const releaseNotes = ({ pkg, section, status }) => {
+/** The longest body GitHub accepts for a release, in characters. */
+export const GITHUB_RELEASE_BODY_LIMIT = 125_000;
+
+/**
+ * The leading whole lines of `section` that fit in `budget` characters, or
+ * the whole section when it fits.
+ */
+const leadingLines = (section, budget) => {
+  if (section.length <= budget) return section;
+  const cut = section.lastIndexOf("\n", budget);
+  return cut === -1 ? "" : section.slice(0, cut).trimEnd();
+};
+
+export const releaseNotes = ({ changelogUrl, pkg, section, status }) => {
   let provenance;
   if (status === "repair-release") {
     provenance =
@@ -362,7 +375,18 @@ export const releaseNotes = ({ pkg, section, status }) => {
       `\`${pkg.name}@${pkg.version}\` is published through npm trusted publishing with provenance. ` +
       "The attached tarball is the artifact submitted by this release workflow.";
   }
-  return `${section}\n\n---\n\n${provenance}\n`;
+  const tail = `\n\n---\n\n${provenance}\n`;
+  if (section.length + tail.length <= GITHUB_RELEASE_BODY_LIMIT) {
+    return `${section}${tail}`;
+  }
+  // A section over GitHub's body limit keeps its leading lines and links the
+  // changelog that holds all of them.
+  const more = `\n\n[The full ${pkg.version} notes](${changelogUrl}) are longer than a GitHub release holds.`;
+  const kept = leadingLines(
+    section,
+    GITHUB_RELEASE_BODY_LIMIT - more.length - tail.length,
+  );
+  return `${kept}${more}${tail}`;
 };
 
 export const artifactReleaseName = (path) => basename(path);

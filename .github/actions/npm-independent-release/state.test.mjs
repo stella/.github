@@ -8,6 +8,7 @@ import {
   changelogSection,
   classifyState,
   createPlan,
+  GITHUB_RELEASE_BODY_LIMIT,
   hashBuffer,
   indexReleases,
   mapArtifacts,
@@ -502,4 +503,36 @@ test("repair notes explicitly avoid claiming a local rebuild is byte-identical",
   });
   assert.match(notes, /recovered from the registry/);
   assert.match(notes, /does not claim.*local rebuild.*byte-identical/);
+});
+
+test("notes over GitHub's body limit keep whole leading lines and link the changelog", () => {
+  const changelogUrl =
+    "https://github.com/owner/repo/blob/abc123/packages/a/CHANGELOG.md";
+  const section = Array.from(
+    { length: 1_000 },
+    (_, index) => `- Change ${index}: ${"x".repeat(200)}`,
+  ).join("\n");
+  const notes = releaseNotes({
+    changelogUrl,
+    pkg: packages[0],
+    section,
+    status: "stage-and-publish",
+  });
+  assert.ok(notes.length <= GITHUB_RELEASE_BODY_LIMIT);
+  const [kept] = notes.split("\n\n[The full");
+  assert.ok(section.startsWith(`${kept}\n`));
+  assert.match(kept, /- Change \d+: x{200}$/);
+  assert.ok(notes.includes(`(${changelogUrl})`));
+  assert.match(notes, /trusted publishing with provenance/);
+});
+
+test("notes within GitHub's body limit hold the whole section", () => {
+  const notes = releaseNotes({
+    changelogUrl: "https://example.invalid/CHANGELOG.md",
+    pkg: packages[0],
+    section: "- Fixed.",
+    status: "stage-and-publish",
+  });
+  assert.ok(notes.startsWith("- Fixed.\n\n---\n\n"));
+  assert.ok(!notes.includes("example.invalid"));
 });
